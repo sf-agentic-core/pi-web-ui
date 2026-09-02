@@ -12,6 +12,8 @@ interface TermXtermProps {
 	command?: CommandDef;
 	/** Directory for a bare shell (from the snapshot at tab creation). */
 	cwd: string;
+	/** Display title (sent to server so the PTY metadata uses the correct locale). */
+	title?: string;
 	/** Whether this terminal is the visible one. */
 	active: boolean;
 	send: (msg: ClientMessage) => boolean;
@@ -33,6 +35,7 @@ export function TermXterm({
 	terminalId,
 	command,
 	cwd,
+	title,
 	active,
 	send,
 	register,
@@ -138,6 +141,7 @@ export function TermXterm({
 				send({
 					type: "terminal_create",
 					terminalId,
+					title,
 					conversationId,
 					cwd,
 					cols: term.cols,

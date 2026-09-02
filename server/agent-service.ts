@@ -2510,6 +2510,65 @@ export class ClientSession {
 		this.flushSnapshot();
 	}
 
+	/**
+	 * Remove ONE queued prompt text (the ✕ on a pending bubble) so it is neither
+	 * shown nor eventually delivered. The pi SDK has no per-item queue API, so we
+	 * drain the SDK queue (clearQueue), drop the target text and re-queue the rest
+	 * in their original order; the SDK re-emits queue_update which re-syncs
+	 * conv.queueSteering / conv.queueFollowUp.
+	 */
+	async removeQueued(kind: "steer" | "followUp", text: string): Promise<void> {
+		const conv = this.conv;
+		// Always-defined display mirrors; also the provenance of bubble rendering.
+		const local = kind === "steer" ? conv.queueSteering : conv.queueFollowUp;
+		if (!local.includes(text)) {
+			// Already gone (delivered / cleared elsewhere) — just refresh the display.
+			this.flushSnapshot();
+			return;
+		}
+		const s = this.conv.session;
+		if (!s) {
+			// Runtime not bound yet (fresh conversation) — drop the display mirror;
+			// a later queue_update reconciles any SDK-side state.
+			const i = local.indexOf(text);
+			if (i >= 0) local.splice(i, 1);
+			this.flushSnapshot();
+			return;
+		}
+		const { steering, followUp } = s.clearQueue();
+		const keptSteering = steering.filter(
+			(t) => !(kind === "steer" && t === text),
+		);
+		const keptFollowUp = followUp.filter(
+			(t) => !(kind === "followUp" && t === text),
+		);
+		// Re-queue the survivors in original order. Guard each call so a single
+		// failure can't leave the queue half-drained silently.
+		for (const t of keptSteering) {
+			try {
+				await s.steer(t);
+			} catch (err) {
+				this.emit({
+					type: "notice",
+					level: "error",
+					text: `重新入队插队消息失败：${(err as Error).message}`,
+				});
+			}
+		}
+		for (const t of keptFollowUp) {
+			try {
+				await s.followUp(t);
+			} catch (err) {
+				this.emit({
+					type: "notice",
+					level: "error",
+					text: `重新入队排队消息失败：${(err as Error).message}`,
+				});
+			}
+		}
+		this.flushSnapshot();
+	}
+
 	/** Re-push the current list on request (panel opened); prunes dead entries first. */
 	async listBgServers(): Promise<void> {
 		await this.bg.listAndPush();

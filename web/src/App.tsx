@@ -564,6 +564,14 @@ export function App() {
 		[send],
 	);
 
+	// Remove one queued prompt (the ✕ on a pending bubble).
+	const onRemoveQueued = useCallback(
+		(kind: "steer" | "followUp", text: string) => {
+			send({ type: "queue_remove", kind, text });
+		},
+		[send],
+	);
+
 	// Stable callbacks for memoized panels (LeftPanel/RightPanel/ChatInput/
 	// GoalBar skip re-render while tokens stream in — inline closures here
 	// would break their shallow prop comparison every render).
@@ -736,6 +744,7 @@ export function App() {
 								toolStatuses={chat.toolStatuses}
 								onEdit={onEditMessage}
 								onKillBash={() => send({ type: "abort_bash" })}
+								onRemoveQueued={onRemoveQueued}
 								thinkingWrap={chat.settings?.thinkingWrap ?? true}
 							toolsWrap={chat.settings?.toolsWrap ?? true}
 							jumpTarget={searchJump}

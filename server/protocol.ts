@@ -248,10 +248,21 @@ export type ClientMessage =
 			queue?: boolean;
 			attachments?: PromptAttachment[];
 	  }
+	// -- queued prompt management ---------------------------------------------
+	/** Remove ONE queued prompt (steer = 插队, followUp = 排队) by text — the
+	 *  ✕ delete button on a pending user bubble. Removes the FIRST occurrence of
+	 *  `text` in the matching queue and pushes a fresh snapshot so the bubble
+	 *  disappears immediately. */
+	| {
+			type: "queue_remove";
+			kind: "steer" | "followUp";
+			text: string;
+	  }
 	// -- terminal ------------------------------------------------------------
 	| {
 			type: "terminal_create";
 			terminalId: string;
+			title?: string;
 			cwd: string;
 			cols: number;
 			rows: number;

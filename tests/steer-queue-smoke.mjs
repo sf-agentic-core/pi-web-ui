@@ -76,8 +76,18 @@ try {
 	ws.send(JSON.stringify({ type: "prompt", text: "冒烟：无 queue 字段", attachments: [] }));
 	await sleep(800);
 
+	// 3) queue_remove —— 验证删除协议消息 dispatch 不炸（空队列为 no-op）
+	ws.send(
+		JSON.stringify({
+			type: "queue_remove",
+			kind: "followUp",
+			text: "不存在",
+		}),
+	);
+	await sleep(600);
+
 	console.log(
-		"OK: prompt(queue) 消息被服务端正常接收，dispatch/签名无异常（无模型时按预期提示发送失败）",
+		"OK: prompt(queue) + queue_remove 消息被服务端正常接收，dispatch/签名无异常（无模型时按预期提示发送失败）",
 	);
 	ok = true;
 } catch (err) {

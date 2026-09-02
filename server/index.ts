@@ -445,6 +445,8 @@ export interface TerminalManagerLike {
 export interface DispatchSession {
 	cwd: string;
 	prompt(text: string, attachments?: PromptAttachment[], queue?: boolean): Promise<void>;
+	/** Remove one queued prompt text (steer/followUp) — the ✕ on a pending bubble. */
+	removeQueued(kind: "steer" | "followUp", text: string): void;
 	abort(): Promise<void>;
 	abortBash(): Promise<void>;
 	killBackgroundServer(port?: number, taskId?: string): Promise<boolean>;
@@ -737,6 +739,9 @@ wss.on("connection", (ws) => {
 			case "prompt":
 				void cs.prompt(msg.text, msg.attachments, msg.queue);
 				break;
+			case "queue_remove":
+				cs.removeQueued(msg.kind, msg.text);
+				break;
 			case "abort":
 				void cs.abort();
 				break;
@@ -894,7 +899,7 @@ wss.on("connection", (ws) => {
 				break;
 			case "terminal_create": {
 				const tm = cs.getTerminalManager(msg.conversationId);
-				if (tm) tm.create(msg.terminalId, msg.cwd, msg.cols, msg.rows, cs.getTerminalCwd(msg.conversationId));
+				if (tm) tm.create(msg.terminalId, msg.cwd, msg.cols, msg.rows, cs.getTerminalCwd(msg.conversationId), msg.title);
 				break;
 			}
 			case "terminal_input":

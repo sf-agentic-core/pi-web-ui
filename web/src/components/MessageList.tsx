@@ -79,6 +79,8 @@ interface MessageListProps {
 	) => void;
 	/** Kill the running bash command from its tool card (agent run continues). */
 	onKillBash?: () => void;
+	/** Remove one queued prompt (the ✕ on a pending bubble). */
+	onRemoveQueued?: (kind: "steer" | "followUp", text: string) => void;
 	/** 思考文本是否换行（设置面板开关；false = 不换行横向滚动）。 */
 	thinkingWrap?: boolean;
 	/** 工具调用是否默认展开（设置面板开关；false = 默认折叠）。 */
@@ -89,7 +91,7 @@ interface MessageListProps {
 	onJumpDone?: () => void;
 }
 
-export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBash, thinkingWrap, toolsWrap, jumpTarget, onJumpDone }: MessageListProps) {
+export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBash, onRemoveQueued, thinkingWrap, toolsWrap, jumpTarget, onJumpDone }: MessageListProps) {
 	const t = useT();
 	const scrollRef = useRef<HTMLDivElement>(null);
 	const [stickBottom, setStickBottom] = useState(true);
@@ -760,6 +762,16 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 						<div className="queued-bubble">
 							<span className="queued-tag steer">{t("queueSteerTag")}</span>
 							<div className="queued-text">{text}</div>
+							{onRemoveQueued && (
+								<button
+									type="button"
+									className="queued-remove"
+									title={t("queueRemoveTip")}
+									onClick={() => onRemoveQueued("steer", text)}
+								>
+									✕
+								</button>
+							)}
 						</div>
 					</div>
 				))}
@@ -768,6 +780,16 @@ export function MessageList({ state, liveOutputs, toolStatuses, onEdit, onKillBa
 						<div className="queued-bubble">
 							<span className="queued-tag follow">{t("queueFollowTag")}</span>
 							<div className="queued-text">{text}</div>
+							{onRemoveQueued && (
+								<button
+									type="button"
+									className="queued-remove"
+									title={t("queueRemoveTip")}
+									onClick={() => onRemoveQueued("followUp", text)}
+								>
+									✕
+								</button>
+							)}
 						</div>
 					</div>
 				))}

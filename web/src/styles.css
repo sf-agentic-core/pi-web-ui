@@ -2346,6 +2346,27 @@ body.panel-resizing {
 	background: var(--red);
 }
 
+/* 实时缓存命中率 (footer) — 颜色镜像 catop 的命中阈值 */
+.cache-pct {
+	font-weight: 700;
+	font-variant-numeric: tabular-nums;
+}
+.cache-pct.ok {
+	color: var(--green);
+}
+.cache-pct.mid {
+	color: var(--amber);
+}
+.cache-pct.warn {
+	color: var(--red);
+}
+
+/* 实时生成速率 (tokens/sec) */
+.status-rate {
+	color: var(--accent);
+	font-variant-numeric: tabular-nums;
+}
+
 .status-item.working {
 	color: var(--accent);
 }
@@ -4567,6 +4588,7 @@ span.msg-editor-hint svg {
 	padding: 6px 16px;
 }
 .queued-bubble {
+	position: relative;
 	max-width: min(85%, 720px);
 	background: var(--accent-soft);
 	border: 1px dashed rgba(139, 92, 246, 0.35);
@@ -4597,6 +4619,26 @@ span.msg-editor-hint svg {
 	overflow-wrap: anywhere;
 	font-size: 13px;
 	color: var(--text);
+}
+.queued-remove {
+	position: absolute;
+	top: 4px;
+	right: 6px;
+	background: transparent;
+	border: none;
+	color: var(--text-dim);
+	font-size: 12px;
+	line-height: 1;
+	padding: 4px 5px;
+	cursor: pointer;
+	border-radius: 6px;
+	opacity: 0.4;
+	transition: opacity 0.12s ease, color 0.12s ease, background 0.12s ease;
+}
+.queued-remove:hover {
+	opacity: 1;
+	color: var(--red);
+	background: var(--red-soft);
 }
 
 .msg-user .msg-body {

@@ -439,6 +439,7 @@ export function TerminalPanel({ chat, send, terminal }: TerminalPanelProps) {
 							terminalId={t.id}
 							command={t.command}
 							cwd={t.cwd}
+							title={t.title}
 							active={t.id === activeId}
 							send={send}
 							register={terminal.register}

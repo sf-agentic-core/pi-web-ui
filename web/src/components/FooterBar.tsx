@@ -2,6 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { FiFile, FiFolder } from "react-icons/fi";
 import type { ChatState } from "../use-chat";
 import { useT } from "../i18n";
+import {
+	cacheMetrics,
+	estimateStreamTokens,
+	streamRate,
+	trimRateSamples,
+	type RateSample,
+} from "../cache-stats";
 
 interface FooterBarProps {
 	chat: ChatState;
@@ -45,8 +52,44 @@ export function FooterBar({ chat, send }: FooterBarProps) {
 		el?.scrollIntoView({ block: "nearest" });
 	}, [selIdx]);
 
+	// Live generation-speed samples (tokens/sec). Kept in a ref so pushing a
+	// sample never triggers a re-render. The SDK only commits a turn's usage
+	// counters at message_end, so `stats.tokens.output` is FLAT while streaming —
+	// instead we estimate tokens from the in-flight message content (text +
+	// thinking), which grows every token. Sample at most every 250ms; baseline
+	// resets the moment streaming stops.
+	const samplesRef = useRef<RateSample[]>([]);
+	const streamingNow = state?.isStreaming ?? false;
+	const streamEst = state?.streamingMessage
+		? estimateStreamTokens(state.streamingMessage.content)
+		: 0;
+	useEffect(() => {
+		if (!streamingNow) {
+			samplesRef.current = [];
+			return;
+		}
+		const now = Date.now();
+		const prev = samplesRef.current;
+		const last = prev[prev.length - 1];
+		if (last && now - last.t < 250) return; // throttle
+		samplesRef.current = trimRateSamples([...prev, { t: now, out: streamEst }], now);
+	}, [streamingNow, streamEst]);
+
 	if (!state) return null;
 	const s = state.stats;
+
+	const cache = cacheMetrics(s.tokens);
+	const hitPct = cache.hitRate * 100;
+	const hitClass =
+		cache.totalInput === 0
+			? ""
+			: cache.hitRate >= 0.7
+				? "ok"
+				: cache.hitRate >= 0.4
+					? "mid"
+					: "warn";
+	const hitText = cache.totalInput > 0 ? `${hitPct.toFixed(1)}%` : "—";
+	const rate = streamingNow ? streamRate(samplesRef.current) : 0;
 
 	const connClass = chat.ready ? "ok" : "busy";
 	const connLabel = chat.ready ? t("connected") : t("connecting");
@@ -165,6 +208,20 @@ export function FooterBar({ chat, send }: FooterBarProps) {
 			</span>
 			<span className="status-sep">·</span>
 
+			<span
+				className="status-item status-cache"
+				title={t("cacheHitTip", {
+					read: formatTokens(cache.read),
+					write: formatTokens(cache.write),
+					miss: formatTokens(cache.miss),
+					input: formatTokens(cache.totalInput),
+				})}
+			>
+				{t("cacheHit")}
+				<b className={`cache-pct ${hitClass}`}>{hitText}</b>
+			</span>
+			<span className="status-sep">·</span>
+
 			<span className="status-item" title={t("sessionMessages")}>
 				{t("messages")} {s.totalMessages}
 			</span>
@@ -189,6 +246,9 @@ export function FooterBar({ chat, send }: FooterBarProps) {
 								⏳ {queueTotal} {t("queued")}
 							</span>
 						)}
+					</span>
+					<span className="status-item status-rate" title={t("rateTip")}>
+						{rate > 0 ? `${Math.round(rate)}${t("tps")}` : "…"}
 					</span>
 				</>
 			)}

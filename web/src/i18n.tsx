@@ -80,6 +80,11 @@ const zh = {
 	queued: "排队",
 	enterPath: "输入路径，Enter 切换",
 	cwdTip: "工作目录：{path}（点击切换）",
+	cacheHit: "缓存命中",
+	cacheHitTip:
+		"缓存读取 {read} · 缓存写入 {write} · 未命中 {miss}（共 {input} 输入 token）",
+	tps: "t/s",
+	rateTip: "实时生成速率（估算）",
 
 	/* chat input */
 	folderRef: "文件夹引用：{path}",
@@ -122,6 +127,7 @@ const zh = {
 	supplementTip: "加入队列：AI 回答完全结束后才发送（不打断）",
 	queueSteerTag: "插队",
 	queueFollowTag: "排队",
+	queueRemoveTip: "移除此排队消息",
 	sendTip: "发送（Enter）",
 
 	/* slash commands */
@@ -820,6 +826,11 @@ const en: Record<keyof typeof zh, string> = {
 	queued: "queued",
 	enterPath: "Type a path, Enter to switch",
 	cwdTip: "Working directory: {path} (click to switch)",
+	cacheHit: "Cache hit",
+	cacheHitTip:
+		"read {read} · write {write} · miss {miss} (of {input} input tokens)",
+	tps: "t/s",
+	rateTip: "Live generation rate (estimated)",
 
 	/* chat input */
 	folderRef: "Folder reference: {path}",
@@ -862,6 +873,7 @@ const en: Record<keyof typeof zh, string> = {
 	supplementTip: "Add to queue: sent only after the whole run finishes (no interruption)",
 	queueSteerTag: "Steer",
 	queueFollowTag: "Queued",
+	queueRemoveTip: "Remove this queued message",
 	sendTip: "Send (Enter)",
 
 	/* slash commands */

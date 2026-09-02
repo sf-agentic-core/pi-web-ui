@@ -1280,6 +1280,20 @@ export class DshClientSession {
 		await this.promptConv(conv, text, attachments, queue);
 	}
 
+	/**
+	 * Remove ONE queued prompt text (the ✕ on a pending bubble). DSH queues are
+	 * display-only — the prompt was already handed to the runtime inbox, so this
+	 * only drops the pending bubble from the UI (there is no per-item runtime
+	 * cancel). Removes the first occurrence of `text`.
+	 */
+	removeQueued(kind: "steer" | "followUp", text: string): void {
+		const conv = this.conv;
+		const arr = kind === "steer" ? conv.queue.steering : conv.queue.followUp;
+		const i = arr.indexOf(text);
+		if (i >= 0) arr.splice(i, 1);
+		this.flushSnapshot();
+	}
+
 	/** 向指定会话发提示（审查注入/重发用；不处理 fromDisk fork 与命名）。 */
 	/** 排空期拒绝新工作（与 pi 引擎同文案；存量运行继续）。 */
 	private quiesceBlocked(): boolean {

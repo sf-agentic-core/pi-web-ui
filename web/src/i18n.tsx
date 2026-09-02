@@ -1535,7 +1535,7 @@ function loadLocale(): Locale {
 	} catch {
 		// localStorage unavailable — fall through to the default.
 	}
-	return "zh"; // default: Chinese
+	return "en"; // default: English
 }
 
 export function LanguageProvider({ children }: { children: ReactNode }) {

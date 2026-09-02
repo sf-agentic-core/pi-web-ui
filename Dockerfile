@@ -18,7 +18,7 @@ ENV NODE_ENV=production
 # node-pty falls back to node-gyp when no prebuilt binary matches — keep the
 # toolchain around so `npm ci` works on any platform.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 make g++ curl wget git openssh-client ca-certificates jq unzip gnupg apt-transport-https lsb-release \
+    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv make g++ curl wget git openssh-client ca-certificates jq unzip gnupg apt-transport-https lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Platform CLI toolchain (mirrors the Discord tachikoma image) ---

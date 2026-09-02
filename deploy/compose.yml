@@ -1,0 +1,82 @@
+# pi-web-ui — despliegue reproducible con Tailscale sidecar
+# -----------------------------------------------------------------------------
+# Arquitectura:
+#   - Contenedor `tailscale` (sidecar) une el nodo a la tailnet (kernel net).
+#   - `pi-web-ui` comparte la red del sidecar (network_mode: service:tailscale),
+#     así SOLO es alcanzable por la tailnet, nunca por IP pública.
+#
+# Uso (reproducible):
+#   cp deploy/.env.example deploy/.env   # rellena TS_AUTHKEY
+#   docker compose -f deploy/compose.yml up -d
+#
+# Requiere en el host: /dev/net/tun + cap NET_ADMIN.
+# El agent-dir se monta desde /opt/tachikoma/state/pi-web/agent (ver prep-agent.sh)
+# -----------------------------------------------------------------------------
+services:
+  tailscale:
+    image: tailscale/tailscale:latest
+    container_name: ts-piweb
+    hostname: tachikoma-web          # nombre del nodo en la tailnet
+    restart: unless-stopped
+    environment:
+      TS_AUTHKEY: ${TS_AUTHKEY}
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_USERSPACE: "false"          # kernel networking (tun) para exponer el puerto
+      TS_EXTRA_ARGS: --accept-dns=true
+    volumes:
+      - ts-state:/var/lib/tailscale
+      - /dev/net/tun:/dev/net/tun
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    healthcheck:
+      test: ["CMD", "tailscale", "status", "--json"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+      start_period: 15s
+
+  pi-web-ui:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    image: pi-web-ui:latest
+    container_name: piweb
+    restart: unless-stopped
+    # Comparte el namespace de red del sidecar tailscale: el puerto del agente
+    # queda en la interfaz tailnet (0.0.0.0 aquí = loopback + tailnet, no pública).
+    network_mode: "service:tailscale"
+    depends_on:
+      tailscale:
+        condition: service_healthy
+    environment:
+      PI_WEB_PORT: "8787"
+      PI_WEB_HOST: "0.0.0.0"
+      # Workspace sobre el que opera el agente (ruta dentro del contenedor)
+      PI_WEB_CWD: /workspace/${PI_WEB_WORKSPACE:-technomad}
+      # Config pi (models/mcp/skills) montada desde core-agent-library vía setup.sh
+      PI_CODING_AGENT_DIR: /home/node/.pi/agent
+      PI_WEB_DATA_DIR: /home/node/.pi-web
+      # Sesiones separadas de las de Discord (pi 0.84.4 vs 0.80.7)
+      PI_CODING_AGENT_SESSION_DIR: /home/node/.pi/agent/sessions
+      NODE_ENV: production
+      PI_SKIP_VERSION_CHECK: "1"
+    volumes:
+      # Repositorios de trabajo (el agente edita archivos) — core-agent-library está aquí
+      - /opt/tachikoma/repos:/workspace
+      # Estado dedicado de pi-web-ui (datos UI, uploads) — host dir owned by 1000
+      - /opt/tachikoma/state/pi-web/data:/home/node/.pi-web
+      # AGENT-DIR completo (escribible por node uid 1000: pi necesita escribir
+      # provider-keys.json, models-store.json, cachés...). Config core se monta
+      # read-only POR ENCIMA (a continuación).
+      - /opt/tachikoma/state/pi-web/agent:/home/node/.pi/agent
+      # --- Config core (read-only, rutas válidas dentro del contenedor) ---
+      # core-agent-library ahora vive en /workspace/core/core-agent-library (workspace raíz sf-agentic-core)
+      - /opt/tachikoma/repos/core/core-agent-library/config/settings.json:/home/node/.pi/agent/settings.json:ro
+      - /opt/tachikoma/repos/core/core-agent-library/config/models.json:/home/node/.pi/agent/models.json:ro
+      - /opt/tachikoma/repos/core/core-agent-library/mcp-global.json:/home/node/.pi/agent/mcp.json:ro
+      - /opt/tachikoma/repos/core/core-agent-library/config/web-search.json:/home/node/.pi/agent/web-search.json:ro
+      - /opt/tachikoma/state/agent/auth.json:/home/node/.pi/agent/auth.json:ro
+
+volumes:
+  ts-state:

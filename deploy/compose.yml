@@ -62,12 +62,21 @@ services:
       NODE_ENV: production
       PI_SKIP_VERSION_CHECK: "1"
     volumes:
-      # Repositorios de trabajo (el agente edita archivos)
+      # Repositorios de trabajo (el agente edita archivos) — core-agent-library está aquí
       - /opt/tachikoma/repos:/workspace
-      # Estado dedicado de pi-web-ui (config + sesiones), separado del de Discord
-      - /opt/tachikoma/state/pi-web:/home/node/.pi
+      # Estado dedicado de pi-web-ui (datos UI, uploads, .pi-web)
       - piweb-data:/home/node/.pi-web
+      # --- Config pi (BIND-MOUNTS reales, no symlinks): rutas válidas DENTRO del contenedor ---
+      # /workspace = /opt/tachikoma/repos montado arriba; auth.json real de la instancia Discord
+      - /opt/tachikoma/repos/core-agent-library/config/settings.json:/home/node/.pi/agent/settings.json:ro
+      - /opt/tachikoma/repos/core-agent-library/config/models.json:/home/node/.pi/agent/models.json:ro
+      - /opt/tachikoma/repos/core-agent-library/mcp-global.json:/home/node/.pi/agent/mcp.json:ro
+      - /opt/tachikoma/repos/core-agent-library/config/web-search.json:/home/node/.pi/agent/web-search.json:ro
+      - /opt/tachikoma/state/agent/auth.json:/home/node/.pi/agent/auth.json:ro
+      # Sesiones dedicadas de pi-web-ui (separadas de Discord) en volumen persistente
+      - piweb-sessions:/home/node/.pi/agent/sessions
 
 volumes:
   ts-state:
   piweb-data:
+  piweb-sessions:

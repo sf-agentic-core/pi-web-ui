@@ -64,6 +64,12 @@ services:
     volumes:
       # Repositorios de trabajo (el agente edita archivos) — core-agent-library está aquí
       - /opt/tachikoma/repos:/workspace
+      # Credenciales de acceso (SSH/GitHub, gcloud, kube, azure) — igual que el contenedor Discord
+      - /opt/tachikoma/auth/.ssh:/home/node/.ssh:ro
+      - /opt/tachikoma/auth/.config/gcloud:/home/node/.config/gcloud
+      - /opt/tachikoma/auth/.kube:/home/node/.kube
+      - /opt/tachikoma/auth/.azure:/home/node/.azure
+      - /opt/tachikoma/state/pi-web/gitconfig:/home/node/.gitconfig:ro
       # Estado dedicado de pi-web-ui (datos UI, uploads) — host dir owned by 1000
       - /opt/tachikoma/state/pi-web/data:/home/node/.pi-web
       # AGENT-DIR completo (escribible por node uid 1000: pi necesita escribir

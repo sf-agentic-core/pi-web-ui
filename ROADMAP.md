@@ -26,7 +26,8 @@ Fork de [xing-shuyin/pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) para s
 - [ ] Pin de versión y CI en el fork.
 
 ### M1 — Tachikoma personal (POC operativo)
-- [ ] Integrar config de `core-agent-library` (models.json, mcp.json, settings.json, skills).
+- [ ] Integrar config de `core-agent-library` (jerarquía workspace → core, vía enlace a repo).
+- [ ] UI de variables de entorno y secrets (core + workspace).
 - [ ] PWA instalable (manifest + service worker + iconos) para Android/PC.
 - [ ] Autenticación (login + cookie/sesión) sobre loopback.
 - [ ] Despliegue con Tailscale (bind a tailnet + TLS + reverse proxy).

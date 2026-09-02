@@ -66,15 +66,16 @@ services:
       - /opt/tachikoma/repos:/workspace
       # Estado dedicado de pi-web-ui (datos UI, uploads) — host dir owned by 1000
       - /opt/tachikoma/state/pi-web/data:/home/node/.pi-web
-      # --- Config pi (BIND-MOUNTS reales, no symlinks): rutas válidas DENTRO del contenedor ---
-      # /workspace = /opt/tachikoma/repos montado arriba; auth.json real de la instancia Discord
+      # AGENT-DIR completo (escribible por node uid 1000: pi necesita escribir
+      # provider-keys.json, models-store.json, cachés...). Config core se monta
+      # read-only POR ENCIMA (a continuación).
+      - /opt/tachikoma/state/pi-web/agent:/home/node/.pi/agent
+      # --- Config core (read-only, rutas válidas dentro del contenedor) ---
       - /opt/tachikoma/repos/core-agent-library/config/settings.json:/home/node/.pi/agent/settings.json:ro
       - /opt/tachikoma/repos/core-agent-library/config/models.json:/home/node/.pi/agent/models.json:ro
       - /opt/tachikoma/repos/core-agent-library/mcp-global.json:/home/node/.pi/agent/mcp.json:ro
       - /opt/tachikoma/repos/core-agent-library/config/web-search.json:/home/node/.pi/agent/web-search.json:ro
       - /opt/tachikoma/state/agent/auth.json:/home/node/.pi/agent/auth.json:ro
-      # Sesiones dedicadas de pi-web-ui (separadas de Discord) — host dir owned by 1000
-      - /opt/tachikoma/state/pi-web/sessions:/home/node/.pi/agent/sessions
 
 volumes:
   ts-state:

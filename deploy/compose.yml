@@ -71,10 +71,11 @@ services:
       # read-only POR ENCIMA (a continuación).
       - /opt/tachikoma/state/pi-web/agent:/home/node/.pi/agent
       # --- Config core (read-only, rutas válidas dentro del contenedor) ---
-      - /opt/tachikoma/repos/core-agent-library/config/settings.json:/home/node/.pi/agent/settings.json:ro
-      - /opt/tachikoma/repos/core-agent-library/config/models.json:/home/node/.pi/agent/models.json:ro
-      - /opt/tachikoma/repos/core-agent-library/mcp-global.json:/home/node/.pi/agent/mcp.json:ro
-      - /opt/tachikoma/repos/core-agent-library/config/web-search.json:/home/node/.pi/agent/web-search.json:ro
+      # core-agent-library ahora vive en /workspace/core/core-agent-library (workspace raíz sf-agentic-core)
+      - /opt/tachikoma/repos/core/core-agent-library/config/settings.json:/home/node/.pi/agent/settings.json:ro
+      - /opt/tachikoma/repos/core/core-agent-library/config/models.json:/home/node/.pi/agent/models.json:ro
+      - /opt/tachikoma/repos/core/core-agent-library/mcp-global.json:/home/node/.pi/agent/mcp.json:ro
+      - /opt/tachikoma/repos/core/core-agent-library/config/web-search.json:/home/node/.pi/agent/web-search.json:ro
       - /opt/tachikoma/state/agent/auth.json:/home/node/.pi/agent/auth.json:ro
 
 volumes:

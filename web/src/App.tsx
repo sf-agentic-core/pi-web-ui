@@ -39,6 +39,7 @@ import type { Notice } from "./use-chat";
 import { fileToProcessedImage, isRasterImage, type ProcessedImage } from "./image-paste";
 import { randomUuid } from "./uuid";
 import { loadSoundSettings, playSound, saveSoundSettings, type SoundKind, type SoundSettings } from "./sounds";
+import { notify } from "./notify";
 import { useTheme } from "./theme";
 
 export interface PendingAttachment {
@@ -339,7 +340,11 @@ export function App() {
 		prevStreaming.current = streaming;
 		if (prev === null) return; // first observation — don't cue
 		if (!prev && streaming) playSound("start", sound);
-		else if (prev && !streaming) playSound("done", sound);
+		else if (prev && !streaming) {
+			playSound("done", sound);
+			// OS/PWA notification for when the user stepped away (not focused).
+			void notify(t("notifyDoneTitle"), t("notifyDoneBody"));
+		}
 	}, [chat.state?.isStreaming, sound]);
 
 	// Questionnaire cue — each new dialog id.
@@ -347,6 +352,7 @@ export function App() {
 		const id = chat.dialog?.id ?? null;
 		if (id !== null && id !== prevDialogId.current) {
 			playSound("question", sound);
+			void notify(t("notifyQuestionTitle"), t("notifyQuestionBody"));
 		}
 		prevDialogId.current = id;
 	}, [chat.dialog, sound]);
@@ -357,6 +363,7 @@ export function App() {
 		if (err && err.id !== lastErrorNotice.current) {
 			lastErrorNotice.current = err.id;
 			playSound("error", sound);
+			void notify(t("notifyErrorTitle"), t("notifyErrorBody"));
 		}
 	}, [chat.notices, sound]);
 

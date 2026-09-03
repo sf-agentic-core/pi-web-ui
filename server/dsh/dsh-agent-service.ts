@@ -1210,6 +1210,7 @@ export class DshClientSession {
 				cwd: conv.cwd,
 				messageCount: conv.messages.length,
 				isStreaming: conv.isStreaming,
+				isSubagent: false,
 			});
 		}
 		this.emit({ type: "conversations", conversations: list, activeId: this.activeId });
@@ -2186,6 +2187,8 @@ export class DshClientSession {
 			reviewSkills: [],
 			extensions: [],
 			presets: this.stateStore.getPresets(this.clientId),
+			subagentTemplates: [],
+			subagentDefaultTemplates: [],
 		};
 		this.emit({ type: "settings_state", settings });
 	}
@@ -2347,6 +2350,28 @@ export class DshClientSession {
 			presets.filter((p) => p.name !== name),
 		);
 		this.pushSettings();
+	}
+
+	// -----------------------------------------------------------------------
+	// 子代理模板（DSH 引擎无子代理概念 —— 设置面板分区由前端 isDsh 隐藏）
+	// -----------------------------------------------------------------------
+
+	async saveSubagentTemplate(): Promise<void> {
+		this.emit({
+			type: "notice",
+			level: "info",
+			text: "DSH 引擎不支持子代理模板（请在 pi 引擎中使用）",
+			textEn: "Subagent templates are not supported by the DSH engine (use the pi engine instead)",
+		});
+	}
+
+	async deleteSubagentTemplate(): Promise<void> {
+		this.emit({
+			type: "notice",
+			level: "info",
+			text: "DSH 引擎不支持子代理模板（请在 pi 引擎中使用）",
+			textEn: "Subagent templates are not supported by the DSH engine (use the pi engine instead)",
+		});
 	}
 
 	// -----------------------------------------------------------------------

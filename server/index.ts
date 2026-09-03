@@ -37,7 +37,14 @@ import { ensureWindowsBash, windowsBashDir } from "./ensure-bash.js";
 import { listThemes, resolveThemeFile } from "./themes.js";
 import { PluginManager, resolvePluginClientFile } from "./plugins.js";
 import { McpBridge } from "./mcp-bridge.js";
-import type { BgServer, ClientMessage, CommandDef, PromptAttachment, ServerMessage } from "./protocol.js";
+import type {
+	BgServer,
+	ClientMessage,
+	CommandDef,
+	PromptAttachment,
+	ServerMessage,
+	UiSubagentTemplate,
+} from "./protocol.js";
 
 /** 从 CLI 参数中取 flag 值：支持 --flag value 与 --flag=value 两种写法。
  *  让 `node dist/server/index.js --host 0.0.0.0 --port 9000` 这类直接启动也能生效，
@@ -523,6 +530,10 @@ export interface DispatchSession {
 	savePreset(name: string): Promise<void>;
 	applyPreset(name: string): Promise<void>;
 	deletePreset(name: string): Promise<void>;
+	/** Upsert 一个子代理模板（全局共享）。 */
+	saveSubagentTemplate(template: UiSubagentTemplate): Promise<void>;
+	/** 删除一个子代理模板。 */
+	deleteSubagentTemplate(name: string): Promise<void>;
 	emitNotice(level: "info" | "warning" | "error", text: string): void;
 	activeConversations(): number;
 	pendingMessages(): number;
@@ -1010,6 +1021,12 @@ wss.on("connection", (ws) => {
 				break;
 			case "save_preset":
 				void cs.savePreset(msg.name);
+				break;
+			case "save_subagent_template":
+				void cs.saveSubagentTemplate(msg.template);
+				break;
+			case "delete_subagent_template":
+				void cs.deleteSubagentTemplate(msg.name);
 				break;
 			case "apply_preset":
 				void cs.applyPreset(msg.name);

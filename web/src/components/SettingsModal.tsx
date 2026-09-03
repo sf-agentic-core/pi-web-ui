@@ -12,12 +12,21 @@ import {
 	FiSliders,
 	FiTerminal,
 	FiTrash2,
+	FiUsers,
 	FiX,
 	FiZap,
 } from "react-icons/fi";
 import { CopyButton } from "./copy-button";
 import { PluginSettingsForm } from "./PluginSettingsForm";
-import type { ClientMessage, CommandDef, UiExtensionInfo, UiPluginInfo, UiSettingsState, UiSkillInfo } from "../types";
+import type {
+	ClientMessage,
+	CommandDef,
+	UiExtensionInfo,
+	UiPluginInfo,
+	UiSettingsState,
+	UiSkillInfo,
+	UiSubagentTemplate,
+} from "../types";
 import { randomUuid } from "../uuid";
 import { useT } from "../i18n";
 
@@ -146,7 +155,16 @@ function ToggleRow({
 
 /** 设置弹窗的左侧分组导航（一次只显示一个区块，消灭长滚动）。 */
 type SettingsTab =
-	"prompt" | "terminal" | "display" | "skills" | "extensions" | "plugins" | "review" | "vision" | "presets";
+	| "prompt"
+	| "terminal"
+	| "display"
+	| "skills"
+	| "extensions"
+	| "plugins"
+	| "review"
+	| "vision"
+	| "presets"
+	| "subagent-templates";
 
 export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClose }: SettingsModalProps) {
 	const t = useT();
@@ -181,6 +199,10 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 	const [reviewPromptDraft, setReviewPromptDraft] = useState("");
 	const reviewPromptFocus = useRef(false);
 	const [presetName, setPresetName] = useState("");
+	// 正在编辑的子代理模板草稿（新建 = 空模板；null = 关闭编辑表单）。
+	const [tplDraft, setTplDraft] = useState<UiSubagentTemplate | null>(null);
+	// 删除子代理模板的两步确认。
+	const [confirmTplDelete, setConfirmTplDelete] = useState<string | null>(null);
 	// Read-only viewer for the FULL system prompt actually in effect.
 	const [showFullPrompt, setShowFullPrompt] = useState(false);
 	// Two-step uninstall confirm: which extension id is awaiting confirmation.
@@ -233,6 +255,17 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 		// DSH：无视觉桥概念（真图片直通 vision 模型），隐藏该分区。
 		...(isDsh ? [] : [{ id: "vision" as const, icon: <FiEye />, label: t("settingsVisionBridge") }]),
 		{ id: "presets", icon: <FiSliders />, label: t("settingsPresets"), count: settings.presets.length },
+		// DSH：无子代理概念，隐藏该分区。
+		...(isDsh
+			? []
+			: [
+					{
+						id: "subagent-templates" as const,
+						icon: <FiUsers />,
+						label: t("settingsSubagentTemplates"),
+						count: settings.subagentTemplates.length,
+					},
+				]),
 	];
 
 	const disabledSkills = new Set(settings.disabledSkills);
@@ -902,6 +935,239 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 													>
 														<FiTrash2 />
 													</button>
+												</div>
+											</div>
+										))}
+									</div>
+								)}
+							</div>
+						)}
+
+						{/* ---- subagent templates（全局共享；DSH 引擎隐藏该分区） ---------- */}
+						{tab === "subagent-templates" && (
+							<div className="set-section">
+								<div className="set-section-title">
+									<FiUsers className="set-section-icon" />
+									{t("settingsSubagentTemplates")}
+									<HintTip text={t("settingsSubagentTemplatesDesc")} />
+									<span className="set-count">{settings.subagentTemplates.length}</span>
+									<button
+										type="button"
+										className="set-save-btn"
+										title={t("subagentTemplateNew")}
+										onClick={() =>
+											setTplDraft({
+												name: "",
+												description: "",
+												promptMode: "replace",
+												systemPrompt: "",
+												enabledSkills: [],
+												enabledExtensions: [],
+												enabled: true,
+											})
+										}
+									>
+										<FiPlus /> {t("subagentTemplateNew")}
+									</button>
+								</div>
+
+								{/* ---- 编辑器（新建 / 编辑同表单） ------------------------------ */}
+								{tplDraft && (
+									<div className="tpl-editor">
+										<div className="tpl-fields">
+											<input
+												className="set-input"
+												placeholder={t("tplNamePlaceholder")}
+												value={tplDraft.name}
+												onChange={(e) => setTplDraft({ ...tplDraft, name: e.target.value })}
+											/>
+											<input
+												className="set-input"
+												placeholder={t("tplDescriptionPlaceholder")}
+												value={tplDraft.description}
+												onChange={(e) => setTplDraft({ ...tplDraft, description: e.target.value })}
+											/>
+										</div>
+										<div className="set-mode-row">
+											<label className="set-field-label">{t("tplPromptModeLabel")}</label>
+											<select
+												className="set-select"
+												value={tplDraft.promptMode}
+												onChange={(e) =>
+													setTplDraft({ ...tplDraft, promptMode: e.target.value as "append" | "replace" })
+												}
+											>
+												<option value="replace">{t("promptModeReplace")}</option>
+												<option value="append">{t("promptModeAppend")}</option>
+											</select>
+										</div>
+										<textarea
+											className="set-prompt-input"
+											rows={4}
+											placeholder={`${t("tplSystemPromptLabel")}：${t("tplSystemPromptPlaceholder")}`}
+											value={tplDraft.systemPrompt}
+											onChange={(e) => setTplDraft({ ...tplDraft, systemPrompt: e.target.value })}
+										/>
+										<div className="tpl-pick-block">
+											<div className="tpl-pick-head">
+												<span>
+													{t("tplSkillsLabel")} · {t("tplWhitelistHint")}
+												</span>
+											</div>
+											{settings.skills.length === 0 ? (
+												<p className="set-hint">{t("noSkills")}</p>
+											) : (
+												<div className="tpl-pick">
+													{settings.skills.map((s) => (
+														<label
+															key={s.name}
+															className={`tpl-chip${tplDraft.enabledSkills.includes(s.name) ? " on" : ""}`}
+														>
+															<input
+																type="checkbox"
+																checked={tplDraft.enabledSkills.includes(s.name)}
+																onChange={(e) => {
+																	const on = e.target.checked;
+																	setTplDraft({
+																		...tplDraft,
+																		enabledSkills: on
+																			? [...tplDraft.enabledSkills, s.name]
+																			: tplDraft.enabledSkills.filter((n) => n !== s.name),
+																	});
+																}}
+															/>
+															{s.name}
+														</label>
+													))}
+												</div>
+											)}
+										</div>
+										<div className="tpl-pick-block">
+											<div className="tpl-pick-head">
+												<span>
+													{t("tplExtensionsLabel")} · {t("tplWhitelistHint")}
+												</span>
+											</div>
+											{settings.extensions.length === 0 ? (
+												<p className="set-hint">{t("noExtensions")}</p>
+											) : (
+												<div className="tpl-pick">
+													{settings.extensions.map((x) => (
+														<label
+															key={x.id}
+															className={`tpl-chip${tplDraft.enabledExtensions.includes(x.id) ? " on" : ""}`}
+														>
+															<input
+																type="checkbox"
+																checked={tplDraft.enabledExtensions.includes(x.id)}
+																onChange={(e) => {
+																	const on = e.target.checked;
+																	setTplDraft({
+																		...tplDraft,
+																		enabledExtensions: on
+																			? [...tplDraft.enabledExtensions, x.id]
+																			: tplDraft.enabledExtensions.filter((id) => id !== x.id),
+																	});
+																}}
+															/>
+															{x.name}
+														</label>
+													))}
+												</div>
+											)}
+										</div>
+										<div className="tpl-actions">
+											<button
+												type="button"
+												className="set-save-btn"
+												disabled={!tplDraft.name.trim()}
+												onClick={() => {
+													send({
+														type: "save_subagent_template",
+														template: { ...tplDraft, name: tplDraft.name.trim() },
+													});
+													setTplDraft(null);
+												}}
+											>
+												{t("tplSave")}
+											</button>
+											<button type="button" className="dd-refresh" onClick={() => setTplDraft(null)}>
+												{t("tplCancel")}
+											</button>
+										</div>
+									</div>
+								)}
+
+								{/* ---- 模板列表 ------------------------------------------------ */}
+								{settings.subagentTemplates.length === 0 ? (
+									<p className="set-empty">{t("noSubagentTemplates")}</p>
+								) : (
+									<div className="set-list">
+										{settings.subagentTemplates.map((tp) => (
+											<div className="set-row" key={tp.name}>
+												<div className="set-row-info">
+													<div className="set-row-name">
+														{tp.name}
+														{settings.subagentDefaultTemplates.includes(tp.name) && (
+															<span className="tpl-badge default">{t("tplDefaultBadge")}</span>
+														)}
+														{!tp.enabled && <span className="tpl-badge">{t("subagentTemplateClosed")}</span>}
+													</div>
+													<div className="set-row-desc">
+														{tp.description ||
+															`${tp.promptMode === "replace" ? t("promptModeReplace") : t("promptModeAppend")}`}
+														{tp.enabledSkills.length > 0 && ` · ${t("tplSkillsLabel")} ${tp.enabledSkills.length}`}
+														{tp.enabledExtensions.length > 0 &&
+															` · ${t("tplExtensionsLabel")} ${tp.enabledExtensions.length}`}
+														{!tp.description &&
+															tp.enabledSkills.length === 0 &&
+															tp.enabledExtensions.length === 0 &&
+															` · ${t("tplInherit")}`}
+													</div>
+												</div>
+												<div className="set-row-actions">
+													<button
+														type="button"
+														className={`set-switch${tp.enabled ? " on" : ""}`}
+														role="switch"
+														aria-checked={tp.enabled}
+														title={`${tp.enabled ? t("subagentTemplateDisable") : t("subagentTemplateEnable")} · ${t("subagentTemplateOffHint")}`}
+														onClick={() =>
+															send({ type: "save_subagent_template", template: { ...tp, enabled: !tp.enabled } })
+														}
+													>
+														<span className="set-switch-knob" />
+													</button>
+													<button
+														type="button"
+														className="dd-refresh"
+														title={t("subagentTemplateEdit")}
+														onClick={() => setTplDraft({ ...tp })}
+													>
+														{t("subagentTemplateEdit")}
+													</button>
+													{confirmTplDelete === tp.name ? (
+														<button
+															type="button"
+															className="set-uninstall confirm"
+															title={t("uninstallConfirmHint")}
+															onClick={() => {
+																send({ type: "delete_subagent_template", name: tp.name });
+																setConfirmTplDelete(null);
+															}}
+														>
+															{t("uninstallConfirm")}
+														</button>
+													) : (
+														<button
+															type="button"
+															className="set-icon-btn danger"
+															title={t("tplDelete")}
+															onClick={() => setConfirmTplDelete(tp.name)}
+														>
+															<FiTrash2 />
+														</button>
+													)}
 												</div>
 											</div>
 										))}

@@ -116,6 +116,21 @@ export function isExtensionDisabled(
 	return disabled.some((d) => keys.includes(d));
 }
 
+/** Whether an extension is covered by an ENABLED whitelist (any identity
+ *  match). Empty whitelist = not whitelisting = everything allowed. Used by
+ *  subagent templates（白名单语义：模板勾选 = 子代理只加载这些扩展）。 */
+export function isExtensionEnabled(
+	e: {
+		sourceInfo?: { origin?: string; source?: string; path?: string };
+		path: string;
+	},
+	enabled: readonly string[],
+): boolean {
+	if (enabled.length === 0) return true;
+	const keys = extensionKeyCandidates(e);
+	return enabled.some((d) => keys.includes(d));
+}
+
 export interface ClientState {
 	/** Absolute path of the workspace this client last used. */
 	lastCwd?: string;
@@ -166,6 +181,11 @@ export class ClientStateStore {
 	private cache: Record<string, ClientState> | null = null;
 
 	constructor(private filePath: string) {}
+
+	/** <dataDir>（client-state.json 的上一级）——共享配置（子代理模板库等）落在这里。 */
+	get dataDir(): string {
+		return dirname(this.filePath);
+	}
 
 	private load(): Record<string, ClientState> {
 		if (this.cache) return this.cache;

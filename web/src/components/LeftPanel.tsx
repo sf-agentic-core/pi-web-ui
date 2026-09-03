@@ -263,7 +263,10 @@ export const LeftPanel = memo(function LeftPanel({
 												>
 													<FiMessageSquare className="session-icon" />
 													<span className="session-info">
-														<span className="session-title">{c.title}</span>
+														<span className="session-title">
+															{c.isSubagent && <span className="subagent-badge">{t("subagentBadge")}</span>}
+															{c.title}
+														</span>
 														<span className="session-sub">
 															{active ? t("current") : t("messageCount", { n: c.messageCount })}
 														</span>

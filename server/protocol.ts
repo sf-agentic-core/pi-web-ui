@@ -44,12 +44,7 @@ export interface UiBashBlock {
 }
 
 export type UiContentBlock =
-	| UiTextBlock
-	| UiThinkingBlock
-	| UiToolCallBlock
-	| UiImageBlock
-	| UiBashBlock
-	| { type: string; [k: string]: unknown };
+	UiTextBlock | UiThinkingBlock | UiToolCallBlock | UiImageBlock | UiBashBlock | { type: string; [k: string]: unknown };
 
 export interface UiMessage {
 	/** Stable-ish id for React keys: u-<ts>-<seq> / a-<ts>-<seq> / t-<toolCallId>. */
@@ -263,6 +258,8 @@ export type ClientMessage =
 			type: "terminal_create";
 			terminalId: string;
 			title?: string;
+			/** UI locale ("zh" | "en") — server picks the exit-banner language. */
+			locale?: string;
 			cwd: string;
 			cols: number;
 			rows: number;
@@ -521,7 +518,11 @@ export type ClientMessage =
 	 *  only — nothing on disk is touched). */
 	| { type: "remove_project"; path: string }
 	/** Permanently delete a persisted session transcript file (history list). */
-	| { type: "delete_session"; path: string };
+	| { type: "delete_session"; path: string }
+	/** Dismiss a running conversation from the left-panel list (frees its runtime
+	 *  but keeps the persisted transcript in history). Only non-streaming
+	 *  conversations can be dismissed; streaming ones refuse with a notice. */
+	| { type: "dismiss_conversation"; id: string };
 
 // ---------------------------------------------------------------------------
 // Server -> Client
@@ -664,8 +665,10 @@ export interface GoalStatus {
 	reviewing: boolean;
 	/** 1-based round counter for the current goal (review rounds). */
 	round: number;
-	/** Human-readable status line (e.g. "审查中", "已通过", "本轮不通过"). */
+	/** Human-readable status line (e.g. "审查中", "已通过", "本轮不通过"). UI locale at emit time (zh default). */
 	status: string;
+	/** English status line (client shows it when locale is en). */
+	statusEn?: string;
 	/** Latest review verdict: "pending" | "pass" | "fail". */
 	verdict: "pending" | "pass" | "fail";
 	/** Latest review feedback text (reviewer's verdict reason, pass or fail). */
@@ -688,8 +691,10 @@ export interface WizardStatus {
 	step: number;
 	/** Max questions the wizard may ask before forcing a conclusion. */
 	maxSteps: number;
-	/** Short status line for the goal bar (e.g. "调研中：请回答第 2 题"). */
+	/** Short status line for the goal bar (e.g. "调研中：请回答第 2 题"). UI locale at emit time (zh default). */
 	status: string;
+	/** English wizard status line (client shows it when locale is en). */
+	statusEn?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -1001,7 +1006,7 @@ export type ServerMessage =
 	 *  prompt template + skill commands). Pushed on attach, on project switch
 	 *  and on request (get_commands). */
 	| { type: "slash_commands"; commands: SlashCommandInfo[] }
-	| { type: "notice"; level: "info" | "warning" | "error"; text: string }
+	| { type: "notice"; level: "info" | "warning" | "error"; text: string; textEn?: string }
 	/** The watched git dir changed outside the panel (terminal commit,
 	 *  CLI, IDE) — the client should re-run its scm_status query. */
 	| { type: "scm_changed" }
@@ -1129,7 +1134,7 @@ export type ServerMessage =
 			untracked?: boolean;
 			/** commit payload */
 			text?: string;
-  }
+	  }
 	| {
 			type: "path_completions";
 			completions: { name: string; path: string; type: "dir" | "file" }[];
@@ -1222,4 +1227,4 @@ export type ServerMessage =
 	 *  conversation — the list survives conversation switches/ends and only
 	 *  empties when the tasks are stopped (individually or all at once) or the
 	 *  process exits on its own. Pushed on change, on attach and on request. */
-	| { type: "bg_servers"; servers: BgServer[] }
+	| { type: "bg_servers"; servers: BgServer[] };

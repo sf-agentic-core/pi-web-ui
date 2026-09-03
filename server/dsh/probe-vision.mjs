@@ -6,9 +6,7 @@ import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 const HERE = resolve(import.meta.dirname ?? ".");
-const KEY = JSON.parse(
-	readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf8"),
-).deepseek.key;
+const KEY = JSON.parse(readFileSync(join(homedir(), ".pi", "agent", "auth.json"), "utf8")).deepseek.key;
 const JSONRPC_ENTRY = resolve(
 	HERE,
 	"..",
@@ -60,7 +58,11 @@ proc.stdout.on("data", (d) => {
 		if (m.id !== undefined && pending.has(m.id)) {
 			const p = pending.get(m.id);
 			pending.delete(m.id);
-			m.error ? p.reject(new Error(JSON.stringify(m.error))) : p.resolve(m.result);
+			if (m.error) {
+				p.reject(new Error(JSON.stringify(m.error)));
+			} else {
+				p.resolve(m.result);
+			}
 		} else if (m.method) {
 			onNotify(m.method, m.params);
 		}
@@ -82,9 +84,7 @@ const onNotify = (method, params) => {
 	if (method !== "session.event") return;
 	const ev = params?.event;
 	if (ev?.type === "assistant/message") {
-		lastAssistant = (ev.data?.message?.content ?? [])
-			.map((c) => (c.type === "text" ? c.text : ""))
-			.join("");
+		lastAssistant = (ev.data?.message?.content ?? []).map((c) => (c.type === "text" ? c.text : "")).join("");
 	}
 	if (ev?.type === "turn/end") {
 		turnDone = true;

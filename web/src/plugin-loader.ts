@@ -26,10 +26,7 @@ export interface PluginViewContext {
 }
 
 export interface PluginViewModule {
-	mount(
-		container: HTMLElement,
-		ctx: PluginViewContext,
-	): void | (() => void);
+	mount(container: HTMLElement, ctx: PluginViewContext): void | (() => void);
 }
 
 export interface LoadedPluginView {
@@ -41,14 +38,10 @@ const PLUGIN_DATA_EVENT = "pi-web-ui:plugin-data";
 
 /** use-chat 调用：把服务端 plugin_data 消息转成分发事件。 */
 export function emitPluginData(pluginId: string, payload: unknown): void {
-	window.dispatchEvent(
-		new CustomEvent(PLUGIN_DATA_EVENT, { detail: { pluginId, payload } }),
-	);
+	window.dispatchEvent(new CustomEvent(PLUGIN_DATA_EVENT, { detail: { pluginId, payload } }));
 }
 
-function subscribeAll(
-	cb: (pluginId: string, payload: unknown) => void,
-): () => void {
+function subscribeAll(cb: (pluginId: string, payload: unknown) => void): () => void {
 	const handler = (e: Event) => {
 		const d = (e as CustomEvent).detail as {
 			pluginId: string;
@@ -81,9 +74,7 @@ function notify(): void {
 }
 
 /** 订阅当前已加载的插件视图（立即回调一次当前快照）。 */
-export function subscribeLoadedPluginViews(
-	cb: (views: LoadedPluginView[]) => void,
-): () => void {
+export function subscribeLoadedPluginViews(cb: (views: LoadedPluginView[]) => void): () => void {
 	listeners.add(cb);
 	cb(snapshot());
 	return () => listeners.delete(cb);
@@ -95,10 +86,7 @@ export function subscribeLoadedPluginViews(
  * - 清单中消失/被禁用的插件 → 移除已加载视图（React 随之卸载并调 cleanup）
  * - 新出现且未失败过的 → 动态 import
  */
-export async function syncPluginViews(
-	plugins: UiPluginInfo[],
-	epoch: number,
-): Promise<void> {
+export async function syncPluginViews(plugins: UiPluginInfo[], epoch: number): Promise<void> {
 	if (epoch !== lastEpoch) {
 		lastEpoch = epoch;
 		loaded.clear();
@@ -107,9 +95,11 @@ export async function syncPluginViews(
 	// 清掉清单里不再存在的（被删目录 / 设置面板禁用 / 报错）——包括 failed 记录，
 	// 让重新安装的同名插件可以再次尝试。
 	const active = new Set(plugins.map((p) => p.id));
+	// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
 	for (const id of [...loaded.keys()]) {
 		if (!active.has(id)) loaded.delete(id);
 	}
+	// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
 	for (const id of [...failed]) {
 		if (!active.has(id)) failed.delete(id);
 	}
@@ -150,8 +140,9 @@ export function makePluginContext(
 	return {
 		pluginId,
 		send: (payload) => send({ type: "plugin_message", pluginId, payload }),
-		onData: (cb) => subscribeAll((pid, payload) => {
-			if (pid === pluginId) cb(payload);
-		}),
+		onData: (cb) =>
+			subscribeAll((pid, payload) => {
+				if (pid === pluginId) cb(payload);
+			}),
 	};
 }

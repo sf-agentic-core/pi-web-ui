@@ -38,20 +38,14 @@ if (!runtimeBase) {
 }
 
 const runConfig = process.env.DSH_CORDIS_CONFIG ?? join(HERE, "cordis.yml");
-const baseBundlePatch = join(
-	runtimeBase,
-	"@deepseek-ai",
-	"dsh-base",
-	"cordis.patch.yml",
-);
+const baseBundlePatch = join(runtimeBase, "@deepseek-ai", "dsh-base", "cordis.patch.yml");
 const overridePatch = join(HERE, "override.patch.yml");
 
 // 用户 patch 层：<dataDir>/dsh-patches/*.yml（按文件名序，在 override 之后）。
 // 引擎（DshClientSession）负责在重启运行时前创建目录；launcher 只负责加载。
-const userPatchDir =
-	process.env.PI_WEB_DSH_DATA_DIR
-		? join(process.env.PI_WEB_DSH_DATA_DIR, "dsh-patches")
-		: (process.env.PI_WEB_DSH_PATCH_DIR ?? null);
+const userPatchDir = process.env.PI_WEB_DSH_DATA_DIR
+	? join(process.env.PI_WEB_DSH_DATA_DIR, "dsh-patches")
+	: (process.env.PI_WEB_DSH_PATCH_DIR ?? null);
 const userPatchFiles = [];
 if (userPatchDir) {
 	try {
@@ -78,7 +72,7 @@ const { boot, installFailLoud, loadOverlayPatches } = await import(
 // sdk-jsonrpc 走本地扩展插件 goal-rpc.mjs（官方 server 类 + goal RPC 方法）；
 // 官方入口（base 类）通过 env PI_WEB_DSH_JSONRPC_ENTRY 传给 wrapper。
 const jsonrpcWrapper = join(HERE, "goal-rpc.mjs");
-const jsonrpcEntry = process.env.PI_WEB_DSH_JSONRPC_ENTRY
+const _jsonrpcEntry = process.env.PI_WEB_DSH_JSONRPC_ENTRY
 	? resolve(process.env.PI_WEB_DSH_JSONRPC_ENTRY)
 	: join(
 			resolve(HERE, "..", "..", "..", ".."),
@@ -106,9 +100,7 @@ const userPatchLists = userPatchFiles.map((file) => {
 	try {
 		return loadOverlayPatches(BIN_NAME, file);
 	} catch (err) {
-		process.stderr.write(
-			`[${BIN_NAME}] 跳过用户 patch ${file}: ${err?.message ?? String(err)}\n`,
-		);
+		process.stderr.write(`[${BIN_NAME}] 跳过用户 patch ${file}: ${err?.message ?? String(err)}\n`);
 		return [];
 	}
 });
@@ -156,9 +148,7 @@ const release = () => {
 		try {
 			await ctx.fiber.dispose();
 		} catch (err) {
-			console.error(
-				`[${BIN_NAME}] teardown 错误: ${err?.message ?? String(err)}`,
-			);
+			console.error(`[${BIN_NAME}] teardown 错误: ${err?.message ?? String(err)}`);
 		}
 		process.exit(0);
 	})();

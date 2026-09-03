@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 import type { ClientMessage, CommandDef } from "../types";
 import { buildTermTheme, THEME_CHANGE_EVENT } from "../theme";
+import { useI18n } from "../i18n";
 
 interface TermXtermProps {
 	conversationId: string;
@@ -17,11 +18,7 @@ interface TermXtermProps {
 	/** Whether this terminal is the visible one. */
 	active: boolean;
 	send: (msg: ClientMessage) => boolean;
-	register: (
-		conversationId: string,
-		id: string,
-		writer: { write(data: string): void; dispose(): void },
-	) => () => void;
+	register: (conversationId: string, id: string, writer: { write(data: string): void; dispose(): void }) => () => void;
 }
 
 /**
@@ -30,18 +27,17 @@ interface TermXtermProps {
  * the bridge, and kills the PTY on unmount. Kept mounted while hidden so
  * scrollback survives tab switches.
  */
-export function TermXterm({
-	conversationId,
-	terminalId,
-	command,
-	cwd,
-	title,
-	active,
-	send,
-	register,
-}: TermXtermProps) {
+export function TermXterm({ conversationId, terminalId, command, cwd, title, active, send, register }: TermXtermProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const termRef = useRef<{ term: Terminal; fit: FitAddon } | null>(null);
+	// UI locale is captured at PTY creation (the server bakes the exit-banner
+	// language in then). Keep it in a ref so a later language switch does NOT
+	// re-run the mount effect — re-running it would dispose and re-create the
+	// xterm view (scrollback lost) and, for run_command terminals, make the
+	// server kill the running process and re-execute the command.
+	const { locale } = useI18n();
+	const localeRef = useRef(locale);
+	localeRef.current = locale;
 	// Metadata snapshots recreate the command object; use a value key so a
 	// terminal is not torn down when only its running/exit metadata changes.
 	const commandKey = command ? JSON.stringify(command) : "";
@@ -55,8 +51,7 @@ export function TermXterm({
 
 		const term = new Terminal({
 			theme: buildTermTheme(),
-			fontFamily:
-				'"SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
+			fontFamily: '"SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace',
 			fontSize: 13,
 			cursorBlink: true,
 			scrollback: 8000,
@@ -142,6 +137,7 @@ export function TermXterm({
 					type: "terminal_create",
 					terminalId,
 					title,
+					locale: localeRef.current,
 					conversationId,
 					cwd,
 					cols: term.cols,
@@ -202,10 +198,5 @@ export function TermXterm({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [active]);
 
-	return (
-		<div
-			ref={containerRef}
-			className={`term-xterm ${active ? "" : "hidden"}`}
-		/>
-	);
+	return <div ref={containerRef} className={`term-xterm ${active ? "" : "hidden"}`} />;
 }

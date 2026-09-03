@@ -32,9 +32,7 @@ const CONTROL_CLIENT_TIMEOUT_MS = 3_000;
 
 /** Socket path (POSIX) or pipe name (Windows). */
 export function controlPath(dataDir: string, port: number): string {
-	return process.platform === "win32"
-		? `\\\\.\\pipe\\pi-web-ui-${port}`
-		: join(dataDir, "pi-web-ui.sock");
+	return process.platform === "win32" ? `\\\\.\\pipe\\pi-web-ui-${port}` : join(dataDir, "pi-web-ui.sock");
 }
 
 export interface ControlCommand {
@@ -56,15 +54,10 @@ export interface ControlStatus {
 }
 
 /** Start the control socket; returns a stop function. */
-export function startControlServer(opts: {
-	service: ControlService;
-	dataDir: string;
-	port: number;
-}): () => void {
+export function startControlServer(opts: { service: ControlService; dataDir: string; port: number }): () => void {
 	const { service, dataDir, port } = opts;
 	const path = controlPath(dataDir, port);
 	let server: Server;
-	let stop = false;
 
 	if (process.platform === "win32") {
 		server = createServer(handleConnection);
@@ -84,9 +77,7 @@ export function startControlServer(opts: {
 	// crash the server over it, just log and run without a control socket.
 	server.on("error", (err: NodeJS.ErrnoException) => {
 		if (err.code === "EADDRINUSE") {
-			console.warn(
-				`[control] socket ${path} already in use — control socket disabled`,
-			);
+			console.warn(`[control] socket ${path} already in use — control socket disabled`);
 		} else {
 			console.warn(`[control] socket error: ${err.message}`);
 		}
@@ -155,7 +146,6 @@ export function startControlServer(opts: {
 	}
 
 	return () => {
-		stop = true;
 		server.close();
 		try {
 			if (process.platform !== "win32" && existsSync(path)) rmSync(path);

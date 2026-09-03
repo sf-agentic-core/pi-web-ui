@@ -6,9 +6,7 @@ import { appUrl } from "./base-url";
 // types (FileSystemFileHandle / FileSystemWritableFileStream) already exist.
 declare global {
 	interface Window {
-		showSaveFilePicker?: (options?: {
-			suggestedName?: string;
-		}) => Promise<FileSystemFileHandle>;
+		showSaveFilePicker?: (options?: { suggestedName?: string }) => Promise<FileSystemFileHandle>;
 	}
 }
 
@@ -59,9 +57,7 @@ const WINDOWS_RESERVED = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])(\..*)?$/i;
  * (Chinese etc.) pass through untouched.
  */
 export function sanitizeFileName(name: string): string {
-	const cleaned = name
-		.replace(WINDOWS_INVALID_CHARS, "_")
-		.replace(WINDOWS_TRAILING, "");
+	const cleaned = name.replace(WINDOWS_INVALID_CHARS, "_").replace(WINDOWS_TRAILING, "");
 	if (!cleaned) return "_";
 	return WINDOWS_RESERVED.test(cleaned) ? `_${cleaned}` : cleaned;
 }
@@ -75,15 +71,14 @@ export function downloadUrl(path: string, download = true): string {
 	return withToken(appUrl(`/api/file?${qs}`));
 }
 
-export type DownloadResult =
-	| { ok: true }
-	| { ok: false; cancelled: true }
-	| { ok: false; cancelled: false; error: string };
+/** Sentinel error when the file 404s with an empty body ("文件不存在" / "File not found").
+ *  The caller maps it through the fileNotFoundShort i18n key so only one language shows. */
+export const DOWNLOAD_FILE_NOT_FOUND = "FILE_NOT_FOUND";
 
-export async function downloadFile(
-	path: string,
-	name: string,
-): Promise<DownloadResult> {
+export type DownloadResult =
+	{ ok: true } | { ok: false; cancelled: true } | { ok: false; cancelled: false; error: string };
+
+export async function downloadFile(path: string, name: string): Promise<DownloadResult> {
 	// On Windows the save name must be sanitized or the save silently fails
 	// with an unreadable name (e.g. "a:b.txt" → refused).
 	const saveName = IS_WINDOWS ? sanitizeFileName(name) : name;
@@ -94,8 +89,7 @@ export async function downloadFile(
 			return {
 				ok: false,
 				cancelled: false,
-				error:
-					body || (res.status === 404 ? "文件不存在" : `HTTP ${res.status}`),
+				error: body || (res.status === 404 ? DOWNLOAD_FILE_NOT_FOUND : `HTTP ${res.status}`),
 			};
 		}
 		const len = Number(res.headers.get("content-length") ?? "0");
@@ -124,10 +118,7 @@ export async function downloadFile(
  * are written through a file handle. No download event, no Safe Browsing
  * check — the fix for Windows where the blob-anchor path is silently blocked.
  */
-async function saveViaFilePicker(
-	blob: Blob,
-	name: string,
-): Promise<DownloadResult> {
+async function saveViaFilePicker(blob: Blob, name: string): Promise<DownloadResult> {
 	let handle: FileSystemFileHandle;
 	const picker = window.showSaveFilePicker;
 	if (!picker) return saveViaAnchor(blob, name);

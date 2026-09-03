@@ -1,9 +1,11 @@
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir, userInfo } from "node:os";
 import path from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
+	hasActiveSubagentRun,
 	hasPendingWaitSubscription,
+	resolveAsyncRunsDir,
 	resolveSubscriptionsDir,
 	resolveTempScopeId,
 	shouldRetainActive,
@@ -41,81 +43,217 @@ function writeRecord(dir: string, value: unknown, file = `${TOKEN}.json`): void 
 	writeFileSync(path.join(dir, file), typeof value === "string" ? value : JSON.stringify(value));
 }
 
+/** 构造 pi-subagents 磁盘布局：<dir>/async-subagent-runs/{runId}/{status.json} +
+ *  <dir>/async-subagent-runs/.active-runs/{runId}（空 marker）。返回 runs 根。 */
+function makeRunLayout(dir: string, runId: string, status: Record<string, unknown>): string {
+	const runsDir = path.join(dir, "async-subagent-runs");
+	const marker = path.join(runsDir, ".active-runs", runId);
+	mkdirSync(path.dirname(marker), { recursive: true });
+	writeFileSync(marker, "");
+	mkdirSync(path.join(runsDir, runId), { recursive: true });
+	writeFileSync(path.join(runsDir, runId, "status.json"), JSON.stringify(status));
+	return runsDir;
+}
+
+function runStatus(overrides: Record<string, unknown> = {}) {
+	return {
+		runId: "run-1",
+		sessionId: SESSION_FILE,
+		state: "running",
+		startedAt: NOW - 1000,
+		...overrides,
+	};
+}
+
 describe("hasPendingWaitSubscription", () => {
 	it("不存在目录 → 无证据", () => {
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: path.join(makeDir(), "missing", "wait-subscriptions"),
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-		})).toBe(false);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: path.join(makeDir(), "missing", "wait-subscriptions"),
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
 	});
 
 	it("空目录 → 无证据", () => {
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: makeDir(),
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-		})).toBe(false);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: makeDir(),
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
 	});
 
 	it("匹配且未过期 → 有挂起订阅（保留会话）", () => {
 		const dir = makeDir();
 		writeRecord(dir, record());
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: dir,
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-		})).toBe(true);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: dir,
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(true);
 	});
 
 	it("匹配但已过期 → 无挂起订阅", () => {
 		const dir = makeDir();
 		writeRecord(dir, record({ expiresAt: NOW - 1 }));
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: dir,
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-		})).toBe(false);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: dir,
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
 	});
 
 	it("其它会话的未过期记录 → 无挂起订阅", () => {
 		const dir = makeDir();
 		writeRecord(dir, record({ sessionId: "/other/session.jsonl" }));
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: dir,
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-		})).toBe(false);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: dir,
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
 	});
 
 	it("损坏 JSON → 视为无证据（fail-open）", () => {
 		const dir = makeDir();
 		writeRecord(dir, "{ not json !!!", "corrupt.json");
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: dir,
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-		})).toBe(false);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: dir,
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
 	});
 
 	it("格式不符（version 缺失等）→ 视为无证据", () => {
 		const dir = makeDir();
 		writeRecord(dir, { hello: "world" }, "foreign.json");
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: dir,
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-		})).toBe(false);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: dir,
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
 	});
 
 	it("非 .json 文件被忽略", () => {
 		const dir = makeDir();
 		writeRecord(dir, record(), "notes.txt");
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: dir,
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-		})).toBe(false);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: dir,
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
+	});
+});
+
+describe("hasActiveSubagentRun（pi-web-ui #52：活跃异步 run 保留证据）", () => {
+	const STALE = 24 * 60 * 60 * 1000;
+
+	it("sessionId 缺失 → 无证据", () => {
+		const dir = makeDir();
+		makeRunLayout(dir, "run-1", runStatus());
+		expect(hasActiveSubagentRun({ asyncRunsDir: path.join(dir, "async-subagent-runs") })).toBe(false);
+	});
+
+	it("索引目录不存在 → 无证据", () => {
+		expect(
+			hasActiveSubagentRun({
+				asyncRunsDir: path.join(makeDir(), "missing", "async-subagent-runs"),
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
+	});
+
+	it("空索引目录 → 无证据", () => {
+		expect(
+			hasActiveSubagentRun({
+				asyncRunsDir: path.join(makeDir(), "async-subagent-runs"),
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
+	});
+
+	it("匹配会话 + running → 有活跃 run（保留会话）", () => {
+		const dir = makeDir();
+		const runsDir = makeRunLayout(dir, "run-1", runStatus());
+		expect(hasActiveSubagentRun({ asyncRunsDir: runsDir, sessionId: SESSION_FILE, now: () => NOW })).toBe(true);
+	});
+
+	it("匹配会话 + queued → 有活跃 run", () => {
+		const dir = makeDir();
+		const runsDir = makeRunLayout(dir, "run-1", runStatus({ state: "queued" }));
+		expect(hasActiveSubagentRun({ asyncRunsDir: runsDir, sessionId: SESSION_FILE, now: () => NOW })).toBe(true);
+	});
+
+	it("run 已结束（complete/failed/stopped）→ 无活跃 run", () => {
+		for (const state of ["complete", "failed", "partial", "stopped", "rejected", "paused"]) {
+			const dir = makeDir();
+			const runsDir = makeRunLayout(dir, "run-1", runStatus({ state }));
+			expect(hasActiveSubagentRun({ asyncRunsDir: runsDir, sessionId: SESSION_FILE, now: () => NOW }), state).toBe(
+				false,
+			);
+		}
+	});
+
+	it("其它会话的活跃 run → 无证据", () => {
+		const dir = makeDir();
+		const runsDir = makeRunLayout(dir, "run-1", runStatus({ sessionId: "/other/session.jsonl" }));
+		expect(hasActiveSubagentRun({ asyncRunsDir: runsDir, sessionId: SESSION_FILE, now: () => NOW })).toBe(false);
+	});
+
+	it("多个 run：任一本会话活跃即命中（workflow 的 lane/子 run 也计入）", () => {
+		const dir = makeDir();
+		const runsDir = makeRunLayout(dir, "run-a", runStatus({ runId: "run-a", sessionId: "/other/session.jsonl" }));
+		makeRunLayout(dir, "run-b", runStatus({ runId: "run-b" }));
+		expect(hasActiveSubagentRun({ asyncRunsDir: runsDir, sessionId: SESSION_FILE, now: () => NOW })).toBe(true);
+	});
+
+	it("status.json 缺失 / 损坏 → 无证据（fail-open）", () => {
+		const dir = makeDir();
+		const runsDir = makeRunLayout(dir, "run-1", runStatus());
+		writeFileSync(path.join(runsDir, "run-1", "status.json"), "{ not json !!!");
+		expect(hasActiveSubagentRun({ asyncRunsDir: runsDir, sessionId: SESSION_FILE, now: () => NOW })).toBe(false);
+	});
+
+	it("marker 过期（崩溃遗留孤儿，超过 24h）→ 无证据（保留自限）", () => {
+		const dir = makeDir();
+		const runsDir = makeRunLayout(dir, "run-1", runStatus());
+		const marker = path.join(runsDir, ".active-runs", "run-1");
+		const past = NOW - STALE - 60_000;
+		utimesSync(marker, new Date(past), new Date(past));
+		expect(hasActiveSubagentRun({ asyncRunsDir: runsDir, sessionId: SESSION_FILE, now: () => NOW })).toBe(false);
+	});
+
+	it("marker 新鲜但 status 实体缺失 → marker 虽在，status 读不到仍无证据", () => {
+		const dir = makeDir();
+		const runsDir = path.join(dir, "async-subagent-runs");
+		const marker = path.join(runsDir, ".active-runs", "orphan");
+		mkdirSync(path.dirname(marker), { recursive: true });
+		writeFileSync(marker, "");
+		expect(hasActiveSubagentRun({ asyncRunsDir: runsDir, sessionId: SESSION_FILE, now: () => NOW })).toBe(false);
+	});
+
+	it("隐藏文件 / .json 后缀的文件不当作 run 证据", () => {
+		const dir = makeDir();
+		const runsDir = path.join(dir, "async-subagent-runs");
+		mkdirSync(path.join(runsDir, ".active-runs"), { recursive: true });
+		writeFileSync(path.join(runsDir, ".active-runs", ".stale-tmp"), "");
+		expect(hasActiveSubagentRun({ asyncRunsDir: runsDir, sessionId: SESSION_FILE, now: () => NOW })).toBe(false);
 	});
 });
 
@@ -127,6 +265,7 @@ describe("shouldRetainActive（置换决策）", () => {
 		openTerminals: 0,
 		listed: false,
 		promptedSinceActive: false,
+		hasActiveSubagentRun: false,
 		hasPendingWake: false,
 	};
 
@@ -148,22 +287,65 @@ describe("shouldRetainActive（置换决策）", () => {
 	it("有未过期 wake 订阅 → 保留（本修复的核心行为）", () => {
 		expect(shouldRetainActive({ ...base, hasPendingWake: true })).toBe(true);
 	});
-	it("thunk 只在到达 pending-wake 优先级时才求值（前置命中则不调用）", () => {
-		expect(shouldRetainActive({
-			...base,
-			streaming: true,
-			hasPendingWake: () => {
-				throw new Error("must not be evaluated");
-			},
-		})).toBe(true);
+
+	it("有活跃 subagent run → 保留（pi-web-ui #52）", () => {
+		expect(shouldRetainActive({ ...base, hasActiveSubagentRun: true })).toBe(true);
+	});
+
+	it("active-run thunk 在 wake thunk 之前求值：命中 active 时 wake 不求值", () => {
+		expect(
+			shouldRetainActive({
+				...base,
+				hasActiveSubagentRun: () => true,
+				hasPendingWake: () => {
+					throw new Error("must not be evaluated");
+				},
+			}),
+		).toBe(true);
 		let calls = 0;
-		expect(shouldRetainActive({
-			...base,
-			hasPendingWake: () => {
-				calls += 1;
-				return true;
-			},
-		})).toBe(true);
+		expect(
+			shouldRetainActive({
+				...base,
+				hasActiveSubagentRun: () => {
+					calls += 1;
+					return true;
+				},
+			}),
+		).toBe(true);
+		expect(calls).toBe(1);
+	});
+
+	it("active-run thunk 只在便宜判定（streaming/terminals）之后求值", () => {
+		expect(
+			shouldRetainActive({
+				...base,
+				streaming: true,
+				hasActiveSubagentRun: () => {
+					throw new Error("must not be evaluated");
+				},
+			}),
+		).toBe(true);
+	});
+	it("thunk 只在到达 pending-wake 优先级时才求值（前置命中则不调用）", () => {
+		expect(
+			shouldRetainActive({
+				...base,
+				streaming: true,
+				hasPendingWake: () => {
+					throw new Error("must not be evaluated");
+				},
+			}),
+		).toBe(true);
+		let calls = 0;
+		expect(
+			shouldRetainActive({
+				...base,
+				hasPendingWake: () => {
+					calls += 1;
+					return true;
+				},
+			}),
+		).toBe(true);
 		expect(calls).toBe(1);
 	});
 });
@@ -212,45 +394,58 @@ describe("resolveTempScopeId / resolveSubscriptionsDir", () => {
 	it("resolveSubscriptionsDir：PI_SUBAGENTS_TEMP_ROOT 覆盖（含尾斜杠/相对路径）", () => {
 		// path.resolve 把 /tmp/custom 规范成平台绝对路径（POSIX 原样，
 		// Windows 变 C:\tmp\custom），断言跟随实现，平台无关。
-		expect(resolveSubscriptionsDir({ PI_SUBAGENTS_TEMP_ROOT: "/tmp/custom" }))
-			.toBe(path.join(path.resolve("/tmp/custom"), "wait-subscriptions"));
-		expect(resolveSubscriptionsDir({ PI_SUBAGENTS_TEMP_ROOT: "/tmp/custom/" }))
-			.toBe(path.join(path.resolve("/tmp/custom"), "wait-subscriptions"));
+		expect(resolveSubscriptionsDir({ PI_SUBAGENTS_TEMP_ROOT: "/tmp/custom" })).toBe(
+			path.join(path.resolve("/tmp/custom"), "wait-subscriptions"),
+		);
+		expect(resolveSubscriptionsDir({ PI_SUBAGENTS_TEMP_ROOT: "/tmp/custom/" })).toBe(
+			path.join(path.resolve("/tmp/custom"), "wait-subscriptions"),
+		);
 		const resolved = resolveSubscriptionsDir({ PI_SUBAGENTS_TEMP_ROOT: "rel/root" });
 		expect(path.isAbsolute(resolved)).toBe(true);
 		expect(resolved.endsWith("wait-subscriptions")).toBe(true);
 	});
 
-	it("resolveSubscriptionsDir：默认推导平台 scope 目录", () => {
-		// 期望值与实现同源推导（resolveTempScopeId），避免平台差异（uid vs user-X）。
-		expect(resolveSubscriptionsDir(cleanEnv)).toBe(
-			path.join(tmpdir(), `pi-subagents-${resolveTempScopeId(cleanEnv)}`, "wait-subscriptions"),
+	it("resolveAsyncRunsDir：与 resolveSubscriptionsDir 共享同一临时根（#52 磁盘布局对齐）", () => {
+		expect(resolveAsyncRunsDir({ PI_SUBAGENTS_TEMP_ROOT: "/tmp/custom" })).toBe(
+			path.join(path.resolve("/tmp/custom"), "async-subagent-runs"),
 		);
+		// 默认根下两个目录同 parent：<root>/async-subagent-runs 与 <root>/wait-subscriptions
+		expect(resolveAsyncRunsDir(cleanEnv)).toBe(
+			path.join(tmpdir(), `pi-subagents-${resolveTempScopeId(cleanEnv)}`, "async-subagent-runs"),
+		);
+		expect(path.dirname(resolveAsyncRunsDir(cleanEnv))).toBe(path.dirname(resolveSubscriptionsDir(cleanEnv)));
 	});
 });
 
 describe("M1/M4/S2 边界与宿主对齐", () => {
 	it("expiresAt 为非有限数值（1e999 → Infinity）→ fail-open", () => {
 		const dir = makeDir();
-		writeFileSync(path.join(dir, `${TOKEN}.json`), JSON.stringify({
-			...record(),
-			expiresAt: JSON.parse("1e999"),
-		}));
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: dir,
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-		})).toBe(false);
+		writeFileSync(
+			path.join(dir, `${TOKEN}.json`),
+			JSON.stringify({
+				...record(),
+				expiresAt: JSON.parse("1e999"),
+			}),
+		);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: dir,
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
 	});
 
 	it("文件名与 token 不符（被重命名）→ fail-open", () => {
 		const dir = makeDir();
 		writeRecord(dir, record(), "renamed.json");
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: dir,
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-		})).toBe(false);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: dir,
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+			}),
+		).toBe(false);
 	});
 
 	it("非 ENOENT I/O 错误 warn 一次且仍 fail-open；ENOENT 静默", () => {
@@ -259,21 +454,25 @@ describe("M1/M4/S2 边界与宿主对齐", () => {
 		// foo.json 是目录 → readFileSync 抛 EISDIR（非 ENOENT）
 		const dir = makeDir();
 		mkdirSync(path.join(dir, "foo.json"));
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: dir,
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-			warn,
-		})).toBe(false);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: dir,
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+				warn,
+			}),
+		).toBe(false);
 		expect(warnings).toHaveLength(1);
 		// 目录整体缺失 → ENOENT → 静默
 		const silent: string[] = [];
-		expect(hasPendingWaitSubscription({
-			subscriptionsDir: path.join(makeDir(), "nope"),
-			sessionId: SESSION_FILE,
-			now: () => NOW,
-			warn: (m) => silent.push(m),
-		})).toBe(false);
+		expect(
+			hasPendingWaitSubscription({
+				subscriptionsDir: path.join(makeDir(), "nope"),
+				sessionId: SESSION_FILE,
+				now: () => NOW,
+				warn: (m) => silent.push(m),
+			}),
+		).toBe(false);
 		expect(silent).toHaveLength(0);
 	});
 });

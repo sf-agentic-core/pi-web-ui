@@ -51,9 +51,27 @@ export const NATIVE_COMMANDS: {
 	argumentHintEn?: string;
 }[] = [
 	{ name: "new", description: "新建对话", descriptionEn: "New chat" },
-	{ name: "model", description: "切换模型", descriptionEn: "Switch model", argumentHint: "[名称]", argumentHintEn: "[name]" },
-	{ name: "compact", description: "压缩上下文", descriptionEn: "Compact context", argumentHint: "[说明]", argumentHintEn: "[instructions]" },
-	{ name: "cwd", description: "切换工作目录", descriptionEn: "Switch workspace", argumentHint: "<路径>", argumentHintEn: "<path>" },
+	{
+		name: "model",
+		description: "切换模型",
+		descriptionEn: "Switch model",
+		argumentHint: "[名称]",
+		argumentHintEn: "[name]",
+	},
+	{
+		name: "compact",
+		description: "压缩上下文",
+		descriptionEn: "Compact context",
+		argumentHint: "[说明]",
+		argumentHintEn: "[instructions]",
+	},
+	{
+		name: "cwd",
+		description: "切换工作目录",
+		descriptionEn: "Switch workspace",
+		argumentHint: "<路径>",
+		argumentHintEn: "<path>",
+	},
 	{
 		name: "thinking",
 		description: "设置思考强度",
@@ -169,9 +187,7 @@ export class SlashCommandsService {
 				const query = args.toLowerCase();
 				const available = await this.host.getSession().modelRuntime.getAvailable();
 				// Prefer an exact "provider/id" match, else id/name substring.
-				const exact = available.find(
-					(m) => m.provider + "/" + m.id === args.trim(),
-				);
+				const exact = available.find((m) => m.provider + "/" + m.id === args.trim());
 				const matches = exact
 					? [exact]
 					: available.filter(
@@ -185,6 +201,7 @@ export class SlashCommandsService {
 						type: "notice",
 						level: "error",
 						text: `没有匹配到模型：${args}（可用模型见顶栏模型列表）`,
+						textEn: `No matching model: ${args} (see the model list in the top bar)`,
 					});
 					return true;
 				}
@@ -194,6 +211,7 @@ export class SlashCommandsService {
 						type: "notice",
 						level: "warning",
 						text: `找到 ${matches.length} 个匹配模型，已选用：${pick.name}（精确匹配请用 provider/id）`,
+						textEn: `Found ${matches.length} matching models, using: ${pick.name} (use provider/id for an exact match)`,
 					});
 				}
 				await this.host.setModel(`${pick.provider}/${pick.id}`);
@@ -214,6 +232,7 @@ export class SlashCommandsService {
 						type: "notice",
 						level: "info",
 						text: `当前工作目录：${this.host.cwd()}。用法：/cwd <路径>`,
+						textEn: `Current directory: ${this.host.cwd()}. Usage: /cwd <path>`,
 					});
 				} else {
 					await this.host.setCwd(args);
@@ -242,6 +261,7 @@ export class SlashCommandsService {
 						type: "notice",
 						level: "error",
 						text: `无效的思考强度：${args || "（空）"}。可用：off / minimal / low / medium / high / xhigh / max`,
+						textEn: `Invalid thinking level: ${args || "(empty)"}. Available: off / minimal / low / medium / high / xhigh / max`,
 					});
 					return true;
 				}
@@ -254,6 +274,7 @@ export class SlashCommandsService {
 					type: "notice",
 					level: "info",
 					text: "会话列表已刷新，请在左侧「历史对话」中选择",
+					textEn: "Session list refreshed — pick one under History on the left",
 				});
 				return true;
 			case "reload":
@@ -268,12 +289,14 @@ export class SlashCommandsService {
 						type: "notice",
 						level: "info",
 						text: "已重新加载扩展、技能与提示模板",
+						textEn: "Reloaded extensions, skills and prompt templates",
 					});
 				} catch (err) {
 					this.host.emit({
 						type: "notice",
 						level: "error",
 						text: `重新加载失败：${(err as Error).message}`,
+						textEn: `Reload failed: ${(err as Error).message}`,
 					});
 				}
 				return true;
@@ -282,6 +305,7 @@ export class SlashCommandsService {
 					type: "notice",
 					level: "info",
 					text: "正在退出 pi-web-ui… supervisor 将自动重启服务",
+					textEn: "Quitting pi-web-ui… the supervisor will restart the service",
 				});
 				setTimeout(() => {
 					const didSchedule = this.host.onQuit?.() ?? false;

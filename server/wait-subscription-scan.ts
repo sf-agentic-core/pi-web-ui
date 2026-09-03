@@ -25,7 +25,7 @@
 // conversation switches. See the Chinese block above for the persistence layout
 // and the fail-open vs fail-closed rationale.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync, statSync } from "node:fs";
 import { homedir, tmpdir, userInfo } from "node:os";
 import path from "node:path";
 
@@ -51,15 +51,20 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-
 function parseRecord(value: unknown): WaitSubscriptionRecord | undefined {
 	if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
 	const record = value as Partial<WaitSubscriptionRecord>;
-	if (record.version !== 1
-		|| typeof record.token !== "string"
-		|| !UUID_RE.test(record.token)
-		|| typeof record.sessionId !== "string"
-		|| (record.targetKind !== "async" && record.targetKind !== "foreground")
-		|| typeof record.runId !== "string"
-		|| typeof record.requestedId !== "string"
-		|| typeof record.createdAt !== "number" || !Number.isFinite(record.createdAt)
-		|| typeof record.expiresAt !== "number" || !Number.isFinite(record.expiresAt)) return undefined;
+	if (
+		record.version !== 1 ||
+		typeof record.token !== "string" ||
+		!UUID_RE.test(record.token) ||
+		typeof record.sessionId !== "string" ||
+		(record.targetKind !== "async" && record.targetKind !== "foreground") ||
+		typeof record.runId !== "string" ||
+		typeof record.requestedId !== "string" ||
+		typeof record.createdAt !== "number" ||
+		!Number.isFinite(record.createdAt) ||
+		typeof record.expiresAt !== "number" ||
+		!Number.isFinite(record.expiresAt)
+	)
+		return undefined;
 	return record as WaitSubscriptionRecord;
 }
 
@@ -112,13 +117,102 @@ export function resolveTempScopeId(
 	return "shared";
 }
 
+/** <pi-subagents 临时根>：PI_SUBAGENTS_TEMP_ROOT 优先，否则 tmpdir()/pi-subagents-<scope>。 */
+function resolveTempRoot(env: NodeJS.ProcessEnv): string {
+	const configured = env.PI_SUBAGENTS_TEMP_ROOT?.trim();
+	return configured ? path.resolve(configured) : path.join(tmpdir(), `pi-subagents-${resolveTempScopeId(env)}`);
+}
+
 /** wait-subscriptions 目录默认位置（与 pi-subagents 的推导一致）。 */
 export function resolveSubscriptionsDir(env: NodeJS.ProcessEnv = process.env): string {
-	const configured = env.PI_SUBAGENTS_TEMP_ROOT?.trim();
-	const root = configured
-		? path.resolve(configured)
-		: path.join(tmpdir(), `pi-subagents-${resolveTempScopeId(env)}`);
-	return path.join(path.dirname(path.join(root, "async-subagent-runs")), "wait-subscriptions");
+	return path.join(resolveTempRoot(env), "wait-subscriptions");
+}
+
+/** 异步 run 目录根（asyncDirRoot）默认位置：<TEMP_ROOT>/async-subagent-runs。 */
+export function resolveAsyncRunsDir(env: NodeJS.ProcessEnv = process.env): string {
+	return path.join(resolveTempRoot(env), "async-subagent-runs");
+}
+
+/**
+ * 活跃 run marker 的最长可信存活期：对齐 pi-subagents
+ * active-run-index.ts 的 DEFAULT_STALE_TERMINAL_ACTIVE_MARKER_MS（24h）。
+ * 崩溃遗留的 marker 超过该时长即视为孤儿，不阻止运行时释放（保留自限）。
+ */
+export const DEFAULT_STALE_ACTIVE_MARKER_MS = 24 * 60 * 60 * 1000;
+
+/** 活跃 marker 索引目录名，与 pi-subagents 的 ACTIVE_RUN_INDEX_DIR 一致。 */
+const ACTIVE_RUN_INDEX_DIR = ".active-runs";
+
+/** AsyncStatus 中本探测只关心的字段（结构外字段一律忽略——松耦合）。 */
+interface AsyncStatusProbe {
+	state?: unknown;
+	sessionId?: unknown;
+}
+
+export interface ActiveRunScanOptions {
+	/** 默认 resolveAsyncRunsDir()。测试可注入临时目录。 */
+	asyncRunsDir?: string;
+	/** 会话标识 = AsyncStatus.sessionId = session .jsonl 绝对路径。 */
+	sessionId?: string;
+	now?: () => number;
+	/** marker 超过该时长视为崩溃孤儿，不保留。默认 24h（对齐上游）。 */
+	staleMarkerMs?: number;
+	/** I/O 警告出口（测试可静音）。默认 console.warn。 */
+	warn?: (message: string, error: unknown) => void;
+}
+
+/**
+ * 磁盘扫描：该会话是否还有活跃（queued/running）的 pi-subagents 异步 run。
+ * 任何 I/O / 解析 / 过期错误都按「无证据」处理（fail-open，见文件头说明）。
+ * ENOENT（目录/文件尚不存在、marker 刚被清掉）保持静默；其余 I/O 错误
+ * console.warn 一次（与 hasPendingWaitSubscription 对齐）。
+ */
+export function hasActiveSubagentRun(options: ActiveRunScanOptions): boolean {
+	const sessionId = options.sessionId;
+	if (!sessionId) return false;
+	const now = options.now ?? Date.now;
+	const staleMarkerMs = options.staleMarkerMs ?? DEFAULT_STALE_ACTIVE_MARKER_MS;
+	const warn = options.warn ?? ((message: string, error: unknown) => console.warn(message, error));
+	const isNotFound = (error: unknown): boolean =>
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as NodeJS.ErrnoException).code === "ENOENT";
+	const runsDir = options.asyncRunsDir ?? resolveAsyncRunsDir();
+	const indexDir = path.join(runsDir, ACTIVE_RUN_INDEX_DIR);
+	let markers: string[];
+	try {
+		markers = readdirSync(indexDir);
+	} catch (error) {
+		if (!isNotFound(error)) warn(`Failed to scan active-run index in '${indexDir}':`, error);
+		return false; // 索引目录缺失 / 不可读 → 无证据
+	}
+	for (const runId of markers) {
+		if (runId.startsWith(".")) continue; // 不把隐藏文件当 run 证据
+		const markerFile = path.join(indexDir, runId);
+		// 孤儿防护：marker 太久没被 touch（崩溃遗留，run 早已不在）→ 无证据。
+		try {
+			const ageMs = now() - statSync(markerFile).mtimeMs;
+			if (ageMs > staleMarkerMs) continue;
+		} catch (error) {
+			if (!isNotFound(error)) warn(`Failed to stat active-run marker '${markerFile}':`, error);
+			continue; // ENOENT（刚被清除的竞态）→ 无证据
+		}
+		let status: unknown;
+		try {
+			status = JSON.parse(readFileSync(path.join(runsDir, runId, "status.json"), "utf-8"));
+		} catch (error) {
+			if (!isNotFound(error))
+				warn(`Failed to read async run status '${path.join(runsDir, runId, "status.json")}':`, error);
+			continue; // 缺失 / 损坏 → 无证据（fail-open）
+		}
+		if (!status || typeof status !== "object" || Array.isArray(status)) continue;
+		const probe = status as AsyncStatusProbe;
+		if (probe.sessionId !== sessionId) continue; // 别的会话的 run
+		if (probe.state !== "queued" && probe.state !== "running") continue; // 已结束
+		return true;
+	}
+	return false;
 }
 
 export interface PendingWakeScanOptions {
@@ -144,8 +238,10 @@ export function hasPendingWaitSubscription(options: PendingWakeScanOptions): boo
 	const now = options.now ?? Date.now;
 	const warn = options.warn ?? ((message: string, error: unknown) => console.warn(message, error));
 	const isNotFound = (error: unknown): boolean =>
-		typeof error === "object" && error !== null && "code" in error
-		&& (error as NodeJS.ErrnoException).code === "ENOENT";
+		typeof error === "object" &&
+		error !== null &&
+		"code" in error &&
+		(error as NodeJS.ErrnoException).code === "ENOENT";
 	const dir = options.subscriptionsDir ?? resolveSubscriptionsDir();
 	let files: string[];
 	try {
@@ -186,6 +282,14 @@ export interface DisplacementDecisionInput {
 	listed: boolean;
 	promptedSinceActive: boolean;
 	/**
+	 * 磁盘扫描结果：存在活跃（queued/running）的 pi-subagents 异步 run。
+	 * 同样是磁盘证据 thunk，优先级在 hasPendingWake 之前：run 本身还在跑
+	 * （wait-subscription 要等 run 结束才产生）——pi-web-ui #52。
+	 * Active-run evidence; pass a thunk to defer the disk scan — it is only
+	 * invoked at this precedence point, after the cheaper checks pass.
+	 */
+	hasActiveSubagentRun: boolean | (() => boolean);
+	/**
 	 * 磁盘扫描结果：存在未过期 wake 订阅。可传 thunk 延迟求值 —— 只在前面的
 	 * 保留条件都不命中时才会被调用，避免每次置换都做同步磁盘 I/O。
 	 * Pending-wake evidence; pass a thunk to defer the disk scan — it is only
@@ -198,15 +302,16 @@ export interface DisplacementDecisionInput {
  * 纯函数版置换决策：true = 保留（不得 dispose），false = 调用方可释放。
  * Pure decision core of displaceActive(): true = retain, false = may dispose.
  * 顺序与 displaceActive 保持一致：review/wizard → streaming → terminals →
- * pending wake → listed+continued（「打开后继续过」的会话也保留）。
+ * active subagent run → pending wake → listed+continued（「打开后继续过」的会话也保留）。
  */
 export function shouldRetainActive(input: DisplacementDecisionInput): boolean {
 	if (input.reviewing || input.wizardRunning) return true;
 	if (input.streaming) return true;
 	if (input.openTerminals > 0) return true;
-	const hasPendingWake = typeof input.hasPendingWake === "function"
-		? input.hasPendingWake()
-		: input.hasPendingWake;
+	const hasActiveRun =
+		typeof input.hasActiveSubagentRun === "function" ? input.hasActiveSubagentRun() : input.hasActiveSubagentRun;
+	if (hasActiveRun) return true;
+	const hasPendingWake = typeof input.hasPendingWake === "function" ? input.hasPendingWake() : input.hasPendingWake;
 	if (hasPendingWake) return true;
 	if (input.listed && input.promptedSinceActive) return true;
 	return false;

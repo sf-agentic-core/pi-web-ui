@@ -3547,7 +3547,11 @@ export class ClientSession {
 			const { resolve } = await import("node:path");
 			this.files.unwatchGit(); // stale repo's watcher must not fire across projects
 			const fs = await import("node:fs/promises");
-			const abs = resolve(newCwd);
+			// Resolve relative paths against the configured workspace root
+			// (this.cwd), not against the server process's real process.cwd()
+			// (e.g. Docker's WORKDIR /app) — otherwise `/cwd <relative>` silently
+			// resolves outside the intended workspace and fails with ENOENT.
+			const abs = resolve(this.cwd, newCwd);
 			const st = await fs.stat(abs);
 			if (!st.isDirectory()) {
 				throw new Error("路径不是目录");

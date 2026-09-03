@@ -68,6 +68,11 @@ theme switching, and a full settings panel — tuned for daily development.
 - Long threads auto-collapse messages older than 30 into lazy summary rows (click to expand).
 - Question navigation — a floating rail plus per-question tags to jump between questions.
 
+### 🤖 Subagents & templates
+
+- **First-party subagents** — spawn independent background conversations for parallel exploration / implementation / review (`subagent_spawn`); manage them like a chat right in the left panel: view live output, inject follow-ups (steer), abort, dismiss. In-memory sessions — they never touch the history / resume list, and can be nested.
+- **Subagent templates** — configure reusable presets in Settings → Subagent templates: a role system prompt (append or replace) plus skills & extensions whitelists. The AI picks one via the `subagent_templates` tool and `subagent_spawn(template="…")`, or spawns without one (main-session default config). Disabled templates stay in the panel for re-enabling but become invisible to the AI tools (can't be listed or picked). Templates are shared globally across browser clients (`<dataDir>/subagent-templates.json`). Six built-in templates (review / implement / research / scout / audit / delegate, adapted from the pi-subagents community projects) seed the list on first run — marked 「Built-in」, editable and deletable like any other.
+
 ### 🖼️ Files, images & attachments
 
 - Three attachment modes: `inline` (≤12 KB), `reference` (path only), `lines` (selected ranges) — over-limit ones degrade automatically.

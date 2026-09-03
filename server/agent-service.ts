@@ -11,6 +11,7 @@
  * so reconnects just re-request a snapshot.
  */
 import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync, mkdirSync, watch } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -46,7 +47,8 @@ import { GoalService } from "./goal-service.js";
 import { SlashCommandsService, parseSlash } from "./slash-commands.js";
 import { ModelAdminService } from "./model-admin.js";
 import { FilesService, workspacePath } from "./files-service.js";
-import { isExtensionDisabled, type PromptMode, ClientStateStore } from "./client-state.js";
+import { isExtensionDisabled, isExtensionEnabled, type PromptMode, ClientStateStore } from "./client-state.js";
+import { SubagentTemplatesStore, type SubagentTemplate } from "./subagent-templates.js";
 
 import {
 	applyHeadTail,
@@ -57,6 +59,13 @@ import {
 	TERMINAL_TOOL_NAMES,
 } from "./terminals.js";
 import { WebUIContext } from "./webui-context.js";
+import {
+	makeSubagentTools,
+	subagentTitle,
+	type SubagentSnapshot,
+	type SubagentState,
+	type SubagentToolHost,
+} from "./subagents.js";
 import { buildAttachmentMessages } from "./attachments.js";
 import type {
 	BgServer,
@@ -69,6 +78,7 @@ import type {
 	SessionSummary,
 	UiMessage,
 	UiState,
+	UiSubagentTemplate,
 } from "./protocol.js";
 import { serializeMessage, serializeStreamingMessage, type AgentMessage } from "./serialize.js";
 import { loadCommands, saveCommandsFile, TerminalManager } from "./terminals.js";
@@ -343,6 +353,10 @@ interface Conversation {
 	id: string;
 	/** Display title: first user prompt (truncated) or the default. */
 	title: string;
+	/** 这是子代理对话（左栏带「子代理」徽标；inMemory session，不进历史/resume）。 */
+	isSubagent: boolean;
+	/** 子代理类型/角色展示名（explore/implement/review…）。 */
+	subagentType?: string;
 	runtime: AgentSessionRuntime;
 	session: AgentSession;
 	cwd: string;
@@ -689,6 +703,83 @@ export class ClientSession {
 		}
 	}
 
+	/** 创建子代理 conversation（inMemory runtime + 独立 terminals），listed 入左栏，
+	 *  并在其上触发一次完整回合。返回 convId（= 工具 runId）。 */
+	private async spawnSubagentConversation(
+		prompt: string,
+		type: string,
+		cwd: string,
+		apply?: SubagentTemplate,
+	): Promise<string> {
+		const conversationId = `sa-${randomUUID().slice(0, 8)}`;
+		const terminals = this.makeTerminalManager(conversationId, cwd);
+		const runtime = await createAgentSessionRuntime(this.makeRuntimeFactory(terminals, apply), {
+			cwd,
+			agentDir: this.agentDir,
+			sessionManager: SessionManager.inMemory(cwd),
+		});
+		const conv = this.makeConversation(runtime, conversationId, terminals);
+		conv.isSubagent = true;
+		conv.subagentType = type;
+		conv.listed = true;
+		conv.title = subagentTitle(prompt);
+		this.convs.set(conv.id, conv);
+		// 扩展绑定（rpc 模式；不给 uiContext，避免与主对话的 widget 冲突）。
+		try {
+			await conv.session.bindExtensions({
+				mode: "rpc",
+				onError: (err) => this.emit({ type: "notice", level: "error", text: err.error }),
+			});
+		} catch {
+			// 绑定失败不阻断运行。
+		}
+		// 触发回合（后台执行；失败转识为通知）。
+		void conv.session.sendUserMessage(prompt).catch((err) => {
+			this.emit({
+				type: "notice",
+				level: "error",
+				text: `子代理 ${conversationId} 启动失败: ${err instanceof Error ? err.message : String(err)}`,
+			});
+		});
+		this.emitConversations();
+		return conv.id;
+	}
+
+	private getSubagentSnapshot(convId: string): SubagentSnapshot | undefined {
+		const conv = this.convs.get(convId);
+		if (!conv?.isSubagent || !conv.session) return undefined;
+		return this.toSubagentSnapshot(conv);
+	}
+
+	private listSubagentSnapshots(): SubagentSnapshot[] {
+		return [...this.convs.values()]
+			.filter((c) => c.isSubagent)
+			.sort((a, b) => a.createdAt - b.createdAt)
+			.map((c) => this.toSubagentSnapshot(c));
+	}
+
+	private toSubagentSnapshot(conv: Conversation): SubagentSnapshot {
+		const streaming = conv.session.isStreaming;
+		const state: SubagentState = streaming ? "running" : "done";
+		let messageCount = 0;
+		try {
+			messageCount = conv.session.getSessionStats().totalMessages;
+		} catch {
+			// session being replaced — report defaults
+		}
+		return {
+			convId: conv.id,
+			type: conv.subagentType ?? "general",
+			title: conv.title,
+			prompt: "",
+			state,
+			streaming,
+			messageCount,
+			model: conv.session.model?.id,
+			output: conv.session.getLastAssistantText() ?? "",
+		};
+	}
+
 	private emitTerminal(conversationId: string, msg: ServerMessage): void {
 		// Background conversations keep collecting output in their own PTY buffer.
 		// Do not stream it into the active xterm; push the retained window on switch.
@@ -761,6 +852,46 @@ export class ClientSession {
 
 	/** Web-facing extension UI context (widgets, notifications). */
 	private webUi = new WebUIContext((msg) => this.emit(msg));
+
+	/**
+	 * 第一方子代理 host（见 subagents.ts 设计头注）。子代理 = 一个标记
+	 * isSubagent 的普通 Conversation：inMemory runtime（不落盘、不进
+	 * 历史/resume 列表）、listed=true 出现在左栏「运行的对话」并向用户可见——
+	 * 切换查看 / 输入补充（steer）/ 中止（abort）/ 移出全部复用现有对话机制。
+	 */
+	private subagentHost: SubagentToolHost = {
+		spawnSubagent: (prompt, type, cwd, templateName) => {
+			// 模板：存在且启用时应用；传了名字但不可用 → 抛错让工具转给 AI。
+			const tpl = templateName ? this.subagentTemplates.get(templateName) : undefined;
+			if (templateName && (!tpl || !tpl.enabled)) {
+				throw new Error(`子代理模板不可用：${templateName}（不存在或已停用）`);
+			}
+			return this.spawnSubagentConversation(prompt, type, cwd, tpl);
+		},
+		getSubagent: (convId) => this.getSubagentSnapshot(convId),
+		listSubagents: () => this.listSubagentSnapshots(),
+		steerSubagent: async (convId, message) => {
+			const conv = this.convs.get(convId);
+			if (!conv?.session) return;
+			await conv.session.sendUserMessage(message, conv.session.isStreaming ? { deliverAs: "steer" } : undefined);
+		},
+		stopSubagent: async (convId) => {
+			const conv = this.convs.get(convId);
+			if (conv && (conv.session.isStreaming || !conv.session.isIdle)) {
+				await this.interruptRun(conv, "用户停止子代理");
+			}
+		},
+		// 只向 AI 暴露 enabled 的模板（停用的对 AI 不可见）。
+		listTemplates: () =>
+			this.subagentTemplates
+				.list()
+				.filter((t) => t.enabled)
+				.map((t) => ({ name: t.name, description: t.description })),
+		isTemplateUsable: (name) => {
+			const t = this.subagentTemplates.get(name);
+			return !!t && t.enabled;
+		},
+	};
 	private widgetsTimer: ReturnType<typeof setInterval> | null = null;
 	/** Model-stall watchdog interval (see startStallTimer). */
 	private stallTimer: ReturnType<typeof setInterval> | null = null;
@@ -811,30 +942,37 @@ export class ClientSession {
 	private gitDirtyTimer: ReturnType<typeof setTimeout> | null = null;
 	private watchTimer: ReturnType<typeof setTimeout> | null = null;
 
+	/** 子代理模板库（全局共享，<dataDir>/subagent-templates.json）。 */
+	private readonly subagentTemplates: SubagentTemplatesStore;
+
 	private constructor(clientId: string, cwd: string, agentDir: string, stateStore: ClientStateStore) {
 		this.clientId = clientId;
 		this.cwd = cwd;
 		this.agentDir = agentDir;
 		this.stateStore = stateStore;
-		this.settingsSvc = new SettingsService({
-			clientId,
-			stateStore,
-			emit: (msg) => this.emit(msg),
-			flushSnapshot: () => this.flushSnapshot(),
-			isDisposed: () => this.disposed,
-			getSession: () => this.session,
-			cwd: () => this.cwd,
-			agentDir: () => this.agentDir,
-			isStreaming: () => this.session.isStreaming,
-			reloadSession: async () => {
-				await this.session.reload();
-				// reload() 会把 custom 工具重新加回活跃集——重放终端开关。
-				this.applyTerminalToolGating(this.session);
-				await this.pushSlashCommands();
+		this.subagentTemplates = new SubagentTemplatesStore(join(stateStore.dataDir, "subagent-templates.json"));
+		this.settingsSvc = new SettingsService(
+			{
+				clientId,
+				stateStore,
+				emit: (msg) => this.emit(msg),
+				flushSnapshot: () => this.flushSnapshot(),
+				isDisposed: () => this.disposed,
+				getSession: () => this.session,
+				cwd: () => this.cwd,
+				agentDir: () => this.agentDir,
+				isStreaming: () => this.session.isStreaming,
+				reloadSession: async () => {
+					await this.session.reload();
+					// reload() 会把 custom 工具重新加回活跃集——重放终端开关。
+					this.applyTerminalToolGating(this.session);
+					await this.pushSlashCommands();
+				},
+				effectiveDefaultSystemPrompt: () => this.effectiveDefaultSystemPrompt(),
+				effectiveSystemPrompt: () => this.effectiveSystemPrompt(),
 			},
-			effectiveDefaultSystemPrompt: () => this.effectiveDefaultSystemPrompt(),
-			effectiveSystemPrompt: () => this.effectiveSystemPrompt(),
-		});
+			this.subagentTemplates,
+		);
 		this.goalSvc = new GoalService({
 			clientId,
 			agentDir,
@@ -907,8 +1045,12 @@ export class ClientSession {
 	 * Factory for cwd-bound runtimes. All conversations share ONE ModelRuntime
 	 * (the model choice is client-wide), so later conversations reuse the
 	 * instance created with the first one.
+	 *
+	 * `apply`（可选）：子代理模板 —— 会话的 system prompt / 技能 / 扩展按模板
+	 * 应用（prompt replace/append + 白名单），其余（终端接管、Windows persona
+	 * 等）仍跟随主会话设置。undefined = 按主会话设置（普通对话/不选模板的子代理）。
 	 */
-	private makeRuntimeFactory(terminals: TerminalManager): CreateAgentSessionRuntimeFactory {
+	private makeRuntimeFactory(terminals: TerminalManager, apply?: SubagentTemplate): CreateAgentSessionRuntimeFactory {
 		return async ({ cwd: effectiveCwd, sessionManager }) => {
 			const services = await createAgentSessionServices({
 				cwd: effectiveCwd,
@@ -917,6 +1059,10 @@ export class ClientSession {
 				// 在每次 resourceLoader.reload() 时重放，且读取 this.settings 的当前
 				// 值——因此 session.reload() 即可让系统提示词 / 技能 / 插件开关生效，
 				// 新对话（新 runtime）也会自动带上当前设置。
+				// 子代理带模板（apply）时：prompt/skills/extensions 改读模板视图——
+				// replace 模式整体替换为模板提示词；append 模式把模板提示词追加到
+				// 末尾（此时主会话的自定义 prompt 不再叠加，角色由模板定义）；非空
+				// 白名单取代主会话开关（只启用这些），空白名单 = 跟随主会话。
 				resourceLoaderOptions: {
 					// 系统提示词：replace 模式整体替换；append 模式追加到提示词末尾。
 					systemPromptOverride: (base?: string) => {
@@ -925,6 +1071,9 @@ export class ClientSession {
 						if (typeof base === "string" && base) {
 							this.lastBaseSystemPrompt = base;
 						}
+						if (apply && apply.promptMode === "replace" && apply.systemPrompt.trim()) {
+							return apply.systemPrompt;
+						}
 						return this.settingsSvc.current.promptMode === "replace" &&
 							this.settingsSvc.current.customSystemPrompt.trim()
 							? this.settingsSvc.current.customSystemPrompt
@@ -932,9 +1081,13 @@ export class ClientSession {
 					},
 					appendSystemPromptOverride: (base: string[]) => {
 						const out = [...base];
-						const custom = this.settingsSvc.current.customSystemPrompt.trim();
-						if (this.settingsSvc.current.promptMode === "append" && custom) {
-							out.push(custom);
+						if (apply && apply.promptMode === "append" && apply.systemPrompt.trim()) {
+							out.push(apply.systemPrompt);
+						} else {
+							const custom = this.settingsSvc.current.customSystemPrompt.trim();
+							if (this.settingsSvc.current.promptMode === "append" && custom) {
+								out.push(custom);
+							}
 						}
 						if (process.platform === "win32") {
 							// Windows 专属 persona：bash 工具跑 Git Bash 且无默认超时、终端
@@ -954,20 +1107,32 @@ export class ClientSession {
 						out.push(PIPELESS_BASH_GUIDANCE);
 						return out;
 					},
-					// 技能开关：禁用的技能从系统提示词和 /skill: 目录中剔除。
-					skillsOverride: (res) => ({
-						...res,
-						skills: res.skills.filter((s) => !this.settingsSvc.current.disabledSkills.includes(s.name)),
-					}),
-					// 插件开关：禁用的扩展整个卸载（工具 / 命令随之消失）。
+					// 技能：模板非空白名单时只启用白名单里的；否则按主会话禁用集过滤。
+					skillsOverride: (res) => {
+						if (apply && apply.enabledSkills.length > 0) {
+							const set = new Set(apply.enabledSkills);
+							return { ...res, skills: res.skills.filter((s) => set.has(s.name)) };
+						}
+						return {
+							...res,
+							skills: res.skills.filter((s) => !this.settingsSvc.current.disabledSkills.includes(s.name)),
+						};
+					},
+					// 插件：模板非空扩展白名单时只加载白名单里的；否则按主会话禁用集过滤。
 					// 注意 SDK 在 extensionsOverride 之后才补 sourceInfo，包扩展此处只能靠路径
-					// 匹配 —— isExtensionDisabled 同时比对 npm:<pkg> 候选键。
-					extensionsOverride: (res) => ({
-						...res,
-						extensions: res.extensions.filter(
-							(e) => !isExtensionDisabled(e, this.settingsSvc.current.disabledExtensions),
-						),
-					}),
+					// 匹配 —— isExtensionDisabled / isExtensionEnabled 同时比对 npm:<pkg> 候选键。
+					extensionsOverride: (res) => {
+						if (apply && apply.enabledExtensions.length > 0) {
+							const set = new Set(apply.enabledExtensions);
+							return { ...res, extensions: res.extensions.filter((e) => isExtensionEnabled(e, [...set])) };
+						}
+						return {
+							...res,
+							extensions: res.extensions.filter(
+								(e) => !isExtensionDisabled(e, this.settingsSvc.current.disabledExtensions),
+							),
+						};
+					},
 				},
 			});
 			const created = await createAgentSessionFromServices({
@@ -994,6 +1159,9 @@ export class ClientSession {
 					// 插件注册的 AI 工具（创建时刻的实时快照；后续注册经
 					// refreshPluginTools 动态补入已有会话）。
 					...(this.pluginToolsProvider?.() ?? []).map(pluginToolToDefinition),
+					// 第一方子代理工具（spawn/get_result/steer/list/stop）。子代理会话
+					// 也注册了它们，因此可自然嵌套派发。
+					...makeSubagentTools(this.subagentHost),
 				],
 			});
 			// 终端工具开关从创建起就生效（工具始终注册进注册表，只调活跃集）。
@@ -1022,6 +1190,7 @@ export class ClientSession {
 		return {
 			id,
 			title: conversationTitle(runtime.session),
+			isSubagent: false,
 			runtime,
 			session: runtime.session,
 			cwd: runtime.cwd,
@@ -2147,6 +2316,16 @@ export class ClientSession {
 		return this.settingsSvc.deletePreset(name);
 	}
 
+	/** Upsert 一个子代理模板（全局共享）。 */
+	async saveSubagentTemplate(template: UiSubagentTemplate): Promise<void> {
+		return this.settingsSvc.saveTemplate(template);
+	}
+
+	/** 删除一个子代理模板。 */
+	async deleteSubagentTemplate(name: string): Promise<void> {
+		return this.settingsSvc.deleteTemplate(name);
+	}
+
 	/** Make settings effective in the running runtime（流式中则延迟到 agent_end）。 */
 	private async applyRuntimeSettings(): Promise<void> {
 		return this.settingsSvc.applyRuntime();
@@ -2800,6 +2979,7 @@ export class ClientSession {
 				cwd: conv.cwd,
 				messageCount,
 				isStreaming,
+				isSubagent: !!conv.isSubagent,
 			});
 		}
 		this.emit({

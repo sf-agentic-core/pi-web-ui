@@ -492,6 +492,11 @@ export type ClientMessage =
 	| { type: "plugins_reload" }
 	/** Save the CURRENT settings as a named preset (overwrites if it exists). */
 	| { type: "save_preset"; name: string }
+	/** Upsert 一个子代理模板（同名覆盖；全局共享，所有客户端一致）。停用标记
+	 *  enabled 一起保存 —— 关闭的模板设置面板可见、可重开，但 AI 工具查询不到。 */
+	| { type: "save_subagent_template"; template: UiSubagentTemplate }
+	/** 删除一个子代理模板。 */
+	| { type: "delete_subagent_template"; name: string }
 	/** Save a UI plugin's declarative settings (manifest "settings" schema).
 	 *  The host validates against the schema, persists to storage.json and
 	 *  notifies the plugin (host.onSettingsChanged). */
@@ -818,6 +823,8 @@ export interface ConversationSummary {
 	cwd: string;
 	messageCount: number;
 	isStreaming: boolean;
+	/** 这是子代理对话（左栏带「子代理」徽标；可点开查看/补充/中止）。 */
+	isSubagent: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -856,6 +863,26 @@ export interface UiSettingsPreset {
 	/** Extra instructions and skill toggles for the isolated goal-reviewer. */
 	reviewPrompt: string;
 	reviewDisabledSkills: string[];
+}
+
+/** 一个子代理模板（设置面板「子代理模板」区的 CRUD 实体，也是 AI 派生子代理
+ *  时可选的预设）：角色系统提示词（replace/append）+ 技能/扩展白名单。白名单
+ *  空 = 该维度跟随主会话设置。`enabled: false` 的模板停用 —— 设置面板仍可见
+ *  可重新启用，但不出现在 AI 工具（subagent_templates / subagent_spawn）里。 */
+export interface UiSubagentTemplate {
+	/** 唯一标识（AI 在 subagent_spawn 的 template 参数里传这个名字）。 */
+	name: string;
+	/** 给 AI / 设置面板看的简介（选模板时判断适用场景）。 */
+	description: string;
+	promptMode: "append" | "replace";
+	/** 模板系统提示词（replace 模式必填；append 模式可空 = 只用白名单限定）。 */
+	systemPrompt: string;
+	/** 技能白名单：非空 → 子代理只启用这些；空 → 跟随主会话技能开关。 */
+	enabledSkills: string[];
+	/** 扩展白名单（npm:<pkg> / 入口路径）：非空 → 只加载这些；空 → 跟随主会话。 */
+	enabledExtensions: string[];
+	/** false = 停用（对 AI 不可见）。 */
+	enabled: boolean;
 }
 
 /** One vision-capable model the vision bridge can use (picker option). */
@@ -917,6 +944,11 @@ export interface UiSettingsState {
 	reviewSkills: UiSkillInfo[];
 	extensions: UiExtensionInfo[];
 	presets: UiSettingsPreset[];
+	/** 子代理模板（含停用的；面板据此渲染开关，AI 只在 enabled 的里选）。 */
+	subagentTemplates: UiSubagentTemplate[];
+	/** 内置默认模板名（settings_state 里供面板标「默认」徽标；用户文件为准时可能
+	 *  已删除/改名，长度可与 subagentTemplates 不同）。 */
+	subagentDefaultTemplates: string[];
 }
 export type ServerMessage =
 	| {

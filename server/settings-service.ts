@@ -12,6 +12,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage, UiExtensionInfo, UiSettingsState, UiSkillInfo, UiVisionBridgeModel } from "./protocol.js";
 import { extensionKey, type ClientStateStore, type ClientSettings, type PromptMode } from "./client-state.js";
 import { findVisionModels, SYSTEM_PROMPT } from "./vision-bridge.js";
+import { DEFAULT_TEMPLATES, type SubagentTemplatesStore } from "./subagent-templates.js";
 
 /** ClientSession 提供给本服务的宿主能力（窄接口，便于独立测试）。 */
 export interface SettingsHost {
@@ -42,7 +43,11 @@ export class SettingsService {
 	/** 流式中改了需要 reload 的设置 → agent_end 后延迟应用（防拆毁运行中 run）。 */
 	private pendingReload = false;
 
-	constructor(private readonly host: SettingsHost) {
+	constructor(
+		private readonly host: SettingsHost,
+		/** 全局子代理模板库（所有客户端共享；模板改动无需 reload runtime）。 */
+		private readonly templates: SubagentTemplatesStore,
+	) {
 		this.settings = host.stateStore.getSettings(host.clientId);
 		this.presets = host.stateStore.getPresets(host.clientId);
 	}
@@ -224,6 +229,8 @@ export class SettingsService {
 				reviewSkills,
 				extensions,
 				presets: this.presets.map((p) => ({ ...p })),
+				subagentTemplates: this.templates.list(),
+				subagentDefaultTemplates: DEFAULT_TEMPLATES.map((t) => t.name),
 			} satisfies UiSettingsState,
 		});
 	}
@@ -393,6 +400,41 @@ export class SettingsService {
 		this.presets = this.presets.filter((p) => p.name !== name);
 		this.host.stateStore.savePresets(this.host.clientId, this.presets);
 		this.push();
+	}
+
+	/** Upsert 一个子代理模板（全局共享）。模板只影响未来派生的子代理，
+	 *  不需要 reload runtime —— 直接推送新设置状态即可。 */
+	async saveTemplate(template: Parameters<SubagentTemplatesStore["upsert"]>[0]): Promise<void> {
+		const err = this.templates.upsert(template);
+		if (err) {
+			this.host.emit({
+				type: "notice",
+				level: "error",
+				text: `子代理模板保存失败：${err}`,
+				textEn: `Failed to save subagent template: ${err}`,
+			});
+			return;
+		}
+		this.push();
+		const n = (template as { name?: string })?.name?.trim() ?? "";
+		this.host.emit({
+			type: "notice",
+			level: "info",
+			text: `子代理模板已保存：${n}`,
+			textEn: `Subagent template saved: ${n}`,
+		});
+	}
+
+	/** 删除一个子代理模板。 */
+	async deleteTemplate(name: string): Promise<void> {
+		this.templates.remove(name);
+		this.push();
+		this.host.emit({
+			type: "notice",
+			level: "info",
+			text: `子代理模板已删除：${name}`,
+			textEn: `Subagent template deleted: ${name}`,
+		});
 	}
 
 	/**

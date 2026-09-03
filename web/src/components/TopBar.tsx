@@ -22,6 +22,7 @@ import { buildUpdateCommand } from "../update-command";
 import { randomUuid } from "../uuid";
 import { Dropdown, DropdownItem } from "./Dropdown";
 import { SoundSettingsPanel } from "./SoundSettings";
+import { NotifyToggle } from "./NotifyToggle";
 import type { SoundKind, SoundSettings } from "../sounds";
 import { useI18n, type Locale } from "../i18n";
 
@@ -397,6 +398,7 @@ export function TopBar({
 						onOpenChange={setSoundOpen}
 					>
 						<SoundSettingsPanel settings={sound} onChange={onSoundChange} onPreview={onSoundPreview} />
+						<NotifyToggle />
 					</Dropdown>
 
 					<Dropdown
@@ -558,6 +560,7 @@ export function TopBar({
 							{chat.bgServers.length > 0 && <em className="bg-task-badge">{chat.bgServers.length}</em>}
 						</DropdownItem>
 						<SoundSettingsPanel settings={sound} onChange={onSoundChange} onPreview={onSoundPreview} />
+						<NotifyToggle />
 						<div className="dd-header">{t("language")}</div>
 						{LANGUAGES.map((l) => (
 							<DropdownItem key={l.value} active={locale === l.value} onClick={() => setLocale(l.value)}>

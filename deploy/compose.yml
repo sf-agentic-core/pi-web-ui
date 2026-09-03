@@ -85,7 +85,6 @@ services:
       - /opt/tachikoma/repos/core/core-agent-library/config/models.json:/home/node/.pi/agent/models.json:ro
       - /opt/tachikoma/repos/core/core-agent-library/mcp-global.json:/home/node/.pi/agent/mcp.json:ro
       - /opt/tachikoma/repos/core/core-agent-library/config/web-search.json:/home/node/.pi/agent/web-search.json:ro
-      - /opt/tachikoma/state/agent/auth.json:/home/node/.pi/agent/auth.json:ro
 
 volumes:
   ts-state:

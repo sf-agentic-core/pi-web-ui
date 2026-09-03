@@ -49,6 +49,9 @@ services:
     depends_on:
       tailscale:
         condition: service_healthy
+    # Mismas credenciales/secretos que el contenedor Discord (GITHUB_TOKEN, API keys, etc.)
+    env_file:
+      - /opt/tachikoma/.env
     environment:
       PI_WEB_PORT: "8787"
       PI_WEB_HOST: "0.0.0.0"

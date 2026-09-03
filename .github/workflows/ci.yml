@@ -21,6 +21,10 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # Auditoría de dependencias (bloquea dependencias con CVEs de severidad alta o crítica)
+      - name: Security audit dependencies
+        run: npm audit --audit-level=high
+
       # 代码格式（prettier；失败先修格式：npm run format）
       - name: Check formatting
         run: npm run format:check

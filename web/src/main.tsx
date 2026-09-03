@@ -21,3 +21,14 @@ createRoot(document.getElementById("root")!).render(
 		</LanguageProvider>
 	</StrictMode>,
 );
+
+// PWA: register the service worker only in production builds so the Vite dev
+// server (live reload / HMR) is never intercepted or cached.
+if (import.meta.env.PROD && "serviceWorker" in navigator) {
+	// Register after load so it never blocks first paint.
+	window.addEventListener("load", () => {
+		navigator.serviceWorker.register("/sw.js", { scope: "/" }).catch((err) => {
+			console.warn("Service worker registration failed:", err);
+		});
+	});
+}

@@ -8,6 +8,14 @@ import { recordModelUsage } from "../model-usage";
 import { ModelThinking } from "./ModelThinking";
 import { useTemplates } from "./PromptTemplates";
 
+/** True on touch-first devices (phones / coarse-pointer). These have no
+ *  physical Shift key, so pressing the keyboard Return must insert a newline
+ *  instead of sending — sending is done with the on-screen send button. */
+const IS_TOUCH =
+	typeof window !== "undefined" &&
+	typeof window.matchMedia === "function" &&
+	window.matchMedia("(pointer: coarse)").matches;
+
 /** Props are deliberately NARROW (no whole-ChatState object): every field is
  *  stable while tokens stream in (the messages ARRAY reference is kept stable
  *  by the server when the persisted set is unchanged), so the shallow-compared
@@ -352,9 +360,19 @@ export const ChatInput = memo(function ChatInput({
 					return;
 			}
 		}
-		if (e.key === "Enter" && !e.shiftKey) {
-			e.preventDefault();
-			submit();
+		// Enter semantics: on desktop (fine pointer) Enter sends and Shift+Enter
+		// inserts a newline. On touch devices Enter must insert a newline instead
+		// (no physical Shift); the user sends with the on-screen button or an
+		// explicit Ctrl/Cmd+Enter.
+		if (e.key === "Enter") {
+			if (IS_TOUCH) {
+				// Plain Return → default textarea behavior (insert a line break).
+				if (!e.shiftKey && !(e.ctrlKey || e.metaKey)) return;
+			}
+			if (!e.shiftKey) {
+				e.preventDefault();
+				submit();
+			}
 		}
 	};
 

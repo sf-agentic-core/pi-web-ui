@@ -1,8 +1,6 @@
 import { useEffect, useRef } from "react";
-import {
-	makePluginContext,
-	type LoadedPluginView,
-} from "../plugin-loader";
+import { makePluginContext, type LoadedPluginView } from "../plugin-loader";
+import { useT } from "../i18n";
 
 interface PluginViewProps {
 	entry: LoadedPluginView;
@@ -16,6 +14,7 @@ interface PluginViewProps {
  */
 export function PluginView({ entry, send }: PluginViewProps) {
 	const ref = useRef<HTMLDivElement>(null);
+	const t = useT();
 	useEffect(() => {
 		const el = ref.current;
 		if (!el) return;
@@ -27,7 +26,7 @@ export function PluginView({ entry, send }: PluginViewProps) {
 			);
 		} catch (err) {
 			console.error(`[plugin:${entry.info.id}] mount failed:`, err);
-			el.textContent = `插件 ${entry.info.name} 挂载失败`;
+			el.textContent = t("pluginMountFailed", { name: entry.info.name });
 		}
 		return () => {
 			if (typeof cleanup === "function") {

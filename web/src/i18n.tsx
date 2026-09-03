@@ -1,12 +1,4 @@
-import {
-	createContext,
-	useCallback,
-	useContext,
-	useEffect,
-	useMemo,
-	useState,
-	type ReactNode,
-} from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
 export type Locale = "zh" | "en";
 
@@ -81,8 +73,7 @@ const zh = {
 	enterPath: "输入路径，Enter 切换",
 	cwdTip: "工作目录：{path}（点击切换）",
 	cacheHit: "缓存命中",
-	cacheHitTip:
-		"缓存读取 {read} · 缓存写入 {write} · 未命中 {miss}（共 {input} 输入 token）",
+	cacheHitTip: "缓存读取 {read} · 缓存写入 {write} · 未命中 {miss}（共 {input} 输入 token）",
 	tps: "t/s",
 	rateTip: "实时生成速率（估算）",
 
@@ -150,7 +141,8 @@ const zh = {
 	runningConversations: "运行的对话",
 	historySessions: "历史对话",
 	openHistory: "历史对话",
-	openFiles: "文件列表",	streaming: "进行中…",
+	openFiles: "文件列表",
+	streaming: "进行中…",
 	noHistory: "还没有历史对话",
 	current: "当前",
 	messageCount: "{n} 条消息",
@@ -159,12 +151,15 @@ const zh = {
 	deleteProjectConfirm: "确认移出",
 	deleteSession: "删除该对话记录（不可恢复）",
 	deleteSessionConfirm: "确认删除",
+	dismissConversation: "从运行列表移出（历史记录保留）",
+	dismissConversationConfirm: "确认移出",
+	collapseSection: "折叠",
+	expandSection: "展开",
 	emptyChat: "空对话",
 
 	/* message edit */
 	editReask: "编辑重问",
-	editReaskTip:
-		"修改此问题，并从这里重新提问（会新建一个分支对话，原对话保留）",
+	editReaskTip: "修改此问题，并从这里重新提问（会新建一个分支对话，原对话保留）",
 	reaskFromHere: "从此处重新提问",
 	editPlaceholder: "修改问题内容…",
 	editHint: "⌘/Ctrl+Enter 提交 · Esc 取消",
@@ -186,8 +181,7 @@ const zh = {
 	checkUpdate: "检查更新",
 	upToDate: "已是最新版本",
 	updateAvailable: "发现新版本 v{version}",
-	updateJustPublished:
-		"v{version} 刚刚发布，npm 缓存可能尚未同步——若未检测到新版本，请稍后重新检查",
+	updateJustPublished: "v{version} 刚刚发布，npm 缓存可能尚未同步——若未检测到新版本，请稍后重新检查",
 	updateNow: "在终端中更新",
 	updateTabTitle: "更新 pi-web-ui",
 	updateTerminalHint:
@@ -215,6 +209,9 @@ const zh = {
 	previewFile: "预览",
 	downloadFile: "下载文件",
 	downloadFailed: "下载失败：{error}",
+	fileNotFoundShort: "文件不存在",
+	pluginMountFailed: "插件 {name} 挂载失败",
+	liveOutputOmitted: "…[前 {n} 字符已省略]…\n",
 	uploadToFolder: "上传文件到此文件夹",
 	uploadToCurrentDir: "上传文件到当前目录",
 	protocolMismatch: "页面版本与服务器不一致（应用刚更新过），请刷新页面以恢复全部功能。",
@@ -286,10 +283,8 @@ const zh = {
 	installFailed: "✖ pi agent 安装失败：",
 	retryInstall: "重试安装",
 	skip: "跳过",
-	installDone:
-		"✅ pi agent CLI 已安装。选择服务商并填入 API 密钥即可开始对话：",
-	cliReadyHint:
-		"✅ 本地已检测到 pi agent，选择服务商并填入 API 密钥即可开始对话：",
+	installDone: "✅ pi agent CLI 已安装。选择服务商并填入 API 密钥即可开始对话：",
+	cliReadyHint: "✅ 本地已检测到 pi agent，选择服务商并填入 API 密钥即可开始对话：",
 	provider: "服务商",
 	configured: "已配置",
 	providerKeyReady: "该服务商已配置密钥，可直接使用或更换新密钥。",
@@ -554,7 +549,7 @@ const zh = {
 	scmPull: "拉取",
 	scmPullTip: "在终端中执行 git pull",
 	scmCommit: "提交",
-	scmCommitTip: "在终端中执行 git add -A && git commit -m \"…\"（提交全部更改，含未跟踪）",
+	scmCommitTip: '在终端中执行 git add -A && git commit -m "…"（提交全部更改，含未跟踪）',
 	scmCommitPlaceholder: "输入提交信息…",
 	scmChanges: "更改",
 	scmHistory: "提交树",
@@ -574,6 +569,8 @@ const zh = {
 	scmUntracked: "未跟踪",
 	scmUntrackedNote: "未跟踪文件：差异不显示，提交时会一并包含",
 	scmQueryFailed: "Git 查询失败：{error}",
+	scmQueryFailedShort: "查询失败",
+	pluginCommandFallback: "插件命令",
 	scmTooManyFailures: "Git 查询连续失败，请点击刷新重试",
 	scmRunsInTerminal: "提交 / 切换分支 / 推送 / 拉取在终端中执行",
 	scmViewTerminal: "去终端",
@@ -598,13 +595,28 @@ const zh = {
 	addKey: "添加密钥",
 	addKeyPlaceholder: "粘贴密钥值…",
 	keyNamePh: "名称（可留空，如 备用）",
+	providerIdPlaceholder: "供应商 ID",
+	baseUrlExamplePh: "baseUrl 链接，如 https://api.opencode.ai/zen/v1 或 http://127.0.0.1:4096",
+	saveAllBatch: "一键保存全部（{n}）",
+	netDisconnected: "网络连接已断开，请重连后重试",
+	advancedEdit: "高级编辑",
+	batchCreateProviders: "批量创建供应商（{n}个接口）",
+	secondKeyTitle: "为 {api} · {baseUrl} · {n} 个模型添加第二把密钥，只需指定新供应商名字和密钥即可。",
+	noBaseUrlShort: "(无 baseUrl)",
+	providerNameLabel: "供应商名字",
+	providerNameHint: "（新 ID，如 opencode-2）",
+	apiKeyLabel: "API 密钥",
+	secondKeyPlaceholder: "sk-… 第二把 key",
+	batchDesc:
+		"该供应商含多种接口（{apis}），已按接口拆分为 {n} 个自定义供应商，分别保存后才能让所有模型（如 muse-spark）都可用。统一填入第二把 API 密钥后一键保存。",
+	batchKeyLabel: "统一 API 密钥（将应用到全部 {n} 个供应商）",
+	modelsCountShort: "{n} 个模型：",
 	noKeyYet: "尚无密钥，添加一把即可用",
 	activateKey: "设为当前",
 	removeKey: "移除",
 	removeKeyConfirm: "确定移除该密钥？移除后需重新配置才能使用。",
 	customProviders: "自定义服务商",
-	customDesc:
-		"用于 Ollama / vLLM / 兼容 OpenAI 的代理等，写入 pi 的 models.json，保存后热重载、立即生效。",
+	customDesc: "用于 Ollama / vLLM / 兼容 OpenAI 的代理等，写入 pi 的 models.json，保存后热重载、立即生效。",
 	noCustomProviders: "还没有自定义服务商",
 	modelsCount: "{n} 个模型",
 	addProvider: "新增服务商",
@@ -661,13 +673,15 @@ const zh = {
 	/* settings modal */
 	settings: "设置",
 	settingsTitle: "设置",
-	settingsDesc: "修改立即生效：系统提示词、技能与插件开关会重建当前会话；审查提示词与审查技能只影响后续目标审查（回复进行中则主会话变更自动延迟）。",
+	settingsDesc:
+		"修改立即生效：系统提示词、技能与插件开关会重建当前会话；审查提示词与审查技能只影响后续目标审查（回复进行中则主会话变更自动延迟）。",
 	settingsSystemPrompt: "系统提示词",
 	settingsPromptMode: "模式",
 	promptModeAppend: "追加",
 	promptModeReplace: "替换",
 	promptAppendHint: "追加模式：自定义内容拼接到默认系统提示词末尾（推荐，保留默认行为约束）。",
-	promptReplaceHint: "替换模式：完全用自定义内容替换系统提示词（项目上下文与技能段仍会自动附加）。切换后输入框会显示原本的默认提示词，可直接修改；不改动失焦则仍使用默认。",
+	promptReplaceHint:
+		"替换模式：完全用自定义内容替换系统提示词（项目上下文与技能段仍会自动附加）。切换后输入框会显示原本的默认提示词，可直接修改；不改动失焦则仍使用默认。",
 	promptPlaceholder: "输入自定义系统提示词…（失焦后自动应用）",
 	settingsViewPrompt: "查看当前完整提示词",
 	settingsViewPromptHint:
@@ -675,22 +689,18 @@ const zh = {
 	settingsViewPromptEmpty: "会话尚未就绪，暂无系统提示词。",
 	settingsSkills: "技能",
 	settingsReview: "目标审查",
-	settingsReviewDesc:
-		"为独立的目标审查会话配置额外提示词和技能；不会改变主会话设置。",
+	settingsReviewDesc: "为独立的目标审查会话配置额外提示词和技能；不会改变主会话设置。",
 	settingsReviewSkills: "审查可用技能",
 	reviewPromptPlaceholder: "输入审查自定义提示词…（失焦后自动应用）",
-	reviewPromptHint:
-		"这些内容会追加到审查任务中；审查仍会强制要求输出 pass/fail JSON。技能开关仅对审查生效。",
+	reviewPromptHint: "这些内容会追加到审查任务中；审查仍会强制要求输出 pass/fail JSON。技能开关仅对审查生效。",
 	settingsVisionBridge: "视觉桥",
-	settingsVisionBridgeDesc:
-		"当前模型不支持识图时，把图片交给已配置的视觉模型转写为文字证据，再让模型回答",
+	settingsVisionBridgeDesc: "当前模型不支持识图时，把图片交给已配置的视觉模型转写为文字证据，再让模型回答",
 	visionBridgeEnabled: "启用视觉桥",
 	visionBridgeModel: "转写模型",
 	visionBridgeAuto: "自动选择（按顺序）",
 	visionBridgeNoModels:
 		"未找到已配置的视觉模型：在模型配置里添加任意支持图片的模型（如 qwen-vl、GLM-4V、Gemini）即可自动启用",
-	visionBridgeOffHint:
-		"已关闭：图片将原样发送，纯文本模型可能看不到图片内容",
+	visionBridgeOffHint: "已关闭：图片将原样发送，纯文本模型可能看不到图片内容",
 	visionBridgeCurrent: "当前转写模型：{model}",
 	visionBridgePromptMode: "转写提示词",
 	settingsTerminalTools: "终端工具",
@@ -703,18 +713,15 @@ const zh = {
 	thinkingWrapDesc:
 		"开启：思考内容始终完整展开并自动换行（流式推理过程也实时可见）；关闭：折叠成一行摘要，流式中一行实时显示最新文本",
 	toolsWrap: "完整显示工具",
-	toolsWrapDesc:
-		"开启：工具调用始终完整展开显示参数和输出；关闭：默认折叠，点击展开",
+	toolsWrapDesc: "开启：工具调用始终完整展开显示参数和输出；关闭：默认折叠，点击展开",
 	terminalBashTakeover: "终端接管 bash",
 	terminalBashTakeoverDesc:
 		"此开关决定 bash 是否覆盖为终端版：关 = 原生 SDK bash（纯进程、不开终端）；开 = 跑进可见终端，且 persist 参数在本开关的基础上决定一次性（false，命令跑完进程退出、输出留档）还是持久（true，shell 状态跨调用保留、静默自动转后台并通知 AI）",
 	terminalBashIdleMs: "静默转后台阈值（毫秒）",
 	terminalBashIdleMsDesc:
 		"持久终端模式下，命令连续无输出达到该时长即不再阻塞等待，转入后台继续运行并通知 AI；0 = 一直等到命令结束（默认 15000）",
-	visionBridgePromptPlaceholder:
-		"输入自定义转写提示词…（留空 = 使用内置默认提示词，失焦后自动应用）",
-	visionBridgePromptAppendHint:
-		"追加模式：自定义内容拼接到内置转写提示词末尾（推荐，保留默认的逐字转写约束）。",
+	visionBridgePromptPlaceholder: "输入自定义转写提示词…（留空 = 使用内置默认提示词，失焦后自动应用）",
+	visionBridgePromptAppendHint: "追加模式：自定义内容拼接到内置转写提示词末尾（推荐，保留默认的逐字转写约束）。",
 	visionBridgePromptReplaceHint:
 		"替换模式：完全用自定义内容替换内置转写提示词。切换后输入框会显示内置默认提示词，可直接修改；不改动失焦则仍使用默认。",
 	uninstallExt: "卸载",
@@ -723,15 +730,14 @@ const zh = {
 	uninstallHint: "通过可见终端执行 pi remove 卸载此包，完成后自动刷新列表",
 	uninstallTitle: "卸载",
 	pluginUpdate: "更新",
-	pluginUpdateHint:
-		"从安装来源重新拉取并覆盖安装（保留 config.json 配置），完成后自动重载插件列表",
-	pluginUninstallHint:
-		"在可见终端执行 pi-web-ui uninstall 卸载此插件（再次点击确认），完成后自动刷新列表",
+	pluginUpdateHint: "从安装来源重新拉取并覆盖安装（保留 config.json 配置），完成后自动重载插件列表",
+	pluginUninstallHint: "在可见终端执行 pi-web-ui uninstall 卸载此插件（再次点击确认），完成后自动刷新列表",
 	settingsExtensions: "插件",
 	settingsUiPlugins: "界面插件",
 	noUiPlugins: "未安装界面组件（<dataDir>/plugins/）",
 	dshPatches: "DSH 用户补丁",
-	dshPatchesDesc: "启动时按文件名序加载的 Cordis patch（<dataDir>/dsh-patches/*.yml）。新增/修改后点「重扫」重启运行时生效；失败的文件会被跳过并打印到运行时 stderr。",
+	dshPatchesDesc:
+		"启动时按文件名序加载的 Cordis patch（<dataDir>/dsh-patches/*.yml）。新增/修改后点「重扫」重启运行时生效；失败的文件会被跳过并打印到运行时 stderr。",
 	dshPatchesRescan: "重扫",
 	dshPatchesRescanHint: "重新扫描补丁目录并重启 DSH 运行时使新补丁生效",
 	dshPatchesEmpty: "未放置补丁文件",
@@ -811,8 +817,7 @@ const en: Record<keyof typeof zh, string> = {
 	"thinking.high": "High",
 	"thinking.xhigh": "Extra high",
 	"thinking.max": "Max",
-	thinkingUnsupported:
-		"Not supported by this model — snapped to the nearest supported level",
+	thinkingUnsupported: "Not supported by this model — snapped to the nearest supported level",
 
 	/* footerbar */
 	context: "Context",
@@ -827,8 +832,7 @@ const en: Record<keyof typeof zh, string> = {
 	enterPath: "Type a path, Enter to switch",
 	cwdTip: "Working directory: {path} (click to switch)",
 	cacheHit: "Cache hit",
-	cacheHitTip:
-		"read {read} · write {write} · miss {miss} (of {input} input tokens)",
+	cacheHitTip: "read {read} · write {write} · miss {miss} (of {input} input tokens)",
 	tps: "t/s",
 	rateTip: "Live generation rate (estimated)",
 
@@ -843,7 +847,8 @@ const en: Record<keyof typeof zh, string> = {
 	attachHint: "Will be sent with the next message",
 	uploadFile: "Add files (images / text / any file — or drag in / paste a screenshot)",
 	dropHereToAttach: "Release to attach file",
-	imageNotSupported: "The current model doesn't support vision — images will be transcribed by the vision bridge (may be ignored if no vision model is configured)",
+	imageNotSupported:
+		"The current model doesn't support vision — images will be transcribed by the vision bridge (may be ignored if no vision model is configured)",
 	imageLoadFailed: "Couldn't read image: {name}",
 	fileLoadFailed: "Couldn't read file: {name}",
 	fileTooLarge: "File too large, skipped (> {size}MB): {name}",
@@ -854,7 +859,8 @@ const en: Record<keyof typeof zh, string> = {
 	stopAgent: "Stop agent",
 	stop: "Stop",
 	bgTasks: "Background tasks",
-	bgTasksTip: "Servers the AI started in the background (npm run dev & etc.) — stop them individually or all at once; they survive the conversation",
+	bgTasksTip:
+		"Servers the AI started in the background (npm run dev & etc.) — stop them individually or all at once; they survive the conversation",
 	bgTasksEmpty: "No background tasks",
 	bgTasksDesc: "Processes the AI started that are still listening (detected by port)",
 	bgTaskPort: "Port",
@@ -896,7 +902,8 @@ const en: Record<keyof typeof zh, string> = {
 	runningConversations: "Running chats",
 	historySessions: "History",
 	openHistory: "History",
-	openFiles: "Files",	streaming: "Streaming…",
+	openFiles: "Files",
+	streaming: "Streaming…",
 	noHistory: "No previous chats",
 	current: "Current",
 	messageCount: "{n} messages",
@@ -905,17 +912,19 @@ const en: Record<keyof typeof zh, string> = {
 	deleteProjectConfirm: "Confirm remove",
 	deleteSession: "Delete this chat transcript permanently",
 	deleteSessionConfirm: "Confirm delete",
+	dismissConversation: "Dismiss from running (keep in history)",
+	dismissConversationConfirm: "Confirm dismiss",
+	collapseSection: "Collapse",
+	expandSection: "Expand",
 	emptyChat: "Empty chat",
 
 	/* message edit */
 	editReask: "Edit & re-ask",
-	editReaskTip:
-		"Edit this question and re-ask from here (forks a new conversation; the original is kept)",
+	editReaskTip: "Edit this question and re-ask from here (forks a new conversation; the original is kept)",
 	reaskFromHere: "Re-ask from here",
 	editPlaceholder: "Edit the question…",
 	editHint: "⌘/Ctrl+Enter to submit · Esc to cancel",
-	editAttachmentHint:
-		"Original attachments kept — paste/drop images or files · ⌘/Ctrl+Enter to submit · Esc to cancel",
+	editAttachmentHint: "Original attachments kept — paste/drop images or files · ⌘/Ctrl+Enter to submit · Esc to cancel",
 
 	/* collapsed old messages */
 	expandMsg: "Expand",
@@ -962,6 +971,9 @@ const en: Record<keyof typeof zh, string> = {
 	previewFile: "Preview",
 	downloadFile: "Download file",
 	downloadFailed: "Download failed: {error}",
+	fileNotFoundShort: "File not found",
+	pluginMountFailed: "Plugin {name} failed to mount",
+	liveOutputOmitted: "…[{n} chars omitted above]…\n",
 	uploadToFolder: "Upload files to this folder",
 	uploadToCurrentDir: "Upload files to current directory",
 	protocolMismatch:
@@ -981,8 +993,7 @@ const en: Record<keyof typeof zh, string> = {
 	previewLinesTruncated: "… too many lines — showing the first {n}",
 	binaryFile: "🔣 Binary file — first 4KB shown as hex",
 	binaryHexTruncated: " (file larger — download for the full file)",
-	previewNotSupported:
-		"This file type can't be previewed (only images / videos / text)",
+	previewNotSupported: "This file type can't be previewed (only images / videos / text)",
 	emptyFile: "(empty file)",
 	editFile: "Edit file",
 	exitEditFile: "Exit editing",
@@ -1007,10 +1018,12 @@ const en: Record<keyof typeof zh, string> = {
 	questionTimeoutExpired: "Question timed out, resuming conversation…",
 	modelNoVision: "Current model {name} doesn't support images — switch to DeepSeek V4 Flash Vision (exp)",
 	dshSkillsNote: "DSH uses runtime-built-in skills (dsh-skill); toggling is not supported in settings yet",
-	dshExtensionsNote: "DSH has no pi extension system; capabilities are runtime-built-in (MCP/subagent/goal/plan/skill…)",
+	dshExtensionsNote:
+		"DSH has no pi extension system; capabilities are runtime-built-in (MCP/subagent/goal/plan/skill…)",
 	dshReviewPromptNote: "DSH has no separate reviewer: this text is appended to the system prompt for goal rounds",
 	dshVisionHiddenNote: "DSH supports real image input (DeepSeek V4 Flash Vision (exp) only) — no vision bridge needed",
-	dshNoReviewModel: "DSH has no separate reviewer model — the model self-certifies goal completion; max rounds = auto-iteration count",
+	dshNoReviewModel:
+		"DSH has no separate reviewer model — the model self-certifies goal completion; max rounds = auto-iteration count",
 	noOptions: "(no options)",
 	inputPlaceholder: "Enter content",
 
@@ -1035,10 +1048,8 @@ const en: Record<keyof typeof zh, string> = {
 	installFailed: "✖ pi agent installation failed:",
 	retryInstall: "Retry install",
 	skip: "Skip",
-	installDone:
-		"✅ pi agent CLI installed. Pick a provider and enter an API key to start chatting:",
-	cliReadyHint:
-		"✅ pi agent CLI already installed locally. Pick a provider and enter an API key to start chatting:",
+	installDone: "✅ pi agent CLI installed. Pick a provider and enter an API key to start chatting:",
+	cliReadyHint: "✅ pi agent CLI already installed locally. Pick a provider and enter an API key to start chatting:",
 	provider: "Provider",
 	configured: "configured",
 	providerKeyReady: "This provider already has a key — use it or replace it.",
@@ -1065,10 +1076,8 @@ const en: Record<keyof typeof zh, string> = {
 	image: "🖼 Image",
 	bridgedVision: "👁 Transcribed",
 	bridgedVisionDetail: "Image transcribed by the vision bridge (current model can't see images)",
-	folderNotExpanded:
-		"Folder — content not expanded, the agent will browse it as needed",
-	fileNotExpanded:
-		"Large file ({size}) — content not expanded, the agent will read it as needed",
+	folderNotExpanded: "Folder — content not expanded, the agent will browse it as needed",
+	fileNotExpanded: "Large file ({size}) — content not expanded, the agent will read it as needed",
 	"role.user": "You",
 	"role.assistant": "pi",
 	"role.tool": "Tool",
@@ -1090,7 +1099,8 @@ const en: Record<keyof typeof zh, string> = {
 	searchGlobal: "Search",
 	searchGlobalTip: "Global search: sessions / projects / files (Ctrl+K)",
 	gsPlaceholder: "Search projects, past conversations, workspace files…",
-	gsHint: "Type to search full conversation text (AI replies included), recent projects and file names in the current workspace at once",
+	gsHint:
+		"Type to search full conversation text (AI replies included), recent projects and file names in the current workspace at once",
 	gsSessions: "Conversations",
 	gsProjects: "Projects",
 	gsFiles: "Files",
@@ -1275,8 +1285,7 @@ const en: Record<keyof typeof zh, string> = {
 	delete: "Delete",
 	confirmQ: "Confirm?",
 	builtinTerminal: "Built-in terminal",
-	termEmptySub:
-		"Click a command on the left to run it, or + on the right for a new terminal",
+	termEmptySub: "Click a command on the left to run it, or + on the right for a new terminal",
 	noTerminal: "No terminals",
 	exited: "(exited{code})",
 	closeTerminal: "Close terminal",
@@ -1306,8 +1315,7 @@ const en: Record<keyof typeof zh, string> = {
 	scmPull: "Pull",
 	scmPullTip: "Runs git pull in the terminal",
 	scmCommit: "Commit",
-	scmCommitTip:
-		"Runs git add -A && git commit -m \"…\" in the terminal (commits all changes incl. untracked)",
+	scmCommitTip: 'Runs git add -A && git commit -m "…" in the terminal (commits all changes incl. untracked)',
 	scmCommitPlaceholder: "Type a commit message…",
 	scmChanges: "Changes",
 	scmHistory: "Commit tree",
@@ -1327,8 +1335,9 @@ const en: Record<keyof typeof zh, string> = {
 	scmUntracked: "Untracked",
 	scmUntrackedNote: "Untracked file — not shown in diff, included on commit",
 	scmQueryFailed: "Git query failed: {error}",
-	scmTooManyFailures:
-		"Git queries keep failing — click refresh to retry",
+	scmQueryFailedShort: "Query failed",
+	pluginCommandFallback: "Plugin command",
+	scmTooManyFailures: "Git queries keep failing — click refresh to retry",
 	scmRunsInTerminal: "Commit / branch switch / push / pull run in the terminal",
 	scmViewTerminal: "Open terminal",
 
@@ -1341,7 +1350,8 @@ const en: Record<keyof typeof zh, string> = {
 	replaceKey: "Replace key",
 	replaceKeyTitle: "Replace the saved key",
 	clearKey: "Clear",
-	clearKeyTitle: "Remove this provider's key stored in auth.json; it returns to unconfigured (env-var sourced keys can't be cleared here)",
+	clearKeyTitle:
+		"Remove this provider's key stored in auth.json; it returns to unconfigured (env-var sourced keys can't be cleared here)",
 	clearKeyConfirm: "Clear the stored key for {id}? Its models will leave the list until you configure it again.",
 	cloneProvider: "Add key",
 	cloning: "Adding",
@@ -1352,6 +1362,22 @@ const en: Record<keyof typeof zh, string> = {
 	addKey: "Add key",
 	addKeyPlaceholder: "Paste the key value…",
 	keyNamePh: "Name (optional, e.g. backup)",
+	providerIdPlaceholder: "Provider ID",
+	baseUrlExamplePh: "baseUrl, e.g. https://api.opencode.ai/zen/v1 or http://127.0.0.1:4096",
+	saveAllBatch: "Save all ({n})",
+	netDisconnected: "Network disconnected — reconnect and retry",
+	advancedEdit: "Advanced edit",
+	batchCreateProviders: "Batch-create providers ({n} APIs)",
+	secondKeyTitle: "Add a second key for {api} · {baseUrl} · {n} models — just name the new provider and enter the key.",
+	noBaseUrlShort: "(no baseUrl)",
+	providerNameLabel: "Provider name",
+	providerNameHint: "(new ID, e.g. opencode-2)",
+	apiKeyLabel: "API key",
+	secondKeyPlaceholder: "sk-… second key",
+	batchDesc:
+		"This provider has multiple APIs ({apis}); it was split into {n} custom providers. Save each so all models (e.g. muse-spark) work. Enter one shared second key to save all at once.",
+	batchKeyLabel: "Shared API key (applies to all {n} providers)",
+	modelsCountShort: "{n} models: ",
 	noKeyYet: "No key yet — add one to use this provider",
 	activateKey: "Set active",
 	removeKey: "Remove",
@@ -1414,13 +1440,16 @@ const en: Record<keyof typeof zh, string> = {
 	/* settings modal */
 	settings: "Settings",
 	settingsTitle: "Settings",
-	settingsDesc: "Changes apply immediately: system prompt, skill and extension toggles rebuild the current session; review instructions and review skills affect later goal reviews (main-session changes are deferred while streaming).",
+	settingsDesc:
+		"Changes apply immediately: system prompt, skill and extension toggles rebuild the current session; review instructions and review skills affect later goal reviews (main-session changes are deferred while streaming).",
 	settingsSystemPrompt: "System prompt",
 	settingsPromptMode: "Mode",
 	promptModeAppend: "Append",
 	promptModeReplace: "Replace",
-	promptAppendHint: "Append mode: your text is appended to the end of the default system prompt (recommended — keeps the default behavior constraints).",
-	promptReplaceHint: "Replace mode: your text fully replaces the system prompt (project context and skills are still appended automatically). After switching, the editor shows the built-in default prompt ready to edit; blurring without changes keeps the default.",
+	promptAppendHint:
+		"Append mode: your text is appended to the end of the default system prompt (recommended — keeps the default behavior constraints).",
+	promptReplaceHint:
+		"Replace mode: your text fully replaces the system prompt (project context and skills are still appended automatically). After switching, the editor shows the built-in default prompt ready to edit; blurring without changes keeps the default.",
 	promptPlaceholder: "Type a custom system prompt… (applied on blur)",
 	settingsViewPrompt: "View the current full prompt",
 	settingsViewPromptHint:
@@ -1442,16 +1471,14 @@ const en: Record<keyof typeof zh, string> = {
 	visionBridgeAuto: "Auto (in order)",
 	visionBridgeNoModels:
 		"No configured vision model found: add any image-capable model (e.g. qwen-vl, GLM-4V, Gemini) in Model config to enable automatically",
-	visionBridgeOffHint:
-		"Disabled: images are sent as-is, a text-only model may not see them",
+	visionBridgeOffHint: "Disabled: images are sent as-is, a text-only model may not see them",
 	visionBridgeCurrent: "Current transcription model: {model}",
 	visionBridgePromptMode: "Transcription prompt",
 	settingsTerminalTools: "Terminal tools",
 	terminalToolsEnabled: "Enable persistent terminal tools",
 	settingsTerminalToolsDesc:
 		"Let the AI use the built-in terminal for interactive programs (REPLs/vim), long-running servers, continuous output watching, or when you ask it to work in the visible terminal; ordinary commands still go through the one-shot bash tool",
-	terminalToolsOffHint:
-		"Disabled: the AI has no terminal_* tools and receives no usage guidance",
+	terminalToolsOffHint: "Disabled: the AI has no terminal_* tools and receives no usage guidance",
 	settingsMessageDisplay: "Message display",
 	thinkingWrap: "Show full thinking",
 	thinkingWrapDesc:
@@ -1465,8 +1492,7 @@ const en: Record<keyof typeof zh, string> = {
 	terminalBashIdleMs: "Silence-to-background threshold (ms)",
 	terminalBashIdleMsDesc:
 		"In persistent-terminal mode, when a command produces no output for this long, stop blocking and let it keep running in the background; the AI is notified when it finishes. 0 = always wait until completion (default 15000)",
-	visionBridgePromptPlaceholder:
-		"Type a custom transcription prompt… (empty = built-in default, applied on blur)",
+	visionBridgePromptPlaceholder: "Type a custom transcription prompt… (empty = built-in default, applied on blur)",
 	visionBridgePromptAppendHint:
 		"Append mode: custom text is appended after the built-in transcription prompt (recommended — keeps the verbatim-transcription contract).",
 	visionBridgePromptReplaceHint:
@@ -1485,7 +1511,8 @@ const en: Record<keyof typeof zh, string> = {
 	settingsUiPlugins: "UI plugins",
 	noUiPlugins: "No UI plugins installed (<dataDir>/plugins/)",
 	dshPatches: "DSH user patches",
-	dshPatchesDesc: "Cordis patches loaded at runtime boot, in filename order (<dataDir>/dsh-patches/*.yml). New/edited files take effect after 'Rescan' restarts the runtime; broken files are skipped and logged to runtime stderr.",
+	dshPatchesDesc:
+		"Cordis patches loaded at runtime boot, in filename order (<dataDir>/dsh-patches/*.yml). New/edited files take effect after 'Rescan' restarts the runtime; broken files are skipped and logged to runtime stderr.",
 	dshPatchesRescan: "Rescan",
 	dshPatchesRescanHint: "Re-scan the patch directory and restart the DSH runtime so new patches take effect",
 	dshPatchesEmpty: "No patch files yet",
@@ -1515,10 +1542,7 @@ const en: Record<keyof typeof zh, string> = {
 /* context + hook                                                      */
 /* ------------------------------------------------------------------ */
 
-export type Translate = (
-	key: keyof typeof zh,
-	vars?: Record<string, string | number>,
-) => string;
+export type Translate = (key: keyof typeof zh, vars?: Record<string, string | number>) => string;
 
 interface I18nContextValue {
 	locale: Locale;
@@ -1568,10 +1592,7 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 		document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
 	}, [locale]);
 
-	const value = useMemo(
-		() => ({ locale, setLocale, t }),
-		[locale, setLocale, t],
-	);
+	const value = useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t]);
 
 	return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

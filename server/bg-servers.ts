@@ -7,22 +7,14 @@
  * （emit 推消息 / flushSnapshot 立即刷快照 / isDisposed 停止后台刷新）。
  */
 import type { ServerMessage, BgServer } from "./protocol.js";
-import {
-	killPidTree,
-	lookupProcessName,
-	lookupProcessCommandLine,
-	snapshotListeningPorts,
-} from "./process-utils.js";
+import { killPidTree, lookupProcessName, lookupProcessCommandLine, snapshotListeningPorts } from "./process-utils.js";
 
 const BG_REFRESH_INTERVAL_MS = 30_000;
 /** bash 结束后等这么久再拍「后」快照——给后台服务绑定端口的时间。 */
 const BG_BIND_WAIT_MS = 1500;
 
 export class BgServerTracker {
-	private readonly servers = new Map<
-		number,
-		{ pid: number; since: number; name?: string; command?: string }
-	>();
+	private readonly servers = new Map<number, { pid: number; since: number; name?: string; command?: string }>();
 	/** bash 工具开始执行前拍的监听端口快照（tool_execution_start 时设置）。 */
 	private listenBefore: Map<number, number> | null = null;
 	private refreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -91,6 +83,7 @@ export class BgServerTracker {
 					type: "notice",
 					level: "info",
 					text: `检测到 AI 启动的后台服务：端口 ${port}（pid ${pid}）——可在顶栏「后台任务」里单独停止或全部关闭`,
+					textEn: `Detected an AI-started background service: port ${port} (pid ${pid}) — stop it individually or all at once under Background tasks in the top bar`,
 				});
 			}
 		}
@@ -125,6 +118,7 @@ export class BgServerTracker {
 		if (this.opts.isDisposed() || this.servers.size === 0) return;
 		const now = await snapshotListeningPorts();
 		let changed = false;
+		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
 		for (const [port, v] of [...this.servers]) {
 			if (now.get(port) !== v.pid) {
 				this.servers.delete(port);
@@ -148,6 +142,7 @@ export class BgServerTracker {
 				type: "notice",
 				level: "info",
 				text: `端口 ${port} 不在后台任务列表中`,
+				textEn: `Port ${port} is not in the background task list`,
 			});
 			this.opts.flushSnapshot();
 			return false;
@@ -159,6 +154,7 @@ export class BgServerTracker {
 			type: "notice",
 			level: "info",
 			text: `已停止后台任务：端口 ${port}（pid ${entry.pid}）`,
+			textEn: `Stopped background task: port ${port} (pid ${entry.pid})`,
 		});
 		this.opts.flushSnapshot();
 		return true;
@@ -168,6 +164,7 @@ export class BgServerTracker {
 	async killAll(): Promise<string[]> {
 		if (this.servers.size === 0) return [];
 		const killed: string[] = [];
+		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
 		for (const [port, { pid }] of [...this.servers]) {
 			killPidTree(pid);
 			killed.push(String(port));

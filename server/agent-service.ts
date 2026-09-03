@@ -11,16 +11,8 @@
  * so reconnects just re-request a snapshot.
  */
 import { spawn, spawnSync } from "node:child_process";
-import {
-	existsSync,
-	readFileSync,
-	rmSync,
-	statSync,
-	writeFileSync,
-	mkdirSync,
-	watch,
-} from "node:fs";
-import { basename, dirname, join, relative, resolve, sep } from "node:path";
+import { existsSync, readFileSync, rmSync, statSync, mkdirSync, watch } from "node:fs";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
 	createAgentSessionFromServices,
@@ -28,18 +20,14 @@ import {
 	createAgentSessionServices,
 	createBashTool,
 	createLocalBashOperations,
-	defineTool,
 	getAgentDir,
-	ModelRuntime,
 	SessionManager,
 	VERSION,
 	type AgentSession,
 	type AgentSessionEvent,
 	type AgentSessionRuntime,
 	type CreateAgentSessionRuntimeFactory,
-	type ExtensionUIContext,
 	type SessionInfo,
-	type Theme,
 	type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -50,7 +38,7 @@ import {
 	compareVersions as compareSemver,
 	type UpdateItem,
 } from "./update-check.js";
-import { hasPendingWaitSubscription, shouldRetainActive } from "./wait-subscription-scan.js";
+import { hasActiveSubagentRun, hasPendingWaitSubscription, shouldRetainActive } from "./wait-subscription-scan.js";
 import type { PluginAgentTool, PluginCommandDef, PluginToolEvent } from "./plugins.js";
 import { syncPluginToolsIntoSession } from "./plugins.js";
 import { SettingsService } from "./settings-service.js";
@@ -58,12 +46,8 @@ import { GoalService } from "./goal-service.js";
 import { SlashCommandsService, parseSlash } from "./slash-commands.js";
 import { ModelAdminService } from "./model-admin.js";
 import { FilesService, workspacePath } from "./files-service.js";
-import {
-	isExtensionDisabled,
-	type PromptMode,
-	ClientStateStore,
-} from "./client-state.js";
-import { saveUpload } from "./uploads.js";
+import { isExtensionDisabled, type PromptMode, ClientStateStore } from "./client-state.js";
+
 import {
 	applyHeadTail,
 	makePersistentTerminalTools,
@@ -73,42 +57,21 @@ import {
 	TERMINAL_TOOL_NAMES,
 } from "./terminals.js";
 import { WebUIContext } from "./webui-context.js";
-import {
-	buildAttachmentMessages,
-	parseModelSpec,
-} from "./attachments.js";
+import { buildAttachmentMessages } from "./attachments.js";
 import type {
-		BgServer,
-		CommandDef,
-		ConversationSummary,
-		FileEntry,
-		GoalStatus,
-		MessageAnchor,
-		ProjectSummary,
-		ServerMessage,
-		SessionSummary,
-		UiMessage,
-		UiModelConfigEntry,
-		UiProviderConfig,
-		UiSettingsState,
-		UiVisionBridgeModel,
-		UiState,
+	BgServer,
+	CommandDef,
+	ConversationSummary,
+	GoalStatus,
+	MessageAnchor,
+	ProjectSummary,
+	ServerMessage,
+	SessionSummary,
+	UiMessage,
+	UiState,
 } from "./protocol.js";
-import {
-	serializeMessage,
-	serializeStreamingMessage,
-	type AgentMessage,
-} from "./serialize.js";
-import {
-	loadCommands,
-	saveCommandsFile,
-	TerminalManager,
-} from "./terminals.js";
-import {
-	buildVisionBridgePrompt,
-	SYSTEM_PROMPT,
-	transcribeImages,
-} from "./vision-bridge.js";
+import { serializeMessage, serializeStreamingMessage, type AgentMessage } from "./serialize.js";
+import { loadCommands, saveCommandsFile, TerminalManager } from "./terminals.js";
 
 const SNAPSHOT_INTERVAL_MS = 60;
 /** While assistant deltas are flowing, live rendering is carried by
@@ -155,7 +118,6 @@ export class QuiesceRejectedError extends Error {
 // here but never read into the snapshot path.
 // ---------------------------------------------------------------------------
 
-
 /** Windows persona appendix — appended to the SDK system prompt on win32 only.
  *  Two failure modes it guards against: (1) the SDK bash tool has NO default
  *  timeout, so a long-running command hangs the whole conversation forever;
@@ -186,10 +148,7 @@ const PIPELESS_BASH_GUIDANCE = `Bash tool output-limiting/filtering: do NOT chai
  * terminal) plus head/tail (post-processed on the returned output) so the parameter
  * schema stays consistent with the terminal-backed tool.
  */
-export function makeKillableBashTool(
-	cwd: string,
-	kills: Set<AbortController>,
-): ToolDefinition {
+export function makeKillableBashTool(cwd: string, kills: Set<AbortController>): ToolDefinition {
 	const base = createLocalBashOperations();
 	const tool = createBashTool(cwd, {
 		operations: {
@@ -197,13 +156,10 @@ export function makeKillableBashTool(
 				const ac = new AbortController();
 				kills.add(ac);
 				try {
-					const signals = [opts.signal, ac.signal].filter(
-						(s): s is AbortSignal => s !== undefined,
-					);
+					const signals = [opts.signal, ac.signal].filter((s): s is AbortSignal => s !== undefined);
 					return await base.exec(command, c, {
 						...opts,
-						signal:
-							signals.length > 1 ? AbortSignal.any(signals) : signals[0],
+						signal: signals.length > 1 ? AbortSignal.any(signals) : signals[0],
 					});
 				} finally {
 					kills.delete(ac);
@@ -219,13 +175,10 @@ export function makeKillableBashTool(
 			"Run a shell command natively (process spawn, no terminal) and return its full output plus exit code — the SDK's plain bash tool. persist is ignored here (no terminal); use head/tail to trim the returned output.",
 		parameters: Type.Object({
 			command: Type.String({ description: "The shell command to run" }),
-			timeout: Type.Optional(
-				Type.Number({ description: "Optional timeout in seconds" }),
-			),
+			timeout: Type.Optional(Type.Number({ description: "Optional timeout in seconds" })),
 			persist: Type.Optional(
 				Type.Boolean({
-					description:
-						"Ignored in native mode (no terminal). Only meaningful when the terminal-backed bash is active.",
+					description: "Ignored in native mode (no terminal). Only meaningful when the terminal-backed bash is active.",
 				}),
 			),
 			head: Type.Optional(
@@ -255,11 +208,7 @@ export function makeKillableBashTool(
 			// head/tail 后处理（native 无终端，直接截返回行即可）。
 			const p = params as { head?: number; tail?: number };
 			if ((p?.head || p?.tail) && result?.content?.[0]?.text != null) {
-				result.content![0].text = applyHeadTail(
-					result.content![0].text!,
-					p.head,
-					p.tail,
-				);
+				result.content![0].text = applyHeadTail(result.content![0].text!, p.head, p.tail);
 			}
 			return result as never;
 		},
@@ -285,13 +234,7 @@ export function makeAdaptiveBashTool(
 			"Run the bare command — do NOT pipe through head/tail/more/less (use the head/tail parameters to trim the returned output instead; piping also hides live progress in the visible terminal). For interactive commands (REPLs, prompts, installers asking y/n) set persist=true (terminal mode) and drive them with terminal_input / terminal_key.",
 		promptSnippet: "run shell commands",
 		execute: (id, params, signal, onUpdate, ctx) =>
-			(useTerminal() ? terminalBacked : killable).execute(
-				id,
-				params as never,
-				signal,
-				onUpdate,
-				ctx,
-			),
+			(useTerminal() ? terminalBacked : killable).execute(id, params as never, signal, onUpdate, ctx),
 	};
 }
 
@@ -300,22 +243,19 @@ export function makeAdaptiveBashTool(
  * execute 返回值宽容处理：{content,details} 原样收编；字符串/对象包成文本块。
  */
 function pluginToolToDefinition(tool: PluginAgentTool): ToolDefinition {
-	const normalize = (result: unknown): {
+	const normalize = (
+		result: unknown,
+	): {
 		content: Array<{ type: "text"; text: string }>;
 		details?: unknown;
 	} => {
-		if (
-			result &&
-			typeof result === "object" &&
-			Array.isArray((result as { content?: unknown }).content)
-		) {
+		if (result && typeof result === "object" && Array.isArray((result as { content?: unknown }).content)) {
 			return result as {
 				content: Array<{ type: "text"; text: string }>;
 				details?: unknown;
 			};
 		}
-		const text =
-			typeof result === "string" ? result : JSON.stringify(result ?? null, null, 2);
+		const text = typeof result === "string" ? result : JSON.stringify(result ?? null, null, 2);
 		return { content: [{ type: "text", text }] };
 	};
 	return {
@@ -338,15 +278,12 @@ function pluginToolToDefinition(tool: PluginAgentTool): ToolDefinition {
 				toolCallId,
 				params as Record<string, unknown>,
 				signal,
-				onUpdate
-					? (partial) => onUpdate(normalize(partial) as never)
-					: undefined,
+				onUpdate ? (partial) => onUpdate(normalize(partial) as never) : undefined,
 			);
 			return normalize(raw) as never;
 		},
 	} as unknown as ToolDefinition;
 }
-
 
 /**
  * Cheap per-message discriminator for the serialization cache key. Persisted
@@ -381,18 +318,11 @@ function contentFingerprint(m: AgentMessage): string {
 // with a mock theme to plain text lines, and push them to the client.
 // ---------------------------------------------------------------------------
 
-
-
 function extractPartialText(partial: unknown): string | null {
-	const content = (partial as { content?: unknown } | null | undefined)
-		?.content;
+	const content = (partial as { content?: unknown } | null | undefined)?.content;
 	if (Array.isArray(content)) {
 		const text = content
-			.map((c) =>
-				(c as { type?: string; text?: string })?.type === "text"
-					? (c as { text: string }).text
-					: "",
-			)
+			.map((c) => ((c as { type?: string; text?: string })?.type === "text" ? (c as { text: string }).text : ""))
 			.join("");
 		return text.length > 0 ? text : null;
 	}
@@ -489,7 +419,6 @@ const TOOL_WATCHDOG_TIMEOUT_MS = (() => {
 const MAX_OPEN_CONVERSATIONS = 8;
 const DEFAULT_CONV_TITLE = "新对话";
 
-
 /** First user text in a session, truncated for the conversation list. */
 function conversationTitle(session: AgentSession): string {
 	try {
@@ -551,11 +480,7 @@ function messageSearchText(m: { content?: unknown }): string {
 
 /** 扫描一个会话转录文件，收集文本命中查询的消息锚点（role + timestamp，
  *  按转录顺序，最多 cap 个）。仅 user/assistant 消息参与，与搜索范围一致。 */
-function collectSessionAnchors(
-	filePath: string,
-	q: string,
-	cap = 10,
-): MessageAnchor[] {
+function collectSessionAnchors(filePath: string, q: string, cap = 10): MessageAnchor[] {
 	const anchors: MessageAnchor[] = [];
 	if (!q) return anchors;
 	try {
@@ -606,9 +531,7 @@ export class ClientSession {
 	/** One ModelRuntime shared by all conversations — the model chosen in the
 	 *  top bar applies to every chat, not just the one that set it. Seeded by
 	 *  the first conversation and reused by later ones. */
-	private sharedModelRuntime:
-		| Awaited<ReturnType<typeof createAgentSessionServices>>["modelRuntime"]
-		| undefined;
+	private sharedModelRuntime: Awaited<ReturnType<typeof createAgentSessionServices>>["modelRuntime"] | undefined;
 
 	// -----------------------------------------------------------------------
 	// Goal / review / wizard —— 自包含模块，见 goal-service.ts。每个对话有独立
@@ -746,8 +669,7 @@ export class ClientSession {
 		} catch {
 			// 终端可能已被关闭
 		}
-		const exitText =
-			info.exitCode === null ? "终端已关闭" : `退出码 ${info.exitCode}`;
+		const exitText = info.exitCode === null ? "终端已关闭" : `退出码 ${info.exitCode}`;
 		const cmdShort = info.command.length > 120 ? `${info.command.slice(0, 120)}…` : info.command;
 		const text =
 			`（系统：你之前在终端 ${info.terminalId} 后台运行的命令已结束（${exitText}）：${cmdShort}\n` +
@@ -889,12 +811,7 @@ export class ClientSession {
 	private gitDirtyTimer: ReturnType<typeof setTimeout> | null = null;
 	private watchTimer: ReturnType<typeof setTimeout> | null = null;
 
-	private constructor(
-		clientId: string,
-		cwd: string,
-		agentDir: string,
-		stateStore: ClientStateStore,
-	) {
+	private constructor(clientId: string, cwd: string, agentDir: string, stateStore: ClientStateStore) {
 		this.clientId = clientId;
 		this.cwd = cwd;
 		this.agentDir = agentDir;
@@ -951,11 +868,7 @@ export class ClientSession {
 		this.bg.start();
 	}
 
-	static async create(
-		clientId: string,
-		cwd: string,
-		stateStore: ClientStateStore,
-	): Promise<ClientSession> {
+	static async create(clientId: string, cwd: string, stateStore: ClientStateStore): Promise<ClientSession> {
 		const agentDir = process.env.PI_CODING_AGENT_DIR ?? getAgentDir();
 
 		const cs = new ClientSession(clientId, cwd, agentDir, stateStore);
@@ -1044,9 +957,7 @@ export class ClientSession {
 					// 技能开关：禁用的技能从系统提示词和 /skill: 目录中剔除。
 					skillsOverride: (res) => ({
 						...res,
-						skills: res.skills.filter(
-							(s) => !this.settingsSvc.current.disabledSkills.includes(s.name),
-						),
+						skills: res.skills.filter((s) => !this.settingsSvc.current.disabledSkills.includes(s.name)),
 					}),
 					// 插件开关：禁用的扩展整个卸载（工具 / 命令随之消失）。
 					// 注意 SDK 在 extensionsOverride 之后才补 sourceInfo，包扩展此处只能靠路径
@@ -1072,14 +983,9 @@ export class ClientSession {
 							cwd: effectiveCwd,
 							// 设置开 = 用终端；此分支里 persist 未显式给时默认一次性（false）。
 							defaultPersist: () => false,
-							idleMs: () =>
-								Math.max(
-									0,
-									Math.floor(this.settingsSvc.current.terminalBashIdleMs) || 0,
-								),
+							idleMs: () => Math.max(0, Math.floor(this.settingsSvc.current.terminalBashIdleMs) || 0),
 							kills: this.bashKills,
-							notifyBackgroundDone: (info) =>
-								this.notifyTerminalBashDone(terminals, info),
+							notifyBackgroundDone: (info) => this.notifyTerminalBashDone(terminals, info),
 						}),
 						// 设置关 → 原生 bash；开 → 终端 bash。
 						() => this.settingsSvc.current.terminalBash,
@@ -1112,11 +1018,7 @@ export class ClientSession {
 	}
 
 	/** Wrap a fresh runtime as a new conversation record. */
-	private makeConversation(
-		runtime: AgentSessionRuntime,
-		id: string,
-		terminals: TerminalManager,
-	): Conversation {
+	private makeConversation(runtime: AgentSessionRuntime, id: string, terminals: TerminalManager): Conversation {
 		return {
 			id,
 			title: conversationTitle(runtime.session),
@@ -1161,17 +1063,14 @@ export class ClientSession {
 	}
 
 	/** Tell the user about runs lost to the last server restart (once). */
-	notifyInterrupted(
-		list: { title: string; cwd: string; at: number }[] | undefined,
-	): void {
+	notifyInterrupted(list: { title: string; cwd: string; at: number }[] | undefined): void {
 		if (!list || list.length === 0) return;
-		const names = list
-			.map((r) => `「${r.title}」（${r.cwd}）`)
-			.join("、");
+		const names = list.map((r) => `「${r.title}」（${r.cwd}）`).join("、");
 		this.pendingNotices.push({
 			type: "notice",
 			level: "warning",
 			text: `上次服务重启时有 ${list.length} 个进行中的对话被中断：${names}。可在历史对话中恢复继续。`,
+			textEn: `${list.length} running conversation(s) were interrupted by the last restart: ${names}. Resume them from History.`,
 		});
 	}
 
@@ -1222,6 +1121,7 @@ export class ClientSession {
 	/** Broadcast to every connected socket of this client. */
 	private emit(msg: ServerMessage): void {
 		if (this.disposed) return;
+		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
 		for (const sink of [...this.sinks]) sink(msg);
 	}
 
@@ -1237,9 +1137,7 @@ export class ClientSession {
 				this.emit({ type: "notice", level: "error", text: err.error });
 			},
 		});
-		conv.unsubscribe = conv.session.subscribe((event) =>
-			this.onEvent(conv, event),
-		);
+		conv.unsubscribe = conv.session.subscribe((event) => this.onEvent(conv, event));
 		this.scheduleSnapshot();
 		this.webUi.refresh();
 		this.startWidgetsTimer();
@@ -1264,17 +1162,14 @@ export class ClientSession {
 			if (this.disposed) return;
 			const now = Date.now();
 			for (const conv of this.convs.values()) {
-				if (
-					!conv.stallNoticed &&
-					conv.session.isStreaming &&
-					now - conv.lastSdkEventAt > STALL_NOTIFY_MS
-				) {
+				if (!conv.stallNoticed && conv.session.isStreaming && now - conv.lastSdkEventAt > STALL_NOTIFY_MS) {
 					conv.stallNoticed = true;
 					const mins = Math.round((now - conv.lastSdkEventAt) / 60_000);
 					this.emit({
 						type: "notice",
 						level: "warning",
 						text: `对话「${conv.title}」已 ${mins} 分钟无任何响应，可能已失联（网络中断或服务端挂起）。可点击停止后重试。`,
+						textEn: `Conversation "${conv.title}" has been silent for ${mins} min — possibly disconnected (network or hung server). Stop it and retry.`,
 					});
 				}
 			}
@@ -1293,6 +1188,7 @@ export class ClientSession {
 				type: "notice",
 				level: "warning",
 				text: `工具执行超过 ${Math.round(TOOL_WATCHDOG_TIMEOUT_MS / 60_000)} 分钟，已自动终止（防止挂死）。可调整超时：环境变量 PI_WEB_TOOL_TIMEOUT_MS（毫秒）。`,
+				textEn: `Tool ran over ${Math.round(TOOL_WATCHDOG_TIMEOUT_MS / 60_000)} min and was auto-terminated (hang guard). Tune via PI_WEB_TOOL_TIMEOUT_MS (ms).`,
 			});
 			conv.toolStartTimes.delete(toolCallId);
 			// Abort the run (kills the process tree via the SDK's abort signal);
@@ -1359,8 +1255,7 @@ export class ClientSession {
 				// Bash finished — wait briefly for background servers to bind their
 				// ports, then diff against the pre-run snapshot and record them.
 				if (event.toolName === "bash") void this.bg.trackAfterBash();
-				const durationMs =
-					startedAt !== undefined ? Date.now() - startedAt : undefined;
+				const durationMs = startedAt !== undefined ? Date.now() - startedAt : undefined;
 				// 插件扩展点：工具结束执行（带耗时与错误标志）。
 				this.onToolEvent?.({
 					phase: "end",
@@ -1386,11 +1281,9 @@ export class ClientSession {
 					const text = Array.isArray(content)
 						? content
 								.map((c) =>
-									(typeof c === "object" &&
-										c !== null &&
-										(c as { type?: unknown }).type === "text")
-											? ((c as { text?: unknown }).text ?? "")
-											: "",
+									typeof c === "object" && c !== null && (c as { type?: unknown }).type === "text"
+										? ((c as { text?: unknown }).text ?? "")
+										: "",
 								)
 								.join("\n")
 						: "";
@@ -1432,6 +1325,7 @@ export class ClientSession {
 					type: "notice",
 					level: "info",
 					text: "正在压缩上下文…（压缩摘要将显示在消息区）",
+					textEn: "Compacting context… (the summary will appear in the message list)",
 				});
 				break;
 			}
@@ -1441,12 +1335,14 @@ export class ClientSession {
 						type: "notice",
 						level: "error",
 						text: `压缩上下文失败：${event.errorMessage}`,
+						textEn: `Context compaction failed: ${event.errorMessage}`,
 					});
 				} else if (event.aborted) {
 					this.emit({
 						type: "notice",
 						level: "warning",
 						text: "压缩上下文已取消",
+						textEn: "Context compaction cancelled",
 					});
 				} else if (event.result) {
 					const { tokensBefore, estimatedTokensAfter } = event.result;
@@ -1455,6 +1351,7 @@ export class ClientSession {
 						type: "notice",
 						level: "info",
 						text: `上下文压缩完成：${tokensBefore.toLocaleString()} → ${after.toLocaleString()} tokens（摘要已插入消息区）`,
+						textEn: `Context compacted: ${tokensBefore.toLocaleString()} → ${after.toLocaleString()} tokens (summary inserted into the message list)`,
 					});
 				}
 				break;
@@ -1538,11 +1435,7 @@ export class ClientSession {
 		// Snapshot checkpoint policy: deltas carry live rendering during streaming;
 		// full snapshots are reconciliation checkpoints taken immediately at
 		// run/tool boundaries and on a slow timer otherwise.
-		if (
-			event.type === "agent_end" ||
-			event.type === "tool_execution_end" ||
-			event.type === "compaction_end"
-		) {
+		if (event.type === "agent_end" || event.type === "tool_execution_end" || event.type === "compaction_end") {
 			this.flushSnapshot();
 		} else {
 			this.scheduleSnapshot();
@@ -1584,10 +1477,7 @@ export class ClientSession {
 		// timestamp alone collides in the cache and only the first one renders
 		// — append a cheap content fingerprint to keep them distinct while
 		// staying stable across snapshots (content never changes once persisted).
-		const key =
-			m.role === "toolResult"
-				? `t:${m.toolCallId}`
-				: `${m.role}:${m.timestamp}:${contentFingerprint(m)}`;
+		const key = m.role === "toolResult" ? `t:${m.toolCallId}` : `${m.role}:${m.timestamp}:${contentFingerprint(m)}`;
 		let n = conv.msgIds.get(key);
 		if (n === undefined) {
 			n = conv.nextMsgId++;
@@ -1637,17 +1527,14 @@ export class ClientSession {
 		// cached (reference-stable) anyway, and a stable array reference lets the
 		// frontend memoize derived maps instead of rebuilding them every 60ms.
 		const sig = rawMessages.map((m) => m.id).join("\u0001");
-		const messages =
-			conv.lastMessagesSig === sig ? conv.lastMessagesArray : rawMessages;
+		const messages = conv.lastMessagesSig === sig ? conv.lastMessagesArray : rawMessages;
 		conv.lastMessagesSig = sig;
 		conv.lastMessagesArray = rawMessages;
 		return messages;
 	}
 
 	/** Build every UiState field EXCEPT messages (the expensive part). */
-	private buildLightState(
-		rev: number,
-	): Omit<UiState, "messages" | "rev"> & { rev: number } {
+	private buildLightState(rev: number): Omit<UiState, "messages" | "rev"> & { rev: number } {
 		const conv = this.conv;
 		const state = conv.session.agent.state;
 		const model = state.model;
@@ -1685,9 +1572,7 @@ export class ClientSession {
 			// (the SDK only pushes it into state.messages at message_end). Surfacing
 			// it here is what makes thinking + text stream into the browser at
 			// ~60ms granularity instead of appearing only when the turn finishes.
-			streamingMessage: state.streamingMessage
-				? serializeStreamingMessage(state.streamingMessage)
-				: null,
+			streamingMessage: state.streamingMessage ? serializeStreamingMessage(state.streamingMessage) : null,
 			isStreaming: this.session.isStreaming,
 			model: model
 				? {
@@ -1695,7 +1580,7 @@ export class ClientSession {
 						name: model.name,
 						provider: model.provider,
 						vision: model.input?.includes("image") ?? false,
-				  }
+					}
 				: null,
 			thinkingLevel: state.thinkingLevel,
 			// Only the levels the current model actually supports — the SDK clamps
@@ -1725,11 +1610,7 @@ export class ClientSession {
 		if (this.disposed) return;
 		const cur = this.currentMessages();
 		const prev = this.emittedMessages;
-		let incremental =
-			!forceFull &&
-			prev !== null &&
-			this.emittedConvId === this.activeId &&
-			prev.length <= cur.length;
+		let incremental = !forceFull && prev !== null && this.emittedConvId === this.activeId && prev.length <= cur.length;
 		if (incremental && prev) {
 			for (let i = 0; i < prev.length; i++) {
 				if (prev[i] !== cur[i]) {
@@ -1794,8 +1675,7 @@ export class ClientSession {
 	private isPiCliInstalled(): boolean {
 		const now = Date.now();
 		const cached = ClientSession.piCliProbe;
-		if (cached && now - cached.at < ClientSession.PI_CLI_PROBE_TTL_MS)
-			return cached.installed;
+		if (cached && now - cached.at < ClientSession.PI_CLI_PROBE_TTL_MS) return cached.installed;
 		let installed = false;
 		try {
 			const res = spawnSync("pi", ["--version"], {
@@ -1872,9 +1752,7 @@ export class ClientSession {
 		try {
 			const here = dirname(fileURLToPath(import.meta.url));
 			const pkgRoot = resolve(here, "..", "..");
-			const pkg = JSON.parse(
-				readFileSync(join(pkgRoot, "package.json"), "utf8"),
-			) as { version?: string };
+			const pkg = JSON.parse(readFileSync(join(pkgRoot, "package.json"), "utf8")) as { version?: string };
 			return pkg.version ?? "0.0.0";
 		} catch {
 			return "0.0.0";
@@ -1909,10 +1787,8 @@ export class ClientSession {
 				time?: Record<string, string>;
 			};
 			const latest = data["dist-tags"]?.latest ?? null;
-			const latestPublishedAt =
-				latest && data.time ? (data.time[latest] ?? null) : null;
-			const upToDate =
-				latest === null || ClientSession.compareVersions(current, latest) >= 0;
+			const latestPublishedAt = latest && data.time ? (data.time[latest] ?? null) : null;
+			const upToDate = latest === null || ClientSession.compareVersions(current, latest) >= 0;
 			this.emit({
 				type: "update_status",
 				current,
@@ -1942,12 +1818,7 @@ export class ClientSession {
 	 * within UPDATE_ALL_CACHE_MS; pass force=true (explicit refresh) to bypass.
 	 */
 	async checkUpdatesAll(force = false): Promise<void> {
-		if (
-			!force &&
-			this.updatesAllCache &&
-			Date.now() - this.updatesAllCache.at <
-				ClientSession.UPDATE_ALL_CACHE_MS
-		) {
+		if (!force && this.updatesAllCache && Date.now() - this.updatesAllCache.at < ClientSession.UPDATE_ALL_CACHE_MS) {
 			this.emit({
 				type: "update_status_all",
 				items: this.updatesAllCache.items,
@@ -1955,10 +1826,7 @@ export class ClientSession {
 			return;
 		}
 		try {
-			const targets = collectTargets(
-				this.agentDir,
-				ClientSession.currentAppVersion(),
-			);
+			const targets = collectTargets(this.agentDir, ClientSession.currentAppVersion());
 			const items = await checkAllUpdates(targets);
 			this.updatesAllCache = { at: Date.now(), items };
 			this.emit({ type: "update_status_all", items });
@@ -1987,17 +1855,15 @@ export class ClientSession {
 				type: "notice",
 				level: "info",
 				text: "正在安装 pi agent CLI（npm i -g @earendil-works/pi-coding-agent）…",
+				textEn: "Installing pi agent CLI (npm i -g @earendil-works/pi-coding-agent)…",
 			});
-			const { code, out } = await this.runAsync(
-				"npm",
-				["i", "-g", "@earendil-works/pi-coding-agent"],
-				180_000,
-			);
+			const { code, out } = await this.runAsync("npm", ["i", "-g", "@earendil-works/pi-coding-agent"], 180_000);
 			if (code === 0) {
 				this.emit({
 					type: "notice",
 					level: "info",
 					text: "✅ pi agent CLI 安装完成。填入 API 密钥即可开始，或在终端运行 pi 完成登录。",
+					textEn: "✅ pi agent CLI installed. Enter an API key to start, or run pi in a terminal to log in.",
 				});
 				this.emit({ type: "install_result", ok: true, detail: "" });
 			} else {
@@ -2005,6 +1871,7 @@ export class ClientSession {
 					type: "notice",
 					level: "error",
 					text: `pi agent 安装失败（${code ?? "timeout"}）：${out.slice(0, 400)}`,
+					textEn: `pi agent install failed (${code ?? "timeout"}): ${out.slice(0, 400)}`,
 				});
 				this.emit({
 					type: "install_result",
@@ -2017,6 +1884,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `pi agent 安装失败：${(err as Error).message}`,
+				textEn: `pi agent install failed: ${(err as Error).message}`,
 			});
 		}
 		// The CLI may just have landed on PATH (or the install may have failed) —
@@ -2043,9 +1911,7 @@ export class ClientSession {
 		// are just a periodic reconciliation checkpoint, so send them far less
 		// often (they serialize the whole session; big sessions made this path OOM).
 		const interval =
-			Date.now() - this.lastDeltaAt < DELTA_ACTIVE_WINDOW_MS
-				? STREAMING_SNAPSHOT_INTERVAL_MS
-				: SNAPSHOT_INTERVAL_MS;
+			Date.now() - this.lastDeltaAt < DELTA_ACTIVE_WINDOW_MS ? STREAMING_SNAPSHOT_INTERVAL_MS : SNAPSHOT_INTERVAL_MS;
 		this.snapshotTimer = setTimeout(() => {
 			this.snapshotTimer = null;
 			this.emitSnapshotNow();
@@ -2079,6 +1945,7 @@ export class ClientSession {
 					type: "notice",
 					level: "error",
 					text: `插件命令 /${name} 执行失败：${(err as Error).message}`,
+					textEn: `Plugin command /${name} failed: ${(err as Error).message}`,
 				});
 			}
 			return true;
@@ -2107,13 +1974,7 @@ export class ClientSession {
 	listModelsConfig(): Promise<void> {
 		return this.modelAdmin.listModelsConfig();
 	}
-	fetchModelsList(
-		reqId: number,
-		baseUrl: string,
-		apiKey?: string,
-		authHeader?: boolean,
-		api?: string,
-	): Promise<void> {
+	fetchModelsList(reqId: number, baseUrl: string, apiKey?: string, authHeader?: boolean, api?: string): Promise<void> {
 		return this.modelAdmin.fetchModelsList(reqId, baseUrl, apiKey, authHeader, api);
 	}
 	refreshProviderModels(providerId: string, reqId: number): Promise<void> {
@@ -2286,7 +2147,7 @@ export class ClientSession {
 		return this.settingsSvc.deletePreset(name);
 	}
 
-		/** Make settings effective in the running runtime（流式中则延迟到 agent_end）。 */
+	/** Make settings effective in the running runtime（流式中则延迟到 agent_end）。 */
 	private async applyRuntimeSettings(): Promise<void> {
 		return this.settingsSvc.applyRuntime();
 	}
@@ -2349,6 +2210,8 @@ export class ClientSession {
 			type: "notice",
 			level: "error",
 			text: "服务器正在排空存量工作（quiesce），已拒绝新的对话/消息/编辑。存量运行会继续跑完；用 pi-web-ui server unquiesce 可恢复。",
+			textEn:
+				"Server is draining (quiesce) and rejected the new chat/message/edit. Existing runs continue; resume with pi-web-ui server unquiesce.",
 		});
 		this.flushSnapshot();
 		return true;
@@ -2371,8 +2234,7 @@ export class ClientSession {
 	 *  quiesce status. Quiesce refuses to add more, so this only drains. */
 	pendingMessages(): number {
 		let n = 0;
-		for (const c of this.convs.values())
-			n += c.queueFollowUp.length + c.queueSteering.length;
+		for (const c of this.convs.values()) n += c.queueFollowUp.length + c.queueSteering.length;
 		return n;
 	}
 
@@ -2426,8 +2288,7 @@ export class ClientSession {
 			// re-derives it from the persisted transcript when needed.
 			if (conv.title === DEFAULT_CONV_TITLE && text.trim()) {
 				const trimmed = text.trim().replace(/\s+/g, " ");
-				conv.title =
-					trimmed.length > 30 ? `${trimmed.slice(0, 30)}…` : trimmed;
+				conv.title = trimmed.length > 30 ? `${trimmed.slice(0, 30)}…` : trimmed;
 				this.emitConversations();
 			}
 			// Attach files as independent nextTurn context messages (asides) so the
@@ -2467,6 +2328,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `提示发送失败：${(err as Error).message}`,
+				textEn: `Failed to send prompt: ${(err as Error).message}`,
 			});
 		}
 		// The active conversation (captured at prompt start — see above) has been
@@ -2536,12 +2398,8 @@ export class ClientSession {
 			return;
 		}
 		const { steering, followUp } = s.clearQueue();
-		const keptSteering = steering.filter(
-			(t) => !(kind === "steer" && t === text),
-		);
-		const keptFollowUp = followUp.filter(
-			(t) => !(kind === "followUp" && t === text),
-		);
+		const keptSteering = steering.filter((t) => !(kind === "steer" && t === text));
+		const keptFollowUp = followUp.filter((t) => !(kind === "followUp" && t === text));
 		// Re-queue the survivors in original order. Guard each call so a single
 		// failure can't leave the queue half-drained silently.
 		for (const t of keptSteering) {
@@ -2552,6 +2410,7 @@ export class ClientSession {
 					type: "notice",
 					level: "error",
 					text: `重新入队插队消息失败：${(err as Error).message}`,
+					textEn: `Failed to re-queue the steer message: ${(err as Error).message}`,
 				});
 			}
 		}
@@ -2563,6 +2422,7 @@ export class ClientSession {
 					type: "notice",
 					level: "error",
 					text: `重新入队排队消息失败：${(err as Error).message}`,
+					textEn: `Failed to re-queue the queued message: ${(err as Error).message}`,
 				});
 			}
 		}
@@ -2595,6 +2455,7 @@ export class ClientSession {
 					type: "notice",
 					level: "info",
 					text: `后台任务「${taskId}」不存在或已结束`,
+					textEn: `Background task "${taskId}" does not exist or has ended`,
 				});
 			}
 			this.bg.push();
@@ -2620,15 +2481,18 @@ export class ClientSession {
 				type: "notice",
 				level: "info",
 				text: "当前没有正在运行的 bash 命令",
+				textEn: "No bash command is running",
 			});
 			this.flushSnapshot();
 			return;
 		}
+		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
 		for (const ac of [...this.bashKills]) ac.abort();
 		this.emit({
 			type: "notice",
 			level: "info",
 			text: "已停止 bash 命令（对话继续）",
+			textEn: "Bash command stopped (conversation continues)",
 		});
 		// 让 AI 明确知道是用户手动停止：sendUserMessage 触发下一轮，agent
 		// 会看到「命令被用户中止」而不是普通失败，并据此继续（不会困惑于
@@ -2660,10 +2524,7 @@ export class ClientSession {
 		const force = () => {
 			if (forced) return;
 			forced = true;
-			void this.forceResetConversation(
-				conv,
-				`${reason}：运行未终止，已强制重置当前对话`,
-			);
+			void this.forceResetConversation(conv, `${reason}：运行未终止，已强制重置当前对话`);
 		};
 		// 1) abort itself hangs (model stream ignores the signal) → hard kill.
 		const abortTimer = setTimeout(() => {
@@ -2679,6 +2540,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `中止失败：${(err as Error).message}`,
+				textEn: `Abort failed: ${(err as Error).message}`,
 			});
 		}
 		// 3) abort returned but no agent_end within the settle window → the
@@ -2702,14 +2564,11 @@ export class ClientSession {
 			this.clearAllToolWatchdogs(conv);
 			conv.toolStartTimes.clear();
 			await conv.runtime.dispose();
-			const runtime = await createAgentSessionRuntime(
-				this.makeRuntimeFactory(conv.terminals),
-				{
-					cwd: conv.cwd,
-					agentDir: this.agentDir,
-					sessionManager: SessionManager.continueRecent(conv.cwd),
-				},
-			);
+			const runtime = await createAgentSessionRuntime(this.makeRuntimeFactory(conv.terminals), {
+				cwd: conv.cwd,
+				agentDir: this.agentDir,
+				sessionManager: SessionManager.continueRecent(conv.cwd),
+			});
 			conv.runtime = runtime;
 			conv.session = runtime.session;
 			this.emit({ type: "notice", level: "warning", text: reason });
@@ -2721,6 +2580,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `强制中断失败：${(err as Error).message}`,
+				textEn: `Force-stop failed: ${(err as Error).message}`,
 			});
 		}
 	}
@@ -2755,14 +2615,13 @@ export class ClientSession {
 		}
 		// Cap is per project — conversations of other projects keep their own
 		// lists and don't consume this project's slots.
-		const openInProject = [...this.convs.values()].filter(
-			(c) => c.cwd === this.cwd,
-		).length;
+		const openInProject = [...this.convs.values()].filter((c) => c.cwd === this.cwd).length;
 		if (openInProject >= MAX_OPEN_CONVERSATIONS) {
 			this.emit({
 				type: "notice",
 				level: "warning",
 				text: `当前项目运行的对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），请先打开某个对话并离开（不继续对话）以移出列表`,
+				textEn: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
 			});
 			return;
 		}
@@ -2776,14 +2635,11 @@ export class ClientSession {
 		try {
 			const conversationId = this.nextConversationId();
 			const terminals = this.makeTerminalManager(conversationId, this.cwd);
-			const runtime = await createAgentSessionRuntime(
-				this.makeRuntimeFactory(terminals),
-				{
-					cwd: this.cwd,
-					agentDir: this.agentDir,
-					sessionManager: SessionManager.create(this.cwd),
-				},
-			);
+			const runtime = await createAgentSessionRuntime(this.makeRuntimeFactory(terminals), {
+				cwd: this.cwd,
+				agentDir: this.agentDir,
+				sessionManager: SessionManager.create(this.cwd),
+			});
 			const conv = this.makeConversation(runtime, conversationId, terminals);
 			this.convs.set(conv.id, conv);
 			this.activeId = conv.id;
@@ -2815,6 +2671,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `新建对话失败：${(err as Error).message}`,
+				textEn: `Failed to create chat: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -2843,6 +2700,12 @@ export class ClientSession {
 		// Also retain when a non-expired pi-subagents wait-subscription record
 		// exists on disk for this session: a finished background subagent run
 		// still owes this conversation a wake-up turn.
+		// 更靠前的阶段：run 本身还在 queued/running（workflow 编排中）时释放
+		// runtime 同样杀死扩展宿主并 abort 所有 live workflow controller，比
+		// wake 订阅早一步——磁盘 .active-runs marker + status.json 探测（pi-web-ui #52）。
+		// Retain while the session has active (queued/running) pi-subagents async
+		// runs on disk — the extension host would otherwise be torn down and its
+		// workflow controllers aborted mid-flight.
 		const retained = shouldRetainActive({
 			reviewing: conv.goal.reviewing,
 			wizardRunning: conv.wizardRunning,
@@ -2850,6 +2713,7 @@ export class ClientSession {
 			openTerminals: conv.terminals.list().length,
 			listed: conv.listed,
 			promptedSinceActive: conv.promptedSinceActive,
+			hasActiveSubagentRun: () => hasActiveSubagentRun({ sessionId: conv.session.sessionFile }),
 			hasPendingWake: () => hasPendingWaitSubscription({ sessionId: conv.session.sessionFile }),
 		});
 		if (retained) {
@@ -2958,9 +2822,7 @@ export class ClientSession {
 	 * pushSessions() and searchSessions() share this fridge — opening the
 	 * panel warms it, then every keystroke inside the TTL is free.
 	 */
-	private sessionInfosCache:
-		| { cwd: string; infos: SessionInfo[]; at: number }
-		| null = null;
+	private sessionInfosCache: { cwd: string; infos: SessionInfo[]; at: number } | null = null;
 	private static readonly SESSION_INFO_CACHE_TTL = 3000;
 
 	private async loadSessionInfos(): Promise<SessionInfo[]> {
@@ -3008,9 +2870,7 @@ export class ClientSession {
 					source: "web",
 				});
 			}
-			const sorted = [...sessions.values()]
-				.sort((a, b) => b.modified - a.modified)
-				.slice(0, 200); // newest first — the panel shows recent history
+			const sorted = [...sessions.values()].sort((a, b) => b.modified - a.modified).slice(0, 200); // newest first — the panel shows recent history
 			this.emit({ type: "sessions", sessions: sorted });
 		} catch {
 			this.emit({ type: "sessions", sessions: [] });
@@ -3044,6 +2904,7 @@ export class ClientSession {
 					type: "notice",
 					level: "error",
 					text: "只能删除会话目录中的对话记录",
+					textEn: "Only transcripts inside the session directory can be deleted",
 				});
 				return;
 			}
@@ -3062,6 +2923,7 @@ export class ClientSession {
 					type: "notice",
 					level: "warning",
 					text: "该对话正在后台运行，请先停止或关闭该对话再删除",
+					textEn: "This conversation is still running — stop or close it before deleting",
 				});
 				return;
 			}
@@ -3110,8 +2972,66 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `删除会话失败：${(err as Error).message}`,
+				textEn: `Failed to delete session: ${(err as Error).message}`,
 			});
 		}
+	}
+
+	/** Dismiss a running conversation from the left-panel list without deleting its
+	 *  transcript file. Only idle (non-streaming) conversations that are not
+	 *  retained by terminal/wake/review state can be dismissed. The session stays
+	 *  in history and can be reopened. */
+	async dismissConversation(id: string): Promise<void> {
+		const conv = this.convs.get(id);
+		if (!conv) {
+			this.emit({ type: "notice", level: "warning", text: "该对话不存在或已关闭" });
+			return;
+		}
+		if (id === this.activeId) {
+			this.emit({ type: "notice", level: "warning", text: "当前对话不能直接移出，请先切换到其他对话" });
+			return;
+		}
+		if (!conv.listed) {
+			// Not in list anyway — nothing to do.
+			this.emitConversations();
+			return;
+		}
+		// Streaming / retained conversations refuse dismissal — mirrors displaceActive retention.
+		const retained = shouldRetainActive({
+			reviewing: conv.goal.reviewing,
+			wizardRunning: conv.wizardRunning,
+			streaming: conv.session.isStreaming,
+			openTerminals: conv.terminals.list().length,
+			listed: conv.listed,
+			promptedSinceActive: conv.promptedSinceActive,
+			hasActiveSubagentRun: () => hasActiveSubagentRun({ sessionId: conv.session.sessionFile }),
+			hasPendingWake: () => hasPendingWaitSubscription({ sessionId: conv.session.sessionFile }),
+		});
+		if (retained) {
+			if (conv.session.isStreaming) {
+				this.emit({
+					type: "notice",
+					level: "warning",
+					text: `对话「${conv.title}」仍在运行中，请先等待结束或点击停止后再移出`,
+				});
+			} else if (conv.terminals.list().length > 0) {
+				this.emit({
+					type: "notice",
+					level: "warning",
+					text: `对话「${conv.title}」还有未关闭的终端，请先关闭终端后再移出`,
+				});
+			} else {
+				this.emit({
+					type: "notice",
+					level: "warning",
+					text: `对话「${conv.title}」暂时无法移出（存在待处理的后台任务/审查）`,
+				});
+			}
+			return;
+		}
+		this.removeConversation(id);
+		this.emitConversations();
+		this.flushSnapshot();
 	}
 
 	/** Open a persisted session as the active conversation (from listSessions).
@@ -3143,23 +3063,18 @@ export class ClientSession {
 			const targetCwd = sessionManager.getCwd();
 			const conversationId = this.nextConversationId();
 			openedTerminals = this.makeTerminalManager(conversationId, targetCwd);
-			openedRuntime = await createAgentSessionRuntime(
-				this.makeRuntimeFactory(openedTerminals),
-				{
-					cwd: targetCwd,
-					agentDir: this.agentDir,
-					sessionManager,
-				},
-			);
+			openedRuntime = await createAgentSessionRuntime(this.makeRuntimeFactory(openedTerminals), {
+				cwd: targetCwd,
+				agentDir: this.agentDir,
+				sessionManager,
+			});
 
 			// Only displace the old active conversation after the replacement runtime
 			// is known-good. This keeps a failed history open entirely non-destructive.
 			const oldListed = this.conv.listed;
 			const displaced = this.displaceActive();
 			const openInProject =
-				[...this.convs.values()].filter((c) => c.cwd === targetCwd).length +
-				1 -
-				(displaced?.cwd === targetCwd ? 1 : 0);
+				[...this.convs.values()].filter((c) => c.cwd === targetCwd).length + 1 - (displaced?.cwd === targetCwd ? 1 : 0);
 			if (openInProject > MAX_OPEN_CONVERSATIONS) {
 				// displaceActive() may have promoted a streaming conversation into the
 				// running list. Roll that presentation-only mutation back because no
@@ -3173,15 +3088,12 @@ export class ClientSession {
 					type: "notice",
 					level: "warning",
 					text: `当前项目运行的对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），请先打开某个对话并离开（不继续对话）以移出列表`,
+					textEn: `This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
 				});
 				return;
 			}
 
-			const conv = this.makeConversation(
-				openedRuntime,
-				conversationId,
-				openedTerminals,
-			);
+			const conv = this.makeConversation(openedRuntime, conversationId, openedTerminals);
 			// Deliberately resumed — must not be dismissed when the user later
 			// switches away without sending a new message.
 			conv.promptedSinceActive = true;
@@ -3208,6 +3120,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `切换会话失败：${(err as Error).message}`,
+				textEn: `Failed to switch session: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -3261,6 +3174,7 @@ export class ClientSession {
 				type: "notice",
 				level: "warning",
 				text: "编辑内容为空，已取消",
+				textEn: "Edited content is empty — cancelled",
 			});
 			this.flushSnapshot();
 			return;
@@ -3271,6 +3185,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: "找不到要编辑的消息（可能已被压缩或不在当前分支）",
+				textEn: "Message to edit not found (may have been compacted or is on another branch)",
 			});
 			this.flushSnapshot();
 			return;
@@ -3285,6 +3200,7 @@ export class ClientSession {
 					type: "notice",
 					level: "info",
 					text: "已取消编辑重问",
+					textEn: "Edit-and-reask cancelled",
 				});
 				this.flushSnapshot();
 				return;
@@ -3305,12 +3221,14 @@ export class ClientSession {
 				type: "notice",
 				level: "info",
 				text: "已从该问题重新提问（原对话保留在会话列表中）",
+				textEn: "Re-asked from that question (the original stays in the session list)",
 			});
 		} catch (err) {
 			this.emit({
 				type: "notice",
 				level: "error",
 				text: `编辑重问失败：${(err as Error).message}`,
+				textEn: `Edit-and-reask failed: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -3324,9 +3242,7 @@ export class ClientSession {
 	async pushProjects(): Promise<void> {
 		try {
 			const saved = this.stateStore.get(this.clientId);
-			const removedProjects = new Set(
-				this.stateStore.getRemovedProjects(this.clientId),
-			);
+			const removedProjects = new Set(this.stateStore.getRemovedProjects(this.clientId));
 			const map = new Map<string, number>();
 			for (const p of saved.projects) map.set(p.path, p.lastUsed);
 			const all = await SessionManager.listAll();
@@ -3432,6 +3348,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `切换模型失败：${(err as Error).message}`,
+				textEn: `Failed to switch model: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -3460,6 +3377,7 @@ export class ClientSession {
 					type: "notice",
 					level: "info",
 					text: `已在工作目录：${abs}`,
+					textEn: `Already in directory: ${abs}`,
 				});
 				this.flushSnapshot();
 				return;
@@ -3475,10 +3393,7 @@ export class ClientSession {
 			// project has none open yet.
 			let target: Conversation | undefined;
 			for (const c of this.convs.values()) {
-				if (
-					c.cwd === abs &&
-					(!target || c.lastActiveAt > target.lastActiveAt)
-				) {
+				if (c.cwd === abs && (!target || c.lastActiveAt > target.lastActiveAt)) {
 					target = c;
 				}
 			}
@@ -3490,14 +3405,11 @@ export class ClientSession {
 				// First visit to this project: resume its most recent session.
 				const conversationId = this.nextConversationId();
 				const terminals = this.makeTerminalManager(conversationId, abs);
-				const newRuntime = await createAgentSessionRuntime(
-					this.makeRuntimeFactory(terminals),
-					{
-						cwd: abs,
-						agentDir: this.agentDir,
-						sessionManager: SessionManager.continueRecent(abs),
-					},
-				);
+				const newRuntime = await createAgentSessionRuntime(this.makeRuntimeFactory(terminals), {
+					cwd: abs,
+					agentDir: this.agentDir,
+					sessionManager: SessionManager.continueRecent(abs),
+				});
 				const conv = this.makeConversation(newRuntime, conversationId, terminals);
 				this.convs.set(conv.id, conv);
 				this.activeId = conv.id;
@@ -3534,6 +3446,7 @@ export class ClientSession {
 				type: "notice",
 				level: "info",
 				text: `已切换到工作目录：${abs}`,
+				textEn: `Switched to directory: ${abs}`,
 			});
 			void this.refreshSessions();
 			void this.listFiles(undefined);
@@ -3544,6 +3457,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `切换工作目录失败：${(err as Error).message}`,
+				textEn: `Failed to switch directory: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -3567,6 +3481,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `获取模型列表失败：${(err as Error).message}`,
+				textEn: `Failed to fetch model list: ${(err as Error).message}`,
 			});
 		}
 	}
@@ -3599,11 +3514,7 @@ export class ClientSession {
 		return this.goalSvc.startGoalWizard(text, opts);
 	}
 
-	async setGoalPrefs(opts?: {
-		reviewModel?: string;
-		maxRounds?: number;
-		locked?: boolean;
-	}): Promise<void> {
+	async setGoalPrefs(opts?: { reviewModel?: string; maxRounds?: number; locked?: boolean }): Promise<void> {
 		return this.goalSvc.setGoalPrefs(opts);
 	}
 
@@ -3615,12 +3526,7 @@ export class ClientSession {
 	 * "" when not a repo. */
 	private async gitDiff(cwd: string): Promise<string> {
 		try {
-			const { code, out } = await this.runAsync(
-				"git",
-				["diff", "HEAD"],
-				10_000,
-				cwd,
-			);
+			const { code, out } = await this.runAsync("git", ["diff", "HEAD"], 10_000, cwd);
 			if (code !== 0) return "";
 			return out.slice(0, 60_000);
 		} catch {
@@ -3651,6 +3557,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `切换模型失败：${(err as Error).message}`,
+				textEn: `Failed to switch model: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -3659,14 +3566,13 @@ export class ClientSession {
 	/** Set the thinking level for future turns. */
 	setThinking(level: string): void {
 		try {
-			this.session.setThinkingLevel(
-				level as Parameters<AgentSession["setThinkingLevel"]>[0],
-			);
+			this.session.setThinkingLevel(level as Parameters<AgentSession["setThinkingLevel"]>[0]);
 		} catch (err) {
 			this.emit({
 				type: "notice",
 				level: "error",
 				text: `切换思考强度失败：${(err as Error).message}`,
+				textEn: `Failed to switch thinking level: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -3680,6 +3586,7 @@ export class ClientSession {
 				type: "notice",
 				level: "error",
 				text: `切换思考强度失败：${(err as Error).message}`,
+				textEn: `Failed to switch thinking level: ${(err as Error).message}`,
 			});
 		}
 		this.flushSnapshot();
@@ -3702,7 +3609,7 @@ export class ClientSession {
 			return;
 		}
 		this.emit({ type: "commands", commands, path });
-		this.emit({ type: "notice", level: "info", text: `命令已保存：${path}` });
+		this.emit({ type: "notice", level: "info", text: `命令已保存：${path}`, textEn: `Command saved: ${path}` });
 	}
 
 	async dispose(): Promise<void> {
@@ -3741,7 +3648,7 @@ export class ClientSession {
 }
 
 export class AgentService {
-		/** index.ts 注入：SDK 工具执行事件的插件转发钩子，attach 时拷贝到每个新会话。 */
+	/** index.ts 注入：SDK 工具执行事件的插件转发钩子，attach 时拷贝到每个新会话。 */
 	onToolEvent: ((ev: PluginToolEvent) => void) | undefined = undefined;
 	/** index.ts 注入：读取插件当前注册的 AI 工具（attach 时拷贝到每个新会话）。 */
 	pluginToolsProvider: (() => PluginAgentTool[]) | undefined = undefined;
@@ -3796,9 +3703,7 @@ export class AgentService {
 
 	/** Snapshot for the control socket / status command. */
 	quiesceInfo(): { quiesced: boolean; quiescedSince?: number } {
-		return this.quiesced
-			? { quiesced: true, quiescedSince: this.quiescedAt }
-			: { quiesced: false };
+		return this.quiesced ? { quiesced: true, quiescedSince: this.quiescedAt } : { quiesced: false };
 	}
 
 	/** Aggregate across every client session: conversations with in-flight runs. */
@@ -3846,10 +3751,7 @@ export class AgentService {
 	}
 
 	/** Get or create the session for a client, racing attach calls safely. */
-	async attach(
-		clientId: string,
-		send: (msg: ServerMessage) => void,
-	): Promise<ClientSession> {
+	async attach(clientId: string, send: (msg: ServerMessage) => void): Promise<ClientSession> {
 		let cs = this.clients.get(clientId);
 		if (!cs) {
 			const inflight = this.pending.get(clientId);
@@ -3875,11 +3777,7 @@ export class AgentService {
 					}
 				}
 				// Sessions use the SDK default per-project dir — no per-client dir.
-				const creating = ClientSession.create(
-					clientId,
-					cwd,
-					this.stateStore,
-				).finally(() => {
+				const creating = ClientSession.create(clientId, cwd, this.stateStore).finally(() => {
 					this.pending.delete(clientId);
 				});
 				this.pending.set(clientId, creating);
@@ -3892,6 +3790,7 @@ export class AgentService {
 						type: "notice",
 						level: "info",
 						text: `已恢复上次的工作目录：${cwd}`,
+						textEn: `Restored the last working directory: ${cwd}`,
 					});
 				}
 			}
@@ -3943,6 +3842,7 @@ export class AgentService {
 	async disposeAll(): Promise<void> {
 		// Record still-streaming conversations BEFORE tearing anything down, so
 		// the next attach can tell the user what was lost (SIGTERM / update).
+		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
 		for (const [clientId, cs] of [...this.clients]) {
 			try {
 				const running = cs.streamingSummaries();

@@ -12,7 +12,7 @@
  */
 import { spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, rmSync, statSync, mkdirSync, watch } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, mkdirSync, watch, readdirSync } from "node:fs";
 import { basename, dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
@@ -532,6 +532,11 @@ export class ClientSession {
 	 *  (server draining — new work rejected). Default false for direct use. */
 	isQuiesced: () => boolean = () => false;
 	cwd: string;
+	/** Server-configured workspace root (AgentService root). Its immediate
+	 *  sub-directories are surfaced by pushProjects as first-class workspaces,
+	 *  so every project shows in the picker by default even before it has any
+	 *  session or recent usage. Set by AgentService.attach. */
+	rootWorkspace: string | undefined = undefined;
 	/** pi config dir (auth/models/skills). */
 	private readonly agentDir: string;
 	/** Persisted per-client UI state (last workspace + recent projects). */
@@ -3433,13 +3438,29 @@ export class ClientSession {
 					if (prev === undefined || t > prev) map.set(s.cwd, t);
 				}
 			}
+			// Always surface the immediate sub-workspaces under the configured
+			// workspace root, so every project appears in the picker by default
+			// (not only once it has sessions / was recently opened). Hidden dirs
+			// and non-directories are skipped; tombstoned (user-removed) ones stay
+			// hidden even though they are still on disk.
+			const root = this.rootWorkspace ?? this.cwd;
+			try {
+				for (const entry of readdirSync(root, { withFileTypes: true })) {
+					if (entry.name.startsWith(".")) continue;
+					if (!entry.isDirectory() && !entry.isSymbolicLink()) continue;
+					const child = join(root, entry.name);
+					if (!removedProjects.has(child) && !map.has(child)) map.set(child, 0);
+				}
+			} catch {
+				// Root missing/unreadable — fall back to the session-derived list only.
+			}
 			// Only keep directories that still exist — a deleted/unmounted workspace
 			// is useless in the picker. Tombstoned entries (explicitly removed by
 			// the user) stay hidden even though session files still mention them.
 			const projects: ProjectSummary[] = [...map.entries()]
 				.filter(([path]) => !removedProjects.has(path) && existsSync(path))
 				.map(([path, lastUsed]) => ({ path, lastUsed }))
-				.sort((a, b) => b.lastUsed - a.lastUsed)
+				.sort((a, b) => b.lastUsed - a.lastUsed || a.path.localeCompare(b.path))
 				.slice(0, 20);
 			this.emit({ type: "projects", projects });
 		} catch {
@@ -3985,6 +4006,7 @@ export class AgentService {
 		cs.notifyInterrupted(this.stateStore.takeInterrupted(clientId));
 		cs.attachSink(send);
 		// Forward hooks (set once by index.ts) to every session.
+		cs.rootWorkspace = this.cwd;
 		cs.onQuit = this.onQuit;
 		cs.onToolEvent = this.onToolEvent;
 		cs.pluginToolsProvider = this.pluginToolsProvider;

@@ -120,6 +120,29 @@ export function ScmPanel({ chat, send, terminal, active, onSwitchToTerminal }: S
 	const [notRepo, setNotRepo] = useState(false);
 	const [commitMsg, setCommitMsg] = useState("");
 
+	/** Discover multi-repos list on SCM status query */
+	const [discoveredRepos, setDiscoveredRepos] = useState<string[]>([]);
+	const [selectedRepo, setSelectedRepo] = useState<string>(() => {
+		try {
+			if (chat.state?.cwd) {
+				return localStorage.getItem(`pi-web-ui:scm-selected-repo:${chat.state.cwd}`) || "";
+			}
+		} catch {}
+		return "";
+	});
+
+	// Synchronize selectedRepo when cwd changes
+	useEffect(() => {
+		if (chat.state?.cwd) {
+			try {
+				const saved = localStorage.getItem(`pi-web-ui:scm-selected-repo:${chat.state.cwd}`) || "";
+				setSelectedRepo(saved);
+			} catch {
+				setSelectedRepo("");
+			}
+		}
+	}, [chat.state?.cwd]);
+
 	/** Monotonic request id — responses are matched per pending slot below. */
 	const seqRef = useRef(0);
 	const statusReqRef = useRef(-1);
@@ -139,6 +162,9 @@ export function ScmPanel({ chat, send, terminal, active, onSwitchToTerminal }: S
 	 * states always settle — no queues or timeouts needed on this side.
 	 */
 	const applyScmData = useCallback((data: Extract<ServerMessage, { type: "scm_data" }>) => {
+		if (data.discoveredRepos) {
+			setDiscoveredRepos(data.discoveredRepos);
+		}
 		if (data.reqId === statusReqRef.current) {
 			statusReqRef.current = -1;
 			setBusy(false);
@@ -239,14 +265,14 @@ export function ScmPanel({ chat, send, terminal, active, onSwitchToTerminal }: S
 		): boolean => {
 			if (!chat.ready || chat.status !== "open") return false;
 			const id = ++seqRef.current;
-			if (!send({ ...msg, reqId: id } as ClientMessage)) {
+			if (!send({ ...msg, repoPath: selectedRepo || undefined, reqId: id } as ClientMessage)) {
 				seqRef.current -= 1;
 				return false;
 			}
 			slot.current = id;
 			return true;
 		},
-		[chat.ready, chat.status, send],
+		[chat.ready, chat.status, send, selectedRepo],
 	);
 
 	/* ------------------------------------------------------------------ */
@@ -323,6 +349,8 @@ export function ScmPanel({ chat, send, terminal, active, onSwitchToTerminal }: S
 			const def: CommandDef = { name: title, command, cwd: "${pwd}" };
 			let targetId: string;
 			const existing = chat.terminals.find((tm) => tm.title === title);
+			const targetCwd = chat.state?.cwd ? (selectedRepo ? `${chat.state.cwd}/${selectedRepo}` : chat.state.cwd) : "";
+
 			if (existing) {
 				terminal.restart(existing.id);
 				send({
@@ -340,7 +368,7 @@ export function ScmPanel({ chat, send, terminal, active, onSwitchToTerminal }: S
 					id: targetId,
 					conversationId: chat.activeConversationId || chat.state?.conversationId || "",
 					title,
-					cwd: chat.state?.cwd ?? "",
+					cwd: targetCwd || chat.state?.cwd || "",
 					cols: 80,
 					rows: 24,
 					running: true,
@@ -351,7 +379,7 @@ export function ScmPanel({ chat, send, terminal, active, onSwitchToTerminal }: S
 			terminal.select(targetId);
 			onSwitchToTerminal();
 		},
-		[chat.ready, chat.state?.cwd, chat.terminals, onSwitchToTerminal, send, terminal],
+		[chat.ready, chat.state?.cwd, chat.terminals, onSwitchToTerminal, send, terminal, selectedRepo],
 	);
 
 	const handleCommit = useCallback(() => {
@@ -504,6 +532,52 @@ export function ScmPanel({ chat, send, terminal, active, onSwitchToTerminal }: S
 	return (
 		<div className="scm-view">
 			<div className="scm-header">
+				{discoveredRepos.length > 1 && (
+					<div className="scm-repo-selector-row">
+						<span className="scm-repo-label">{t("scmRepo") || "Repository:"}</span>
+						<select
+							className="scm-select scm-repo-select"
+							value={selectedRepo}
+							onChange={(e) => {
+								const val = e.target.value;
+								setSelectedRepo(val);
+								try {
+									if (chat.state?.cwd) {
+										localStorage.setItem(`pi-web-ui:scm-selected-repo:${chat.state.cwd}`, val);
+									}
+								} catch {}
+								// Trigger immediate SCM panel refresh on switch
+								setStatus(null);
+								setBranches([]);
+								setStatMap(new Map());
+								setHistory([]);
+								setSelectedCommit(null);
+								setCommitDetail("");
+								setFileDiff(null);
+								setSelected(null);
+								setError(null);
+								// Delay status refresh slightly so the state update registers
+								setTimeout(() => {
+									if (!chat.ready || chat.status !== "open") return;
+									const id = ++seqRef.current;
+									if (send({ type: "scm_status", repoPath: val || undefined, reqId: id } as ClientMessage)) {
+										statusReqRef.current = id;
+										setBusy(true);
+									} else {
+										seqRef.current -= 1;
+									}
+								}, 50);
+							}}
+						>
+							{discoveredRepos.map((r) => (
+								<option key={r} value={r}>
+									{r === "" ? `[Root] ${chat.state?.cwd?.split(/[\\/]/).pop() || "workspace"}` : r}
+								</option>
+							))}
+						</select>
+					</div>
+				)}
+
 				<div className="scm-title-row">
 					<span className="scm-title">
 						<FiGitBranch />

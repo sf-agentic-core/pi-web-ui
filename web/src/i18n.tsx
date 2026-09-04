@@ -588,6 +588,7 @@ const zh = {
 	scmTooManyFailures: "Git 查询连续失败，请点击刷新重试",
 	scmRunsInTerminal: "提交 / 切换分支 / 推送 / 拉取在终端中执行",
 	scmViewTerminal: "去终端",
+	scmRepo: "当前仓库",
 
 	/* model config modal */
 	editProvider: "编辑服务商",
@@ -1394,6 +1395,7 @@ const en: Record<keyof typeof zh, string> = {
 	scmTooManyFailures: "Git queries keep failing — click refresh to retry",
 	scmRunsInTerminal: "Commit / branch switch / push / pull run in the terminal",
 	scmViewTerminal: "Open terminal",
+	scmRepo: "Repository",
 
 	/* model config modal */
 	editProvider: "Edit provider",

@@ -3532,7 +3532,7 @@ export class ClientSession {
 	async scmQuery(
 		kind: "status" | "history" | "filediff" | "commit",
 		reqId: number,
-		arg?: { path?: string; hash?: string },
+		arg?: { path?: string; hash?: string; repoPath?: string },
 	): Promise<void> {
 		return this.files.scmQuery(kind, reqId, arg);
 	}

@@ -436,6 +436,8 @@ const DEFAULT_CONV_TITLE = "新对话";
 /** First user text in a session, truncated for the conversation list. */
 function conversationTitle(session: AgentSession): string {
 	try {
+		const customName = session.sessionName?.trim();
+		if (customName) return customName;
 		for (const m of session.agent.state.messages) {
 			if (m.role !== "user") continue;
 			const content = m.content as unknown;
@@ -2097,6 +2099,20 @@ export class ClientSession {
 		setModel: (id) => this.setModel(id),
 		setCwd: (path) => this.setCwd(path),
 		setThinking: (level) => this.setThinking(level),
+		renameSession: async (name) => {
+			this.session.setSessionName(name);
+			this.conv.title = name;
+			this.invalidateSessionInfos();
+			this.emitConversations();
+			await this.pushSessions();
+			this.emit({
+				type: "notice",
+				level: "info",
+				text: `已重命名当前会话为「${name}」`,
+				textEn: `Renamed current session to "${name}"`,
+			});
+			this.flushSnapshot();
+		},
 		refreshSessions: () => this.refreshSessions(),
 		afterReload: () => this.applyTerminalToolGating(this.session),
 		pluginCommands: () => this.pluginCommandsProvider?.() ?? [],
@@ -2465,7 +2481,7 @@ export class ClientSession {
 			// rename entirely. A failed send still leaves the name, which matches
 			// what the user typed intent-wise; the entry_appended fallback below
 			// re-derives it from the persisted transcript when needed.
-			if (conv.title === DEFAULT_CONV_TITLE && text.trim()) {
+			if (conv.title === DEFAULT_CONV_TITLE && text.trim() && !conv.session.sessionName?.trim()) {
 				const trimmed = text.trim().replace(/\s+/g, " ");
 				conv.title = trimmed.length > 30 ? `${trimmed.slice(0, 30)}…` : trimmed;
 				this.emitConversations();

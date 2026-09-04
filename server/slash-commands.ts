@@ -27,6 +27,7 @@ export interface SlashHost {
 	setModel: (modelId: string) => Promise<void>;
 	setCwd: (path: string) => Promise<void>;
 	setThinking: (level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => void;
+	renameSession?: (name: string) => Promise<void> | void;
 	refreshSessions: () => Promise<void>;
 	/** supervisor 的优雅重启调度；返回 false 时 exec 兜底 process.exit(0)。 */
 	onQuit?: () => boolean;
@@ -51,6 +52,13 @@ export const NATIVE_COMMANDS: {
 	argumentHintEn?: string;
 }[] = [
 	{ name: "new", description: "新建对话", descriptionEn: "New chat" },
+	{
+		name: "name",
+		description: "重命名当前会话",
+		descriptionEn: "Set session display name",
+		argumentHint: "<名称>",
+		argumentHintEn: "<name>",
+	},
 	{
 		name: "model",
 		description: "切换模型",
@@ -172,6 +180,32 @@ export class SlashCommandsService {
 			case "new":
 				await this.host.newChat();
 				return true;
+			case "name": {
+				const trimmed = args.trim();
+				if (!trimmed) {
+					const current = this.host.getSession().sessionName;
+					this.host.emit({
+						type: "notice",
+						level: "info",
+						text: current ? `当前会话名称：${current}。用法：/name <名称>` : `用法：/name <名称>`,
+						textEn: current ? `Current session name: ${current}. Usage: /name <name>` : `Usage: /name <name>`,
+					});
+					return true;
+				}
+				if (this.host.renameSession) {
+					await this.host.renameSession(trimmed);
+				} else {
+					this.host.getSession().setSessionName(trimmed);
+					await this.host.refreshSessions();
+					this.host.emit({
+						type: "notice",
+						level: "info",
+						text: `已重命名当前会话为「${trimmed}」`,
+						textEn: `Renamed current session to "${trimmed}"`,
+					});
+				}
+				return true;
+			}
 			case "model": {
 				if (!args) {
 					const current = this.host.getSession().model;

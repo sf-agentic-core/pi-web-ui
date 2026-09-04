@@ -307,13 +307,13 @@ export type ClientMessage =
 	// -- source-control panel (read-only git queries, server-side execFile) --
 	/** SCM refresh payload: status + branches + numstat (history loads
 	 *  lazily via scm_history so big repos don't pay for it every refresh). */
-	| { type: "scm_status"; reqId: number }
+	| { type: "scm_status"; reqId: number; repoPath?: string }
 	/** Commit graph for the history tab (lazy-loaded). */
-	| { type: "scm_history"; reqId: number }
+	| { type: "scm_history"; reqId: number; repoPath?: string }
 	/** Staged + worktree diffs for one file. */
-	| { type: "scm_filediff"; reqId: number; path: string }
+	| { type: "scm_filediff"; reqId: number; path: string; repoPath?: string }
 	/** Full patch of one commit. */
-	| { type: "scm_commit"; reqId: number; hash: string }
+	| { type: "scm_commit"; reqId: number; hash: string; repoPath?: string }
 	| { type: "new_chat" }
 	/** Edit a past user question and re-ask it (forks a new session at that point). */
 	| {
@@ -1166,6 +1166,9 @@ export type ServerMessage =
 			untracked?: boolean;
 			/** commit payload */
 			text?: string;
+			/** multi-repo discovery */
+			discoveredRepos?: string[];
+			currentRepoPath?: string;
 	  }
 	| {
 			type: "path_completions";

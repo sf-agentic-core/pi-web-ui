@@ -2016,7 +2016,7 @@ export class DshClientSession {
 	async scmQuery(
 		kind: "status" | "history" | "filediff" | "commit",
 		reqId: number,
-		opts?: { path?: string; hash?: string },
+		opts?: { path?: string; hash?: string; repoPath?: string },
 	): Promise<void> {
 		// 走 FilesService：只读 git 查询 + git-dir watcher（外部提交 → scm_changed
 		// 面板自动刷新）+ 越界/notRepo 统一处理。

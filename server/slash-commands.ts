@@ -28,6 +28,7 @@ export interface SlashHost {
 	setCwd: (path: string) => Promise<void>;
 	setThinking: (level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => void;
 	renameSession?: (name: string) => Promise<void> | void;
+	forkSession?: (newName?: string) => Promise<void> | void;
 	refreshSessions: () => Promise<void>;
 	/** supervisor 的优雅重启调度；返回 false 时 exec 兜底 process.exit(0)。 */
 	onQuit?: () => boolean;
@@ -52,6 +53,13 @@ export const NATIVE_COMMANDS: {
 	argumentHintEn?: string;
 }[] = [
 	{ name: "new", description: "新建对话", descriptionEn: "New chat" },
+	{
+		name: "fork",
+		description: "Bifurca la conversación actual en una nueva",
+		descriptionEn: "Fork current conversation into a new one",
+		argumentHint: "[nuevo nombre]",
+		argumentHintEn: "[new name]",
+	},
 	{
 		name: "name",
 		description: "重命名当前会话",
@@ -179,6 +187,18 @@ export class SlashCommandsService {
 		switch (name) {
 			case "new":
 				await this.host.newChat();
+				return true;
+			case "fork":
+				if (this.host.forkSession) {
+					await this.host.forkSession(args || undefined);
+				} else {
+					this.host.emit({
+						type: "notice",
+						level: "error",
+						text: "当前环境不支持 bifurcar 会话",
+						textEn: "Forking session is not supported in the current environment",
+					});
+				}
 				return true;
 			case "name": {
 				const trimmed = args.trim();

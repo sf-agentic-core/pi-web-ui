@@ -2118,6 +2118,71 @@ export class ClientSession {
 			});
 			this.flushSnapshot();
 		},
+		forkSession: async (newName) => {
+			if (this.quiesceBlocked()) return;
+			const leafId = this.session.sessionManager.getLeafId();
+			if (!leafId) {
+				this.emit({
+					type: "notice",
+					level: "warning",
+					text: "当前会话没有任何消息，无法 bifurcar",
+					textEn: "Cannot fork: current session has no messages",
+				});
+				this.flushSnapshot();
+				return;
+			}
+			try {
+				const originalTitle = this.conv.title;
+				const prevModel = this.session.agent.state.model ?? null;
+				// Create the fork at the active leaf position
+				const result = await this.runtime.fork(leafId, { position: "at" });
+				if (result.cancelled) {
+					this.emit({
+						type: "notice",
+						level: "info",
+						text: "已取消 bifurcar 会话",
+						textEn: "Fork cancelled",
+					});
+					this.flushSnapshot();
+					return;
+				}
+				await this.bindSession();
+				
+				// Restore model
+				if (prevModel && this.sharedModelRuntime) {
+					try {
+						await this.session.setModel(prevModel);
+						const pm = prevModel as unknown as { provider: string; id: string };
+						await this.restoreKeyForModel(`${pm.provider}/${pm.id}`, this.cwd);
+					} catch {
+						// model no longer resolvable
+					}
+				}
+
+				// Apply title name
+				const finalTitle = newName ? newName.trim() : `${originalTitle} (Fork)`;
+				this.session.setSessionName(finalTitle);
+				this.conv.title = finalTitle;
+				this.invalidateSessionInfos();
+				this.emitConversations();
+				await this.pushSessions();
+
+				this.emit({
+					type: "notice",
+					level: "info",
+					text: `会话已成功 bifurcado como «${finalTitle}»`,
+					textEn: `Session successfully forked as "${finalTitle}"`,
+				});
+			} catch (err) {
+				this.emit({
+					type: "notice",
+					level: "error",
+					text: `Bifurcación fallida: ${(err as Error).message}`,
+					textEn: `Fork failed: ${(err as Error).message}`,
+				});
+			}
+			this.flushSnapshot();
+		},
 		refreshSessions: () => this.refreshSessions(),
 		afterReload: () => this.applyTerminalToolGating(this.session),
 		pluginCommands: () => this.pluginCommandsProvider?.() ?? [],

@@ -463,7 +463,7 @@ export interface DispatchSession {
 	scmQuery(
 		kind: "status" | "history" | "filediff" | "commit",
 		reqId: number,
-		opts?: { path?: string; hash?: string },
+		opts?: { path?: string; hash?: string; repoPath?: string },
 	): Promise<void>;
 	readFile(path: string): Promise<void>;
 	writeFile(path: string, text: string): Promise<void>;
@@ -821,16 +821,16 @@ wss.on("connection", (ws) => {
 				void cs.searchSessions(msg.query, msg.reqId);
 				break;
 			case "scm_status":
-				void cs.scmQuery("status", msg.reqId);
+				void cs.scmQuery("status", msg.reqId, { repoPath: msg.repoPath });
 				break;
 			case "scm_history":
-				void cs.scmQuery("history", msg.reqId);
+				void cs.scmQuery("history", msg.reqId, { repoPath: msg.repoPath });
 				break;
 			case "scm_filediff":
-				void cs.scmQuery("filediff", msg.reqId, { path: msg.path });
+				void cs.scmQuery("filediff", msg.reqId, { path: msg.path, repoPath: msg.repoPath });
 				break;
 			case "scm_commit":
-				void cs.scmQuery("commit", msg.reqId, { hash: msg.hash });
+				void cs.scmQuery("commit", msg.reqId, { hash: msg.hash, repoPath: msg.repoPath });
 				break;
 			case "read_file":
 				void cs.readFile(msg.path);

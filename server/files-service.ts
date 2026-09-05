@@ -10,6 +10,7 @@ import { resolve, relative, sep } from "node:path";
 import type { ServerMessage, FileEntry, FileSearchResult } from "./protocol.js";
 import { previewKind, looksLikeText, decodeText, hexDump, countLines } from "./text-sniff.js";
 import { gitDirOf, isNotRepoError, scmStatus, scmHistory, scmFileDiff, scmCommitDetail } from "./scm.js";
+import { discoverGitRepos } from "./git-discovery.js";
 
 export const IS_WIN32 = process.platform === "win32";
 /** 预览只读文件前 512KB。 */
@@ -278,19 +279,38 @@ export class FilesService {
 	async scmQuery(
 		kind: "status" | "history" | "filediff" | "commit",
 		reqId: number,
-		arg?: { path?: string; hash?: string },
+		arg?: { path?: string; hash?: string; repoPath?: string },
 	): Promise<void> {
-		const cwd = this.host.getActiveCwd();
+		const workspaceRoot = this.host.getActiveCwd();
+		const repoPath = arg?.repoPath ?? "";
+		const cwd = repoPath ? resolve(workspaceRoot, repoPath) : workspaceRoot;
+
 		if (kind === "status") this.watchGitDir(cwd);
 		try {
 			if (kind === "status") {
 				const data = await scmStatus(cwd);
-				this.host.emit({ type: "scm_data", reqId, kind, ok: true, ...data });
+				const discovered = await discoverGitRepos(workspaceRoot);
+				this.host.emit({
+					type: "scm_data",
+					reqId,
+					kind,
+					ok: true,
+					...data,
+					discoveredRepos: discovered,
+					currentRepoPath: repoPath,
+				});
 				return;
 			}
 			if (kind === "history") {
 				const history = await scmHistory(cwd);
-				this.host.emit({ type: "scm_data", reqId, kind, ok: true, history });
+				this.host.emit({
+					type: "scm_data",
+					reqId,
+					kind,
+					ok: true,
+					history,
+					currentRepoPath: repoPath,
+				});
 				return;
 			}
 			if (kind === "filediff" && arg?.path) {
@@ -307,16 +327,25 @@ export class FilesService {
 					ok: true,
 					stagedText: staged,
 					worktreeText: worktree,
+					currentRepoPath: repoPath,
 				});
 				return;
 			}
 			if (kind === "commit" && arg?.hash && /^[0-9a-f]{7,40}$/i.test(arg.hash)) {
 				const text = await scmCommitDetail(cwd, arg.hash);
-				this.host.emit({ type: "scm_data", reqId, kind, ok: true, text });
+				this.host.emit({
+					type: "scm_data",
+					reqId,
+					kind,
+					ok: true,
+					text,
+					currentRepoPath: repoPath,
+				});
 				return;
 			}
-			throw new Error("无效的 scm 查询参数");
+			throw new Error("无有效 de scm 查询参数");
 		} catch (err) {
+			const discovered = kind === "status" ? await discoverGitRepos(workspaceRoot) : [];
 			if (isNotRepoError(err)) {
 				// Not a repo — a valid empty answer so the panel shows its hint.
 				this.host.emit({
@@ -335,6 +364,8 @@ export class FilesService {
 					branches: [],
 					stats: {},
 					history: [],
+					discoveredRepos: discovered,
+					currentRepoPath: repoPath,
 				});
 				this.unwatchGit();
 				return;
@@ -345,6 +376,8 @@ export class FilesService {
 				kind,
 				ok: false,
 				error: err instanceof Error ? err.message : String(err),
+				discoveredRepos: discovered,
+				currentRepoPath: repoPath,
 			});
 		}
 	}

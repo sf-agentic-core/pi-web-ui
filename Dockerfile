@@ -18,7 +18,7 @@ ENV NODE_ENV=production
 # node-pty falls back to node-gyp when no prebuilt binary matches — keep the
 # toolchain around so `npm ci` works on any platform.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv make g++ curl wget git openssh-client ca-certificates jq unzip gnupg apt-transport-https lsb-release vim \
+    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv make g++ curl wget git openssh-client ca-certificates jq unzip gnupg apt-transport-https lsb-release \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Platform CLI toolchain (mirrors the Discord tachikoma image) ---
@@ -51,6 +51,14 @@ RUN ARCH=$(dpkg --print-architecture) && \
     tar -xz -C /usr/local/bin -f /tmp/k9s.tar.gz k9s && \
     chmod +x /usr/local/bin/k9s && \
     rm /tmp/k9s.tar.gz
+
+# --- vim (in its OWN layer, separate from the heavy apt line above) ---
+# Keeping editor additions out of the big toolchain RUN preserves Docker layer
+# cache: editing editor packages never rebuilds the gh/gcloud/kubectl/terraform
+# chain (~10 min on ARM64).
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends vim && \
+    rm -rf /var/lib/apt/lists/*
 
 # DSH engine (PI_WEB_ENGINE=dsh) needs the full @deepseek-ai/dsh runtime tree
 # (nested ~196 packages) as a subprocess — global install is the canonical way.

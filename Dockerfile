@@ -52,6 +52,15 @@ RUN ARCH=$(dpkg --print-architecture) && \
     chmod +x /usr/local/bin/k9s && \
     rm /tmp/k9s.tar.gz
 
+# --- gke-gcloud-auth-plugin (kubectl/k9s exec credential plugin for GKE) ---
+# kubectl GKE contexts authenticate via the exec plugin; without it k9s/kubectl
+# fail with "executable gke-gcloud-auth-plugin not found". The cloud-sdk apt
+# repo is already configured above, so this is a single small package. Own
+# layer so toolchain edits keep the Docker layer cache.
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends google-cloud-cli-gke-gcloud-auth-plugin && \
+    rm -rf /var/lib/apt/lists/*
+
 # DSH engine (PI_WEB_ENGINE=dsh) needs the full @deepseek-ai/dsh runtime tree
 # (nested ~196 packages) as a subprocess — global install is the canonical way.
 # Skipped implicitly when the image never enables the dsh engine (just unused).

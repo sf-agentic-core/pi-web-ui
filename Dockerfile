@@ -18,7 +18,7 @@ ENV NODE_ENV=production
 # node-pty falls back to node-gyp when no prebuilt binary matches — keep the
 # toolchain around so `npm ci` works on any platform.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv make g++ curl wget git openssh-client ca-certificates jq unzip gnupg apt-transport-https lsb-release \
+    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv make g++ curl wget git openssh-client ca-certificates jq unzip gnupg apt-transport-https lsb-release vim \
     && rm -rf /var/lib/apt/lists/*
 
 # --- Platform CLI toolchain (mirrors the Discord tachikoma image) ---
@@ -41,6 +41,16 @@ RUN mkdir -p /etc/apt/keyrings && \
     mv /root/.local/bin/uv /usr/local/bin/uv && \
     mv /root/.local/bin/uvx /usr/local/bin/uvx && \
     pip3 install --no-cache-dir --break-system-packages pre-commit checkov
+
+# --- k9s (Kubernetes TUI) — pinned for reproducibility; same GitHub-release
+# pattern as argocd above. Runs fine over the browser terminal's real PTY
+# (TERM=xterm-256color) and picks up the mounted ~/.kube/config by default.
+RUN ARCH=$(dpkg --print-architecture) && \
+    curl -sSL -o /tmp/k9s.tar.gz \
+      https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_Linux_${ARCH}.tar.gz && \
+    tar -xz -C /usr/local/bin -f /tmp/k9s.tar.gz k9s && \
+    chmod +x /usr/local/bin/k9s && \
+    rm /tmp/k9s.tar.gz
 
 # DSH engine (PI_WEB_ENGINE=dsh) needs the full @deepseek-ai/dsh runtime tree
 # (nested ~196 packages) as a subprocess — global install is the canonical way.

@@ -2147,7 +2147,7 @@ export class ClientSession {
 					return;
 				}
 				await this.bindSession();
-				
+
 				// Restore model
 				if (prevModel && this.sharedModelRuntime) {
 					try {

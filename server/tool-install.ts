@@ -192,15 +192,22 @@ export async function installTool(spec: string, deps: ToolDeps): Promise<Install
 	return { ok: true, binary: found };
 }
 
-/** 已安装的工具列表（`mise ls`，去掉表头）。 */
+/** 已安装的工具列表（`mise ls --json`）。
+ *
+ *  ⚠️ 用 `--json`，不是 `--porcelain`：后者在这个 mise 版本上直接报
+ *  "unexpected argument"，白白返回空列表（实测踩过）。 */
 export async function listTools(deps: ToolDeps): Promise<string[]> {
 	const mise = findMise(deps);
 	if (!mise) return [];
-	const res = runCommand(`${mise} ls --porcelain`, { cwd: homeOf(deps) });
+	const res = runCommand(`${mise} ls --json --installed`, { cwd: homeOf(deps) });
 	const { code, output } = await res.done;
 	if (code !== 0) return [];
-	return output
-		.split("\n")
-		.map((l) => l.trim())
-		.filter(Boolean);
+	try {
+		const data = JSON.parse(output) as Record<string, { version?: string }[]>;
+		return Object.entries(data).flatMap(([name, versions]) =>
+			(versions ?? []).map((v) => `${name} ${v.version ?? "?"}`),
+		);
+	} catch {
+		return [];
+	}
 }

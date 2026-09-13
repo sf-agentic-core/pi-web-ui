@@ -149,6 +149,14 @@ export const BUILTIN_RECIPES: Record<string, CliAuthRecipe> = {
 		creds: ["~/.config/aws"],
 		note: "AWS 需要多段输入（keyID + secret + region），请在终端执行 `aws configure`（凭据会落在 ~/.config/aws，持久化）/ AWS needs several inputs: run `aws configure` in the terminal",
 	},
+	flux: {
+		label: "Flux",
+		// ⚠️ En mise el paquete del CLI de Flux es `flux2`: `flux` NO existe
+		// (y resolveria a `flux-operator`, que no es el CLI).
+		install: "flux2",
+		creds: ["~/.config/flux"],
+		note: "Flux usa el kubeconfig del clúster: no se autentica aparte / Flux uses the cluster kubeconfig",
+	},
 	terraform: {
 		label: "Terraform",
 		creds: ["~/.terraform.d"],

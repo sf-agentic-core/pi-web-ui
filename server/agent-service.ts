@@ -133,6 +133,7 @@ import {
 	type AgentMessage,
 } from "./serialize.js";
 import { loadCommands, saveCommandsFile, TerminalManager } from "./terminals.js";
+import { bootstrapTools } from "./tool-install.js";
 
 const SNAPSHOT_INTERVAL_MS = 60;
 /** While assistant deltas are flowing, live rendering is carried by
@@ -3634,6 +3635,20 @@ export class ClientSession {
 			// /reload 同样重读磁盘 settings.json——重放重试覆盖 + 终端门控。
 			this.applyRetryOverrides();
 			this.applyToolGating(this.session);
+			// RFC 002 第 3 阶段：/reload = 「从磁盘重读一切」，所以也重新调和
+			// 工具清单（ConfigMap 挂载）。改完清单 → PR → ArgoCD → /reload，
+			// 不用重启 pod。fire-and-forget：不阻塞 reload。
+			void bootstrapTools({
+				home: process.env.HOME ?? "/home/tachikoma",
+				emit: (m) => this.emit(m as ServerMessage),
+			}).catch((err) => {
+				this.emit({
+					type: "notice",
+					level: "warning",
+					text: `工具清单调和失败：${err instanceof Error ? err.message : String(err)}`,
+					textEn: `Toolset reconcile failed: ${err instanceof Error ? err.message : String(err)}`,
+				});
+			});
 		},
 		pluginCommands: () => this.pluginCommandsProvider?.() ?? [],
 		execPluginCommand: async (name, args) => {

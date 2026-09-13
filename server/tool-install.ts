@@ -21,7 +21,7 @@ import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync } from "node
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CliAuthEmit } from "./cli-auth.js";
-import { findOnPath, runCommand } from "./cli-auth.js";
+import { findOnPath, loadRecipes, runCommand } from "./cli-auth.js";
 
 /** 固定版本：可复现，不用「latest」这种会漂的别名。 */
 export const MISE_VERSION = "v2026.9.6";
@@ -134,6 +134,54 @@ export function validSpec(spec: string): boolean {
 	return spec.length <= 80 && SPEC_RE.test(spec);
 }
 
+/**
+ * 把「二进制名」映射到 mise 的「包名」，数据来自菜谱的 `install` 字段。
+ * 真实案例：用户敲 `/tool install tofu`，但 mise 里叫 `opentofu`。
+ */
+export function resolvePackageName(spec: string, home: string): string {
+	const [name, version] = spec.split("@");
+	const recipes = loadRecipes(home).recipes;
+	const pkg = recipes[name]?.install;
+	return pkg && pkg !== name ? `${pkg}${version ? `@${version}` : ""}` : spec;
+}
+
+/**
+ * mise 的错误输出前面有一堆横幅噪音（版本号、进度条、`--verbose` 提示），
+ * 真正的原因在后面 —— 之前的实现只取末尾几行，把「工具名不对」这个关键
+ * 信息吃掉了，用户看到的是 `cargo:tfocus · mise ERROR Version: ...`。
+ */
+export function cleanMiseError(output: string): string {
+	const keep = output
+		.split("\n")
+		.map((l) => l.trim())
+		.filter(Boolean)
+		.filter(
+			(l) =>
+				!/^mise by @jdx/.test(l) &&
+				!/^mise [✓✗~]/.test(l) &&
+				!/^mise [█▌▐░]/.test(l) &&
+				!/^mise (ERROR )?Version:/.test(l) &&
+				!/--verbose|MISE_VERBOSE/.test(l) &&
+				!/^\^+$/.test(l),
+		);
+	// 保留 mise 的「Did you mean?」建议 —— 那正是用户最需要的。
+	return keep.slice(-4).join(" · ");
+}
+
+/** 在 mise 注册表里搜工具（解决「不知道包名叫什么」）。 */
+export async function searchTools(term: string, deps: ToolDeps): Promise<string[]> {
+	const mise = findMise(deps);
+	if (!mise || !validSpec(term)) return [];
+	const res = runCommand(`${mise} search ${term}`, { cwd: homeOf(deps) });
+	const { code, output } = await res.done;
+	if (code !== 0) return [];
+	return output
+		.split("\n")
+		.map((l) => l.trim())
+		.filter(Boolean)
+		.slice(0, 20);
+}
+
 export interface InstallResult {
 	ok: boolean;
 	/** 装完后在 PATH 上找到的可执行文件。 */
@@ -155,11 +203,22 @@ export async function installTool(spec: string, deps: ToolDeps): Promise<Install
 	}
 	const mise = await ensureMise(deps);
 	if (!mise) return { ok: false };
+	// 用户给的是二进制名（tofu）；mise 认的是包名（opentofu）。
+	const pkg = resolvePackageName(spec, homeOf(deps));
+	if (pkg !== spec) {
+		deps.emit({
+			type: "notice",
+			level: "info",
+			text: `${spec} 在 mise 里叫 ${pkg}，改用后者`,
+			textEn: `${spec} is called ${pkg} in mise — using that instead`,
+		});
+	}
 	// `use -g` 既安装又写进全局 config（= 可复现的「清单」）。
-	const res = runCommand(`${mise} use -g ${spec}`, { cwd: homeOf(deps) });
+	const res = runCommand(`${mise} use -g ${pkg}`, { cwd: homeOf(deps) });
 	const { code, output } = await res.done;
 	if (code !== 0) {
-		const why = output.trim().split("\n").slice(-3).join(" · ");
+		const why =
+			cleanMiseError(output) || `mise 无输出 / no output. Prueba /tool search <término> para encontrar el nombre`;
 		deps.emit({
 			type: "notice",
 			level: "error",

@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { findOnPath, type CliAuthEmit, runCliAuth } from "../../server/cli-auth.js";
-import { installTool, listTools, validSpec } from "../../server/tool-install.js";
+import { cleanMiseError, installTool, listTools, resolvePackageName, validSpec } from "../../server/tool-install.js";
 import type { UiQuestion } from "../../server/protocol.js";
 
 /**
@@ -139,11 +139,13 @@ describe("installTool / listTools (con mise falso, procesos reales)", () => {
 		const oldPath = process.env.PATH;
 		process.env.PATH = `${join(h.home, ".local", "bin")}:${oldPath}`;
 		try {
-			const res = await installTool("tofu@1.9.0", { ...h.deps, mise });
+			// Nombre SIN alias: con alias, el shim se llama como el BINARIO (tofu), no
+			// como el paquete (opentofu/mise falso no modela eso).
+			const res = await installTool("supertool@1.0.0", { ...h.deps, mise });
 			expect(res.ok).toBe(true);
 			// el shim se linkó al PATH → findOnPath lo ve
-			expect(res.binary).toBe(join(h.home, ".local", "bin", "tofu"));
-			expect(existsSync(join(h.home, ".local", "bin", "tofu"))).toBe(true);
+			expect(res.binary).toBe(join(h.home, ".local", "bin", "supertool"));
+			expect(existsSync(join(h.home, ".local", "bin", "supertool"))).toBe(true);
 			expect(h.notices.at(-1)?.textEn).toContain("persisted");
 		} finally {
 			process.env.PATH = oldPath;
@@ -178,5 +180,39 @@ describe("installTool / listTools (con mise falso, procesos reales)", () => {
 	it("sin mise y sin poder descargar → listTools devuelve vacío (no rompe)", async () => {
 		const h = harness();
 		expect(await listTools(h.deps)).toEqual([]);
+	});
+});
+
+describe("resolvePackageName (el fallo real que reportó el usuario)", () => {
+	it("traduce el nombre del binario al paquete de mise", () => {
+		const home = tmp();
+		// tofu → opentofu  (esto es lo que rompía `/tool install tofu`)
+		expect(resolvePackageName("tofu", home)).toBe("opentofu");
+		// con versión
+		expect(resolvePackageName("tofu@1.12.6", home)).toBe("opentofu@1.12.6");
+		// az → azure-cli
+		expect(resolvePackageName("az", home)).toBe("azure-cli");
+		// los que coinciden se dejan tal cual
+		expect(resolvePackageName("gh", home)).toBe("gh");
+		expect(resolvePackageName("herramienta-desconocida", home)).toBe("herramienta-desconocida");
+	});
+});
+
+describe("cleanMiseError (no perder la causa entre el ruido de mise)", () => {
+	it("descarta el banner y conserva la causa + la sugerencia", () => {
+		const raw = [
+			"mise by @jdx – installing 1 tool",
+			"mise ✗ tofu@latest  1ms · failed: tofu not found in mise tool registry",
+			"mise ████████████████ 1/1 · installed 0 tools · 1 failed in 12ms",
+			"mise ERROR Failed to install tofu@latest: tofu not found in mise tool registry",
+			"Did you mean?",
+			"  aqua:tofuutils/tofuenv",
+		].join("\n");
+		const clean = cleanMiseError(raw);
+		expect(clean).toContain("tofu not found in mise tool registry");
+		expect(clean).toContain("Did you mean?");
+		// el ruido no debe aparecer
+		expect(clean).not.toContain("installing 1 tool");
+		expect(clean).not.toContain("mise by @jdx");
 	});
 });

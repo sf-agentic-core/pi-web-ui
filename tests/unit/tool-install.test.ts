@@ -48,7 +48,7 @@ function fakeMise(home: string, opts: { fail?: boolean } = {}): string {
 		`#!/bin/sh
 echo "$@" >> "${log}"
 ${opts.fail ? "echo 'no such tool' >&2; exit 2" : ""}
-if [ "$1" = "ls" ]; then printf 'tofu 1.9.0\\nawscli 2.15.0\\n'; exit 0; fi
+if [ "$1" = "ls" ]; then printf '{"tofu":[{"version":"1.9.0"}],"awscli":[{"version":"2.15.0"}]}'; exit 0; fi
 if [ "$1" = "reshim" ]; then exit 0; fi
 mkdir -p "${shims}"
 for a in "$@"; do case "$a" in */*|use|-g) ;; *) printf '#!/bin/sh\\necho ok\\n' > "${shims}/$(echo $a | cut -d@ -f1)"; chmod +x "${shims}/$(echo $a | cut -d@ -f1)";; esac; done

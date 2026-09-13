@@ -1039,6 +1039,16 @@ export type ServerMessage =
 	 *  and on request (get_commands). */
 	| { type: "slash_commands"; commands: SlashCommandInfo[] }
 	| { type: "notice"; level: "info" | "warning" | "error"; text: string; textEn?: string }
+	/** OAuth device-flow progress (from /login). Rendered as a persistent
+	 *  banner on the client until a `done`/`error` state arrives. */
+	| {
+			type: "auth_flow";
+			state: "device_code" | "waiting" | "done" | "error";
+			verificationUri?: string;
+			userCode?: string;
+			message?: string;
+			messageEn?: string;
+	  }
 	/** The watched git dir changed outside the panel (terminal commit,
 	 *  CLI, IDE) — the client should re-run its scm_status query. */
 	| { type: "scm_changed" }

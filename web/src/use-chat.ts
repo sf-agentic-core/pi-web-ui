@@ -52,6 +52,15 @@ export interface Notice {
 	textEn?: string;
 }
 
+/** OAuth device-flow state for /login (persistent banner on the client). */
+export interface AuthFlow {
+	state: "device_code" | "waiting" | "done" | "error";
+	verificationUri?: string;
+	userCode?: string;
+	message?: string;
+	messageEn?: string;
+}
+
 /** A terminal tab. The output stream itself lives in the xterm instance
  * (via the terminal bridge) — this is just the tab metadata. */
 export interface TerminalMeta extends TerminalInfo {
@@ -73,6 +82,8 @@ export interface ChatState {
 	 */
 	toolStatuses: Map<string, ToolStatus>;
 	notices: Notice[];
+	/** OAuth device-flow banner state (from /login). Null while no flow is active. */
+	authFlow: AuthFlow | null;
 	serverVersion?: string;
 	/** 引擎标识（pi | dsh）—— ready 消息携带，底栏显示徽标。 */
 	engine?: string;
@@ -222,6 +233,7 @@ type Action =
 	| { type: "tool_status"; status: ToolStatus }
 	| { type: "notice"; notice: Notice }
 	| { type: "dismiss_notice"; id: number }
+	| { type: "auth_flow"; flow: AuthFlow }
 	| { type: "ready"; serverVersion: string; protocolVersion?: number; engine?: string }
 	| { type: "sessions"; sessions: SessionSummary[] }
 	| {
@@ -559,6 +571,12 @@ function reducer(state: ChatState, action: Action): ChatState {
 				...state,
 				notices: state.notices.filter((n) => n.id !== action.id),
 			};
+		case "auth_flow":
+			// done/error clear the banner; active states keep it visible.
+			if (action.flow.state === "done" || action.flow.state === "error") {
+				return { ...state, authFlow: null };
+			}
+			return { ...state, authFlow: action.flow };
 		case "sessions":
 			return { ...state, sessions: action.sessions };
 		case "conversations":
@@ -727,6 +745,7 @@ export function useChat() {
 		liveOutputs: new Map(),
 		toolStatuses: new Map(),
 		notices: [],
+		authFlow: null,
 		sessions: [],
 		conversations: [],
 		activeConversationId: "",
@@ -924,6 +943,18 @@ export function useChat() {
 					});
 					break;
 				}
+				case "auth_flow":
+					dispatch({
+						type: "auth_flow",
+						flow: {
+							state: msg.state,
+							verificationUri: msg.verificationUri,
+							userCode: msg.userCode,
+							message: msg.message,
+							messageEn: msg.messageEn,
+						},
+					});
+					break;
 				case "sessions":
 					dispatch({ type: "sessions", sessions: msg.sessions });
 					break;

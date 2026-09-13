@@ -97,6 +97,8 @@ export const NATIVE_COMMANDS: {
 	},
 	{ name: "resume", description: "刷新会话列表", descriptionEn: "Refresh session list" },
 	{ name: "reload", description: "重新加载扩展、技能与模板", descriptionEn: "Reload extensions, skills & templates" },
+	{ name: "login", description: "登录账号 (OAuth)", descriptionEn: "Sign in with an account (OAuth)", argumentHint: "[provider]", argumentHintEn: "[provider]" },
+	{ name: "logout", description: "退出账号", descriptionEn: "Sign out", argumentHint: "[provider]", argumentHintEn: "[provider]" },
 	{ name: "help", description: "显示全部命令", descriptionEn: "Show all commands" },
 	{ name: "copy", description: "复制上一条助手回复", descriptionEn: "Copy last assistant reply" },
 	{ name: "pi-web-ui:quit", description: "退出服务", descriptionEn: "Quit server (supervisor will restart)" },
@@ -369,6 +371,37 @@ export class SlashCommandsService {
 				}, 300);
 				return true;
 			}
+			case "login": {
+				const providerId = args.trim().split(/\s+/)[0] || "github-copilot";
+				this.host.emit({
+					type: "notice",
+					level: "info",
+					text: `正在为 ${providerId} 启动登录…`,
+					textEn: `Starting login for ${providerId}…`,
+				});
+				void this.runLogin(providerId);
+				return true;
+			}
+			case "logout": {
+				const providerId = args.trim().split(/\s+/)[0] || "github-copilot";
+				try {
+					await this.host.getSession().modelRuntime.logout(providerId);
+					this.host.emit({
+						type: "notice",
+						level: "info",
+						text: `已退出 ${providerId}`,
+						textEn: `Signed out of ${providerId}`,
+					});
+				} catch (err) {
+					this.host.emit({
+						type: "notice",
+						level: "error",
+						text: `退出失败：${(err as Error).message}`,
+						textEn: `Sign out failed: ${(err as Error).message}`,
+					});
+				}
+				return true;
+			}
 			case "help":
 			case "copy":
 				// Client-side UI actions — the client handles them before sending;
@@ -377,6 +410,75 @@ export class SlashCommandsService {
 			default:
 				// 插件命令：拦截执行（纯配置动作，与内置命令同级，不到 SDK）。
 				return (await this.host.execPluginCommand?.(name, args)) ?? false;
+		}
+	}
+
+	/** OAuth device flow: streams progress to the client via `auth_flow`
+	 *  messages (persistent banner) and closes with a notice. Fire-and-forget:
+	 *  `exec` returns immediately; the user completes the flow in the browser.
+	 *  The device flow never calls `prompt` (no interactive round-trip needed). */
+	private async runLogin(providerId: string): Promise<void> {
+		try {
+			const session = this.host.getSession();
+			await session.modelRuntime.login(providerId, "oauth", {
+				prompt: async () => {
+					throw new Error("Interactive auth prompt is not supported in pi-web-ui yet");
+				},
+				notify: (event) => {
+					const e = event as {
+						type?: string;
+						userCode?: string;
+						verificationUri?: string;
+						url?: string;
+						message?: string;
+					};
+					if (e.type === "device_code") {
+						this.host.emit({
+							type: "auth_flow",
+							state: "device_code",
+							verificationUri: e.verificationUri,
+							userCode: e.userCode,
+						});
+					} else if (e.type === "auth_url") {
+						// Non-device providers expose a URL + instructions instead.
+						this.host.emit({
+							type: "auth_flow",
+							state: "device_code",
+							verificationUri: e.url,
+							userCode: "",
+						});
+					} else if (e.type === "info") {
+						this.host.emit({
+							type: "notice",
+							level: "info",
+							text: e.message ?? "",
+							textEn: e.message ?? "",
+						});
+					} else {
+						this.host.emit({
+							type: "auth_flow",
+							state: "waiting",
+							message: e.message,
+						});
+					}
+				},
+			});
+			this.host.emit({ type: "auth_flow", state: "done", message: providerId });
+			this.host.emit({
+				type: "notice",
+				level: "info",
+				text: `✅ 已登录 ${providerId}`,
+				textEn: `✅ Logged in to ${providerId}`,
+			});
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.host.emit({ type: "auth_flow", state: "error", message });
+			this.host.emit({
+				type: "notice",
+				level: "error",
+				text: `登录失败：${message}`,
+				textEn: `Login failed: ${message}`,
+			});
 		}
 	}
 }

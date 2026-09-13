@@ -35,7 +35,7 @@ import { useChat } from "./use-chat";
 import type { ClientMessage, CommandDef, PromptAttachment, UiMessage } from "./types";
 import { useT, useI18n } from "./i18n";
 import { FiAlertCircle, FiAlertTriangle, FiChevronsLeft, FiChevronsRight, FiInfo, FiX } from "react-icons/fi";
-import type { Notice } from "./use-chat";
+import type { AuthFlow, Notice } from "./use-chat";
 import { fileToProcessedImage, isRasterImage, type ProcessedImage } from "./image-paste";
 import { randomUuid } from "./uuid";
 import { loadSoundSettings, playSound, saveSoundSettings, type SoundKind, type SoundSettings } from "./sounds";
@@ -64,6 +64,46 @@ export interface PendingAttachment {
  *  hovering PAUSES the timer (stays visible as long as the pointer is over it),
  *  resuming when the pointer leaves. Clicking the toast body does NOT hide it —
  *  only the × button dismisses (and the auto timer). */
+/** OAuth device-flow banner: shows the verification URL + code and a "waiting"
+ *  state. The reducer clears it on done/error (the notice carries the result). */
+function AuthFlowBanner({ flow }: { flow: AuthFlow }) {
+	const t = useT();
+	const { verificationUri, userCode } = flow;
+	if (flow.state === "device_code" && verificationUri) {
+		return (
+			<div className="protocol-banner auth-flow-banner">
+				<span>
+					{t("authLoginOpen")}{" "}
+					<a href={verificationUri} target="_blank" rel="noreferrer" style={{ fontWeight: 600 }}>
+						{verificationUri}
+					</a>
+					{userCode ? (
+						<>
+							{" · "}
+							{t("authLoginCode")}:{" "}
+							<code style={{ fontWeight: 700, letterSpacing: "0.05em" }}>{userCode}</code>
+						</>
+					) : null}
+				</span>
+				{userCode ? (
+					<button
+						type="button"
+						onClick={() => void navigator.clipboard.writeText(userCode)}
+						style={{ marginLeft: "auto", cursor: "pointer", whiteSpace: "nowrap" }}
+					>
+						{t("authLoginCopy")}
+					</button>
+				) : null}
+			</div>
+		);
+	}
+	return (
+		<div className="protocol-banner auth-flow-banner">
+			<span>⏳ {flow.message ?? t("authLoginWaiting")}</span>
+		</div>
+	);
+}
+
 function NoticeToast({ notice, onDismiss }: { notice: Notice; onDismiss: (id: number) => void }) {
 	const t = useT();
 	const { locale } = useI18n();
@@ -627,6 +667,7 @@ export function App() {
 				onThemeChange={switchTheme}
 			/>
 			{chat.protocolMismatch && <div className="protocol-banner">⚠ {t("protocolMismatch")}</div>}
+			{chat.authFlow && <AuthFlowBanner flow={chat.authFlow} />}
 			<div className="notices">
 				{chat.notices.map((n) => (
 					<NoticeToast key={n.id} notice={n} onDismiss={dismissNotice} />

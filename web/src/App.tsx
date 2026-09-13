@@ -80,8 +80,7 @@ function AuthFlowBanner({ flow }: { flow: AuthFlow }) {
 					{userCode ? (
 						<>
 							{" · "}
-							{t("authLoginCode")}:{" "}
-							<code style={{ fontWeight: 700, letterSpacing: "0.05em" }}>{userCode}</code>
+							{t("authLoginCode")}: <code style={{ fontWeight: 700, letterSpacing: "0.05em" }}>{userCode}</code>
 						</>
 					) : null}
 				</span>

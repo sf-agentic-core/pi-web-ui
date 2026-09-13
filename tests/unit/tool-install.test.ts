@@ -200,6 +200,8 @@ describe("resolvePackageName (el fallo real que reportó el usuario)", () => {
 		expect(resolvePackageName("tofu@1.12.6", home)).toBe("opentofu@1.12.6");
 		// az → azure-cli
 		expect(resolvePackageName("az", home)).toBe("azure-cli");
+		// flux → flux2: `flux` no existe en mise (resolveria a flux-operator, que NO es el CLI).
+		expect(resolvePackageName("flux", home)).toBe("flux2");
 		// los que coinciden se dejan tal cual
 		expect(resolvePackageName("gh", home)).toBe("gh");
 		expect(resolvePackageName("herramienta-desconocida", home)).toBe("herramienta-desconocida");

@@ -656,6 +656,7 @@ const heartbeatTimer = setInterval(() => {
 // 引擎分发：PI_WEB_ENGINE=dsh 时使用 DeepSeek Harness 引擎（server/dsh/），
 // 默认 pi 引擎。同一 wire 协议，前端无感知（ready/health 携带 engine 字段）。
 import { DshAgentService } from "./dsh/dsh-agent-service.js";
+import { bootstrapTools } from "./tool-install.js";
 
 /** dispatch 表所需的方法契约（pi 的 ClientSession 与 dsh 的 DshClientSession
  *  都结构兼容；dsh 引擎对不支持的功能做简化实现）。 */
@@ -1567,6 +1568,24 @@ httpServer.listen(PORT, HOST, () => {
 
 // 上传文件保留期清理：启动扫一次 + 每 6 小时一次（best-effort，见 uploads.ts）
 scheduleUploadCleanup();
+
+/** RFC 002 第 3 阶段：启动时从清单（ConfigMap 挂载）引导工具集到持久卷。
+ *  不阻塞启动：第一次可能要下载 mise（~100MB），在后台完成。每次启动都
+ *  「调和」清单——声明的工具保持版本，用户装的不受影响（幂等）。 */
+function scheduleToolsetBootstrap(): void {
+	const home = process.env.HOME ?? "/home/tachikoma";
+	void bootstrapTools({
+		home,
+		emit: (m) => {
+			// 启动时还没有 WebSocket 客户端：进度落到日志即可。
+			if (m.type === "notice") console.log(`  [toolset] ${m.textEn}`);
+			else if (m.type === "auth_flow" && m.state === "error") console.warn(`  [toolset] ${m.message}`);
+		},
+	}).catch((err) => {
+		console.warn("  [toolset] bootstrap failed:", err instanceof Error ? err.message : err);
+	});
+}
+scheduleToolsetBootstrap();
 
 // Local control socket (status / quiesce / unquiesce) — same data dir the
 // CLI uses, so `pi-web-ui server status|quiesce|unquiesce` just works.

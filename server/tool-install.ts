@@ -17,7 +17,7 @@
  * 之后就在持久卷上。
  */
 import { spawnSync } from "node:child_process";
-import { chmodSync, existsSync, mkdirSync, readdirSync, symlinkSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, symlinkSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { CliAuthEmit } from "./cli-auth.js";
@@ -157,7 +157,7 @@ export function cleanMiseError(output: string): string {
 		.filter(Boolean)
 		.filter(
 			(l) =>
-				!/^mise by @jdx/.test(l) &&
+				!l.startsWith("mise by @jdx") &&
 				!/^mise [✓✗~]/.test(l) &&
 				!/^mise [█▌▐░]/.test(l) &&
 				!/^mise (ERROR )?Version:/.test(l) &&
@@ -249,6 +249,57 @@ export async function installTool(spec: string, deps: ToolDeps): Promise<Install
 			: `✅ Installed ${spec} (persisted). Note: the binary name may differ from the package name — see /tool list`,
 	});
 	return { ok: true, binary: found };
+}
+
+/**
+ * 读取清单文件（纯文本，一行一个 spec，`#` 是注释）。
+ *
+ * 用纯文本而不是 TOML 是刻意的：mise.toml 需要解析器（又一项依赖，且和
+ * YAML 一样的教训）。一个「一行一个 spec」的清单零依赖、零解析，语义也
+ * 一眼能懂。RFC 里写的 mise.toml 是目标，这个纯文本清单是零依赖的等价物。
+ */
+export function readManifest(path?: string): string[] {
+	if (!path || !existsSync(path)) return [];
+	return readFileSync(path, "utf8")
+		.split("\n")
+		.map((l) => l.trim())
+		.filter((l) => l && !l.startsWith("#"));
+}
+
+/**
+ * 启动时的工具引导（RFC 002 第 3 阶段）：从清单读取声明的工具集，逐个
+ * `mise use -g`（幂等）装到持久卷。
+ *
+ * 语义是「调和」而非「只装一次」：每次启动都跑，清单里的工具保持声明的
+ * 版本；用户用 /tool install 装的其它工具不受影响。清单来自 Git（ConfigMap）。
+ * 返回值是成功安装的 spec 列表（用于汇总提示）。
+ */
+export async function bootstrapTools(deps: ToolDeps, manifest?: string[]): Promise<string[]> {
+	const specs = manifest ?? readManifest(process.env.TOOLSET_FILE);
+	if (specs.length === 0) return [];
+	const ok: string[] = [];
+	for (const spec of specs) {
+		if (!validSpec(spec)) {
+			deps.emit({
+				type: "notice",
+				level: "warning",
+				text: `清单里的无效条目（忽略）：${spec}`,
+				textEn: `Invalid entry in toolset manifest (skipped): ${spec}`,
+			});
+			continue;
+		}
+		const r = await installTool(spec, deps);
+		if (r.ok) ok.push(spec);
+	}
+	if (ok.length > 0) {
+		deps.emit({
+			type: "notice",
+			level: "info",
+			text: `🧰 工具集已就绪：${ok.join(", ")}`,
+			textEn: `🧰 Toolset ready: ${ok.join(", ")}`,
+		});
+	}
+	return ok;
 }
 
 /** 已安装的工具列表（`mise ls --json`）。

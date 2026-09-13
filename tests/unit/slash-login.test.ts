@@ -102,18 +102,14 @@ describe("prompt 通用入口（所有 provider 的关键路径）", () => {
 	it("text 提问：不标记敏感", async () => {
 		const calls: UiQuestion[][] = [];
 		const i = await interaction(answer([], "acme.ghe.com"), calls);
-		expect(await i.prompt({ type: "text", message: "GitHub Enterprise URL/domain" })).toBe(
-			"acme.ghe.com",
-		);
+		expect(await i.prompt({ type: "text", message: "GitHub Enterprise URL/domain" })).toBe("acme.ghe.com");
 		expect(calls[0][0].secret).toBeFalsy();
 	});
 
 	it("Enterprise 域名留空：返回空串而不是当成取消", async () => {
 		// 前端「提交空文本」= { selected: [], 无 custom }；取消 = answers: []。
 		const i = await interaction(answer([]));
-		await expect(i.prompt({ type: "text", message: "GitHub Enterprise URL/domain" })).resolves.toBe(
-			"",
-		);
+		await expect(i.prompt({ type: "text", message: "GitHub Enterprise URL/domain" })).resolves.toBe("");
 	});
 
 	it("select 提问：回传选项 id（前端给的是 label）", async () => {
@@ -131,9 +127,7 @@ describe("prompt 通用入口（所有 provider 的关键路径）", () => {
 
 	it("用户取消：抛 Login cancelled 并报错，不静默继续", async () => {
 		const i = await interaction(null);
-		await expect(i.prompt({ type: "secret", message: "Paste your API key" })).rejects.toThrow(
-			"Login cancelled",
-		);
+		await expect(i.prompt({ type: "secret", message: "Paste your API key" })).rejects.toThrow("Login cancelled");
 	});
 });
 

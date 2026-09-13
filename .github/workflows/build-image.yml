@@ -1,0 +1,86 @@
+# ==============================================================================
+# Build & push de la imagen de pi-web-ui
+# ==============================================================================
+# Deriva de `agent-base` (repo tachikoma), que es donde vive el toolchain, los
+# 8 MCPs y Chromium. Aquí solo se añade la app web.
+#
+# ⚠️ `AGENT_BASE_TAG` es un PIN explícito: para adoptar una base nueva hay que
+# cambiarlo aquí. Es la contrapartida consciente de tener una base compartida en
+# otro repo — y evita que un cambio de base rompa esta imagen sin que nadie lo vea.
+#
+# linux/amd64: el clúster es x86_64 (el build local del VPS es ARM64).
+# ==============================================================================
+name: Build image
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "server/**"
+      - "web/**"
+      - "package.json"
+      - "package-lock.json"
+      - ".github/workflows/build-image.yml"
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - ".github/workflows/build-image.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  REGISTRY: rg.fr-par.scw.cloud
+  NAMESPACE: sf-agentic-core
+  # Pin de la base compartida. Actualizar al adoptar una base nueva.
+  AGENT_BASE_TAG: "5a5c5088b470bf6ab551e431c86dc597fca36328"
+  IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
+
+jobs:
+  build:
+    name: build amd64
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Preflight — secret del registry
+        env:
+          SCW_SECRET_KEY: ${{ secrets.SCW_SECRET_KEY }}
+        run: |
+          if [ -z "${SCW_SECRET_KEY:-}" ]; then
+            echo "::error::Falta el secret SCW_SECRET_KEY en este repositorio."
+            echo "::error::Créalo con: gh secret set SCW_SECRET_KEY -R ${{ github.repository }}"
+            exit 1
+          fi
+          echo "Confirmado: el secret está presente."
+
+      - name: Login en Scaleway Container Registry
+        uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: nologin
+          password: ${{ secrets.SCW_SECRET_KEY }}
+
+      - name: Build & push piweb
+        uses: docker/build-push-action@v6.19.2
+        with:
+          context: .
+          file: Dockerfile
+          platforms: linux/amd64
+          push: true
+          build-args: |
+            BASE_IMAGE=${{ env.REGISTRY }}/${{ env.NAMESPACE }}/agent-base:${{ env.AGENT_BASE_TAG }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.NAMESPACE }}/piweb:${{ env.IMAGE_TAG }}
+          cache-from: type=gha,scope=piweb
+          cache-to: type=gha,mode=max,scope=piweb

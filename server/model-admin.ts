@@ -15,6 +15,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ModelRuntime } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage, UiModelConfigEntry, UiProviderConfig, ProviderKeyInfo } from "./protocol.js";
+import { pick, type ServerLang } from "./i18n.js";
 
 /** ClientSession 提供给本服务的宿主能力（窄接口）。 */
 export interface ModelAdminHost {
@@ -69,6 +70,62 @@ function stripJsonComments(src: string): string {
 		i++;
 	}
 	return out;
+}
+
+/** Merge a UI-submitted provider config into the existing models.json entry.
+ *
+ * 表单（`UiProviderConfig`）只承载 UI 认识的字段：provider 级 name/api/baseUrl/
+ * apiKey/authHeader，模型级 id/name/reasoning/input/contextWindow/maxTokens。
+ * models.json 里还可能有 UI 不认识的字段——provider 级 headers（浏览器拿不到，
+ * 见 listModelsConfig）、模型级 api/baseUrl/cost/compat/thinkingLevelMap（手写或
+ * 脚本写入，pi-ai 靠它们决定请求地址与推理格式）。按表单整体重建条目会把这些字段
+ * 静默抹掉，可能把可用的配置改坏：模型级 baseUrl 丢失后会回退到对该 api 适配器
+ * 无效的地址（例如 opencode-go 的 anthropic baseUrl），请求直接打到不存在的路径。
+ *
+ * 所以这里以已有条目为底、表单字段覆盖：表单没提到的字段原样保留，表单清空的可选
+ * 字段才真正删除；`models` 仍是「表单即全集」——表单里删掉的 id 会被移除。
+ */
+export function mergeProviderConfigEntry(
+	prevEntry: Record<string, unknown> | undefined,
+	config: UiProviderConfig,
+	models: UiModelConfigEntry[],
+): Record<string, unknown> {
+	const prevModels = new Map<string, Record<string, unknown>>();
+	if (Array.isArray(prevEntry?.models)) {
+		for (const entry of prevEntry.models) {
+			if (!entry || typeof entry !== "object") continue;
+			const id = (entry as { id?: unknown }).id;
+			if (typeof id === "string" && id.trim()) prevModels.set(id.trim(), entry as Record<string, unknown>);
+		}
+	}
+	const mergedModels = models.map((model) => {
+		// 旧条目同 id 的字段（api/baseUrl/cost/compat/…）先铺底，表单字段覆盖。
+		const merged: Record<string, unknown> = { ...(prevModels.get(model.id) ?? {}), id: model.id };
+		if (model.name?.trim()) merged.name = model.name.trim();
+		else delete merged.name;
+		if (model.reasoning) merged.reasoning = true;
+		else delete merged.reasoning;
+		if (model.input?.length) merged.input = model.input;
+		else delete merged.input;
+		if (model.contextWindow) merged.contextWindow = Number(model.contextWindow);
+		else delete merged.contextWindow;
+		if (model.maxTokens) merged.maxTokens = Number(model.maxTokens);
+		else delete merged.maxTokens;
+		return merged;
+	});
+
+	const mergedEntry: Record<string, unknown> = { ...prevEntry };
+	const apply = (key: string, value: unknown): void => {
+		if (value === undefined) delete mergedEntry[key];
+		else mergedEntry[key] = value;
+	};
+	apply("name", config.name?.trim() || undefined);
+	apply("api", config.api?.trim() || undefined);
+	apply("baseUrl", config.baseUrl?.trim() || undefined);
+	apply("apiKey", config.apiKey?.trim() || undefined);
+	apply("authHeader", config.authHeader ? true : undefined);
+	mergedEntry.models = mergedModels;
+	return mergedEntry;
 }
 
 /** Numeric metadata value (NaN/string "unknown" → undefined). */
@@ -211,6 +268,20 @@ export class ModelAdminService {
 	getActiveKeyName(provider: string): string | null {
 		const data = this.readProviderKeys();
 		return data[provider]?.activeKeyName ?? null;
+	}
+
+	/** Whether a named key still exists for a provider (no side effects, no
+	 *  notices). Restore paths use this to drop stale per-project references
+	 *  silently instead of going through activate (which notifies). */
+	hasProviderKey(provider: string, keyName: string): boolean {
+		const pid = provider.trim();
+		const targetName = keyName.trim();
+		if (!pid || !targetName) return false;
+		try {
+			return this.readProviderKeys()[pid]?.keys.some((k) => k.name === targetName) ?? false;
+		} catch {
+			return false;
+		}
 	}
 
 	/** Seed a provider's key list from an EXISTING auth.json credential (legacy
@@ -403,36 +474,43 @@ export class ModelAdminService {
 	}
 
 	/** Make a stored API key the ACTIVE one for a built-in provider by NAME (the
-	 *  server resolves the stored value from the name). */
-	async activateProviderKey(provider: string, keyName: string): Promise<void> {
+	 *  server resolves the stored value from the name). Returns true when the
+	 *  key is (now) active, false when it doesn't exist or the switch failed.
+	 *  `silent` suppresses all notices — for automatic project restores, which
+	 *  must self-heal stale references without spamming the user. */
+	async activateProviderKey(provider: string, keyName: string, opts?: { silent?: boolean }): Promise<boolean> {
 		const pid = provider.trim();
 		const targetName = keyName.trim();
+		const silent = opts?.silent === true;
+		const notice = (msg: ServerMessage) => {
+			if (!silent) this.host.emit(msg);
+		};
 		try {
 			const data = this.readProviderKeys();
 			const entry = data[pid];
 			const target = entry?.keys.find((k) => k.name === targetName);
 			if (!target) {
-				this.host.emit({
+				notice({
 					type: "notice",
 					level: "error",
 					text: `${pid} 的密钥「${targetName}」不存在`,
 					textEn: `Key "${targetName}" for ${pid} does not exist`,
 				});
-				return;
+				return false;
 			}
 			if (entry.activeKeyName === targetName) {
-				this.host.emit({
+				notice({
 					type: "notice",
 					level: "info",
 					text: `「${targetName}」已是当前密钥`,
 					textEn: `"${targetName}" is already the active key`,
 				});
-				return;
+				return true;
 			}
 			entry.activeKeyName = targetName;
 			this.writeProviderKeys(data);
 			await this.applyActiveKey(pid, target.apiKey);
-			this.host.emit({
+			notice({
 				type: "notice",
 				level: "info",
 				text: `⚡ 已切换到 ${pid} 的「${targetName}」`,
@@ -441,15 +519,18 @@ export class ModelAdminService {
 			await this.host.pushModels();
 			await this.listProviders();
 			this.listProviderKeys();
+			return true;
 		} catch (err) {
-			this.host.emit({
+			notice({
 				type: "notice",
 				level: "error",
 				text: `切换密钥失败：${(err as Error).message}`,
 				textEn: `Failed to switch key: ${(err as Error).message}`,
 			});
+			return false;
+		} finally {
+			if (!silent) this.host.flushSnapshot();
 		}
-		this.host.flushSnapshot();
 	}
 
 	/** Remove a stored API key by NAME. If it was active, the first remaining key
@@ -602,19 +683,19 @@ export class ModelAdminService {
 	 */
 	async cloneProvider(providerId: string, reqId: number): Promise<void> {
 		const pid = providerId.trim();
-		const fail = (error: string) => {
-			this.host.emit({ type: "notice", level: "error", text: error });
+		const fail = (error: string, errorEn?: string) => {
+			this.host.emit({ type: "notice", level: "error", text: error, textEn: errorEn });
 			this.host.emit({ type: "clone_provider_result", reqId, ok: false, error });
 		};
 		try {
 			if (!pid) {
-				fail("请填写服务商 ID");
+				fail("请填写服务商 ID", "Enter a provider ID");
 				return;
 			}
 			const mr = this.host.modelRuntime();
 			const p = mr.getProvider(pid);
 			if (!p) {
-				fail(`供应商 ${pid} 不存在`);
+				fail(`供应商 ${pid} 不存在`, `Provider ${pid} does not exist`);
 				return;
 			}
 			const noBaseUrl = !p.baseUrl;
@@ -643,7 +724,10 @@ export class ModelAdminService {
 				models = readModels();
 			}
 			if (models.length === 0) {
-				fail(`${pid} 的模型列表为空，无法复制（请稍后重试）`);
+				fail(
+					`${pid} 的模型列表为空，无法复制（请稍后重试）`,
+					`Model list for ${pid} is empty, cannot clone (retry later)`,
+				);
 				return;
 			}
 			// 供应商级 api 取占比最高，模型保留全量去重（避免 muse-spark 被过滤）
@@ -673,10 +757,13 @@ export class ModelAdminService {
 				text: noBaseUrl
 					? `📋 已复制 ${pid} → ${newId}（${kept.length} 个模型），该供应商无远程 baseUrl，已生成模板请手动填写 baseUrl 和新的 API 密钥后保存`
 					: `📋 已复制 ${pid} → ${newId}（${kept.length} 个模型），请填入新的 API 密钥后保存`,
+				textEn: noBaseUrl
+					? `📋 Cloned ${pid} → ${newId} (${kept.length} models); this provider has no remote baseUrl — template generated, fill in baseUrl and a new API key, then save`
+					: `📋 Cloned ${pid} → ${newId} (${kept.length} models); fill in the new API key, then save`,
 			});
 			this.host.emit({ type: "clone_provider_result", reqId, ok: true, config, configs: [config] });
 		} catch (err) {
-			fail(`复制服务商失败：${(err as Error).message}`);
+			fail(`复制服务商失败：${(err as Error).message}`, `Failed to clone provider: ${(err as Error).message}`);
 		}
 		this.host.flushSnapshot();
 	}
@@ -814,6 +901,31 @@ export class ModelAdminService {
 		this.host.emit({ type: "models_config", providers: list });
 	}
 
+	/** Re-read models.json from disk (hand/script edits outside the UI) and
+	 *  repush — same refresh tail that save_model_config runs. */
+	async reloadModelsConfig(): Promise<void> {
+		try {
+			await this.host.modelRuntime().refresh();
+			this.host.invalidatePiConfig();
+			await this.listModelsConfig();
+			await this.host.pushModels();
+			this.host.emit({
+				type: "notice",
+				level: "info",
+				text: "🔄 已从磁盘重新加载模型配置",
+				textEn: "🔄 Reloaded model config from disk",
+			});
+		} catch (err) {
+			this.host.emit({
+				type: "notice",
+				level: "error",
+				text: `重新加载模型配置失败：${(err as Error).message}`,
+				textEn: `Failed to reload model config: ${(err as Error).message}`,
+			});
+		}
+		this.host.flushSnapshot();
+	}
+
 	/** Numeric metadata value (NaN/string "unknown" → undefined). */
 	private static numMeta(v: unknown): number | undefined {
 		return typeof v === "number" && Number.isFinite(v) ? v : undefined;
@@ -890,10 +1002,12 @@ export class ModelAdminService {
 		apiKey?: string,
 		authHeader?: boolean,
 		api?: string,
+		/** 探测抛错文案语言（默认英文）；调用方可传 () => getLang() 实现跟随。 */
+		lang?: () => ServerLang,
 	): Promise<void> {
 		const emitError = (error: string) => this.host.emit({ type: "fetch_models_result", reqId, ok: false, error });
 		try {
-			const models = await ModelAdminService.probeModelsEndpoint(baseUrl, apiKey, authHeader, api);
+			const models = await ModelAdminService.probeModelsEndpoint(baseUrl, apiKey, authHeader, api, undefined, lang);
 			this.host.emit({ type: "fetch_models_result", reqId, ok: true, models });
 		} catch (err) {
 			emitError((err as Error).message);
@@ -912,17 +1026,24 @@ export class ModelAdminService {
 		authHeader?: boolean,
 		api?: string,
 		extraHeaders?: Record<string, string>,
+		/** 抛错文案语言（默认英文）；调用方可传 () => getLang() 实现跟随。 */
+		lang?: () => ServerLang,
 	): Promise<UiModelConfigEntry[]> {
+		const l = lang?.() ?? "en";
 		const base = (baseUrl ?? "").trim().replace(/\/+$/, "");
-		if (!base) throw new Error("请先填写 baseUrl");
+		if (!base) throw new Error(pick(l, "请先填写 baseUrl", "Enter the baseUrl first", "models.fetch.baseurl.missing"));
 		let url: URL;
 		try {
 			url = new URL(base);
 		} catch {
-			throw new Error(`baseUrl 无效：${base}`);
+			throw new Error(
+				pick(l, `baseUrl 无效：${base}`, `Invalid baseUrl: ${base}`, "models.fetch.baseurl.invalid", { base }),
+			);
 		}
 		if (url.protocol !== "http:" && url.protocol !== "https:") {
-			throw new Error("baseUrl 仅支持 http/https");
+			throw new Error(
+				pick(l, "baseUrl 仅支持 http/https", "baseUrl supports http/https only", "models.fetch.baseurl.protocol"),
+			);
 		}
 
 		const headers: Record<string, string> = {
@@ -952,9 +1073,14 @@ export class ModelAdminService {
 				return await fetch(u, { headers, signal: ac.signal });
 			} catch (err) {
 				if ((err as Error).name === "AbortError") {
-					throw new Error("请求超时（15 秒）");
+					throw new Error(pick(l, "请求超时（15 秒）", "Request timed out (15s)", "models.fetch.timeout"));
 				}
-				throw new Error(`请求失败：${(err as Error).message}`);
+				const errMessage = (err as Error).message;
+				throw new Error(
+					pick(l, `请求失败：${errMessage}`, `Request failed: ${errMessage}`, "models.fetch.request.error", {
+						errMessage,
+					}),
+				);
 			} finally {
 				clearTimeout(timer);
 			}
@@ -966,7 +1092,7 @@ export class ModelAdminService {
 		if (res && res.status === 404 && !/\/v\d+[a-z-]*$/.test(base)) {
 			res = await tryFetch(`${base}/v1/models`);
 		}
-		if (!res) throw new Error("请求失败");
+		if (!res) throw new Error(pick(l, "请求失败", "Request failed", "models.fetch.request.failed"));
 		if (!res.ok) {
 			let detail = "";
 			try {
@@ -974,7 +1100,17 @@ export class ModelAdminService {
 			} catch {
 				// response body already consumed / not text — ignore
 			}
-			throw new Error(`接口返回 HTTP ${res.status}${detail ? `：${detail}` : ""}`);
+			const detailSuffixZh = detail ? `：${detail}` : "";
+			const detailSuffixEn = detail ? `: ${detail}` : "";
+			throw new Error(
+				pick(
+					l,
+					`接口返回 HTTP ${res.status}${detailSuffixZh}`,
+					`Upstream returned HTTP ${res.status}${detailSuffixEn}`,
+					"models.fetch.upstream.http",
+					{ "res.status": res.status, detailSuffixZh, detailSuffixEn },
+				),
+			);
 		}
 		let models: UiModelConfigEntry[] = [];
 		try {
@@ -988,14 +1124,15 @@ export class ModelAdminService {
 				models = (json.models as unknown[]).map((m) => parseGoogleModel(m)).filter((m) => m.id);
 			}
 		} catch {
-			throw new Error("响应不是有效的 JSON");
+			throw new Error(pick(l, "响应不是有效的 JSON", "Response is not valid JSON", "models.fetch.invalid.json"));
 		}
 		// Dedupe by id (keep the first, most complete entry) and sort by id.
 		const seen = new Set<string>();
 		models = models
 			.filter((m) => (seen.has(m.id) ? false : (seen.add(m.id), true)))
 			.sort((a, b) => a.id.localeCompare(b.id));
-		if (models.length === 0) throw new Error("接口未返回任何模型");
+		if (models.length === 0)
+			throw new Error(pick(l, "接口未返回任何模型", "The endpoint returned no models", "models.fetch.no.models"));
 		return models;
 	}
 
@@ -1006,7 +1143,7 @@ export class ModelAdminService {
 	 * existing ids keep all manually-entered fields and only gain metadata
 	 * they were missing; brand-new ids are appended. Hot-reloads the runtime.
 	 */
-	async refreshProviderModels(providerId: string, reqId: number): Promise<void> {
+	async refreshProviderModels(providerId: string, reqId: number, lang?: () => ServerLang): Promise<void> {
 		const done = (ok: boolean, extra: { added?: number; total?: number; error?: string } = {}) =>
 			this.host.emit({ type: "refresh_provider_result", reqId, ok, ...extra });
 		try {
@@ -1024,7 +1161,12 @@ export class ModelAdminService {
 						models?: UiModelConfigEntry[];
 				  }
 				| undefined;
-			if (!saved?.baseUrl?.trim()) {
+			// 纯覆盖条目（只改 models，没有 provider 级 baseUrl）回退到运行时
+			// 已知的地址——内置 provider 的 baseUrl 本来就不在 models.json 里。
+			// 注意只拿来探测用，不写回磁盘：保持条目仍是纯覆盖。
+			const baseUrl =
+				saved?.baseUrl?.trim() || (this.host.modelRuntime().getProvider(pid)?.baseUrl ?? "").trim() || undefined;
+			if (!saved || !baseUrl) {
 				this.host.emit({
 					type: "notice",
 					level: "warning",
@@ -1034,11 +1176,12 @@ export class ModelAdminService {
 				return done(false, { error: "provider missing or no baseUrl" });
 			}
 			const fetched = await ModelAdminService.probeModelsEndpoint(
-				saved.baseUrl,
+				baseUrl,
 				saved.apiKey,
 				saved.authHeader === true ? true : undefined,
 				saved.api,
 				saved.headers as Record<string, string> | undefined,
+				lang,
 			);
 
 			// Merge: manual values win; fetched fills blanks and appends new ids.
@@ -1074,6 +1217,10 @@ export class ModelAdminService {
 					added > 0
 						? `🔄 已刷新 ${pid}：新增 ${added} 个模型，共 ${merged.length} 个`
 						: `🔄 已刷新 ${pid}：无新增模型（共 ${merged.length} 个）`,
+				textEn:
+					added > 0
+						? `🔄 Refreshed ${pid}: ${added} new models, ${merged.length} total`
+						: `🔄 Refreshed ${pid}: no new models (${merged.length} total)`,
 			});
 			return done(true, { added, total: merged.length });
 		} catch (err) {
@@ -1120,18 +1267,9 @@ export class ModelAdminService {
 		}
 		try {
 			const { providers } = this.readModelsConfig();
-			// headers never reach the browser, so the incoming config can't carry
-			// them — preserve the previously stored values when they are absent.
-			const prevHeaders = providers[pid]?.headers;
-			providers[pid] = {
-				...(config.name?.trim() ? { name: config.name.trim() } : {}),
-				...(config.api?.trim() ? { api: config.api.trim() } : {}),
-				...(config.baseUrl?.trim() ? { baseUrl: config.baseUrl.trim() } : {}),
-				...(config.apiKey?.trim() ? { apiKey: config.apiKey.trim() } : {}),
-				...(config.authHeader ? { authHeader: true } : {}),
-				...(prevHeaders && Object.keys(prevHeaders).length > 0 ? { headers: prevHeaders } : {}),
-				models,
-			};
+			// 合并而不是重建：UI 认识之外的字段（provider 级 headers、模型级 api/
+			// baseUrl/cost/compat/thinkingLevelMap）必须原样保留，见 mergeProviderConfigEntry。
+			providers[pid] = mergeProviderConfigEntry(providers[pid], config, models);
 			mkdirSync(this.host.agentDir, { recursive: true });
 			writeFileSync(this.modelsConfigPath(), JSON.stringify({ providers }, null, 2) + "\n");
 

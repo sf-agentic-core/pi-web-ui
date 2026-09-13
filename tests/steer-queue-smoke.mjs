@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const PORT = 8921;
-const URL = `ws://localhost:${PORT}/ws`;
+const URL = `ws://127.0.0.1:${PORT}/ws`;
 
 let server;
 let ws;
@@ -19,26 +19,28 @@ writeFileSync(join(fakeAgentDir, "models.json"), JSON.stringify({}), "utf8");
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
+// 服务端未就绪时连接会先被拒（尤其整批冒烟跑下来系统负载高、固定 sleep 不够）。
+// 用重试循环 + IPv4 字面量（避免 localhost→::1 解析差异）等就绪，而非单次尝试。
 async function connect() {
 	const { default: WebSocket } = await import("ws");
-	return new Promise((resolve, reject) => {
-		ws = new WebSocket(URL);
-		const timer = setTimeout(() => reject(new Error("no ready")), 8000);
-		ws.on("open", () => {
-			ws.send(JSON.stringify({ type: "hello", clientId: "smoke" }));
-		});
-		ws.on("message", (d) => {
-			if (JSON.parse(d.toString()).type === "ready") {
-				clearTimeout(timer);
-				resolve();
-			}
-		});
-		ws.on("error", (e) => {
-			console.error("[ws error]", e.message);
-			clearTimeout(timer);
-			reject(e);
-		});
-	});
+	for (let attempt = 0; attempt < 60; attempt++) {
+		try {
+			ws = new WebSocket(URL);
+			await new Promise((resolve, reject) => {
+				ws.on("open", () => {
+					ws.send(JSON.stringify({ type: "hello", clientId: "smoke" }));
+				});
+				ws.on("message", (d) => {
+					if (JSON.parse(d.toString()).type === "ready") resolve();
+				});
+				ws.on("error", reject);
+			});
+			return;
+		} catch {
+			await sleep(500);
+		}
+	}
+	throw new Error("server not ready");
 }
 
 let ok = false;
@@ -61,7 +63,7 @@ try {
 	});
 	server.stdout.on("data", (d) => process.stdout.write("[out] " + d));
 	server.stderr.on("data", (d) => process.stderr.write("[err] " + d));
-	await sleep(2500);
+	await sleep(800);
 
 	await connect();
 	await sleep(400);

@@ -16,9 +16,10 @@
  * 也让任意 UiMessage 都能传入。
  */
 /** PromptAttachment 的结构化镜像（与 server/protocol.ts 一致）。 */
+/** PromptAttachment 的结构化镜像（与 server/protocol.ts 一致）。 */
 export interface EditPromptAttachment {
 	path: string;
-	mode?: "inline" | "reference" | "lines";
+	mode?: "inline" | "reference" | "lines" | "page";
 	lines?: { start: number; end: number };
 	imageData?: string;
 	fileData?: string;
@@ -105,7 +106,13 @@ export function collectQuestionAttachments(
 				});
 				continue;
 			}
-			// 3) Workspace-path attachment (inline / reference / lines / folder)
+			// 3) Granted web page (page-picker 的「引用到对话」)：`path` 是页面 origin、
+			//    name 是标题；扩展的授权表与工作区无关，所以原样重发即可，服务端不读文件。
+			if (details.mode === "page" && details.path) {
+				atts.push({ path: details.path, mode: "page", name: details.name ?? details.path });
+				continue;
+			}
+			// 4) Workspace-path attachment (inline / reference / lines / folder)
 			//    — the relative path stays valid on the new branch, so a path +
 			//    mode spec is enough to re-attach it.
 			if (details.path && details.mode) {

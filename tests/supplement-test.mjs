@@ -1,7 +1,7 @@
 /**
- * 补充 button test: while the agent is replying, typing + clicking 补充
- * queues the message (followUp); it appears in the chat the moment the
- * current reply finishes, and the agent answers it.
+ * 排队（followUp）按钮 test：智能体回复期间，输入 + 点「排队」（运行中发送位那颗
+ * 对半胶囊的左半）把消息加队列；本轮回复一结束它立刻出现在聊天里，智能体随后回答。
+ * 同时覆盖对半胶囊的两个状态：无输入时两半禁用（胶囊变暗），输入后解锁可点。
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { portUp, freePort } from "./lib/port-utils.mjs";
@@ -66,20 +66,20 @@ await page
 	.then(() => check("first reply streaming", true))
 	.catch(() => check("first reply streaming", false, "no stop button"));
 
-// --- 2. type a supplement while streaming → 补充 button appears ---
+// --- 2. 流式中发送位 = 「排队|插队」对半胶囊；空输入时两半禁用，输入后解锁 ---
+const pill = page.locator(".split-send");
+const queueBtn = page.locator(".split-send .split-queue");
+const steerBtn = page.locator(".split-send .split-steer");
+check("对半胶囊在流式中出现", (await pill.count()) === 1, `count=${await pill.count()}`);
+check("空输入时两半禁用（胶囊 .disabled）", (await queueBtn.isDisabled()) && (await steerBtn.isDisabled()));
 await page.locator("textarea").fill("补充一句话：请再说一遍");
 await sleep(400);
-const supplementBtn = page.locator(".btn.supplement");
-check(
-	"补充 button visible while streaming",
-	(await supplementBtn.count()) === 1,
-	`count=${await supplementBtn.count()}`,
-);
+check("输入后两半解锁", (await queueBtn.isEnabled()) && (await steerBtn.isEnabled()));
 
-// --- 3. click 补充 → input clears + queue hint shows ---
-await supplementBtn.click();
+// --- 3. 点左半（排队）→ 输入框清空 + 队列提示出现 ---
+await queueBtn.click();
 await sleep(600);
-check("input cleared after 补充", (await page.locator("textarea").inputValue()) === "");
+check("input cleared after 排队", (await page.locator("textarea").inputValue()) === "");
 const hint = await page
 	.locator(".queue-hint")
 	.allTextContents()
@@ -90,27 +90,26 @@ check(
 	hint.join(" | "),
 );
 
-// --- 4. wait for the first reply to finish, then the supplement fires ---
+// --- 4. wait for the first reply to finish, then the queued message fires ---
 await page
 	.waitForSelector(".btn.stop", { state: "detached", timeout: 120000 })
 	.then(() => check("first reply finished", true))
 	.catch(() => check("first reply finished", false, "still streaming"));
 
-// The queued supplement delivers immediately after; its user message should
-// The queued supplement delivers immediately after; its user message should
+// The queued message delivers immediately after; its user message should
 // appear in the chat, then a second reply streams.
 const supplementSeen = await page
 	.waitForFunction(() => document.body.innerText.includes("补充一句话：请再说一遍"), { timeout: 180000 })
 	.then(() => true)
 	.catch(() => false);
-check("supplement message delivered right after reply", supplementSeen);
-// The second assistant reply must follow the supplement (count is
+check("queued message delivered right after reply", supplementSeen);
+// The second assistant reply must follow the queued message (count is
 // race-free even when the reply is fast).
 const secondReply = await page
 	.waitForFunction(() => document.querySelectorAll('.msg[data-role="assistant"]').length >= 2, { timeout: 90000 })
 	.then(() => true)
 	.catch(() => false);
-check("agent answered the supplement", secondReply);
+check("agent answered the queued message", secondReply);
 
 await browser.close();
 server.kill("SIGKILL");

@@ -2,12 +2,17 @@
  * Chromium, and exercises the terminal view end-to-end.
  * Run:  npm run build && node terminal-browser-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
+import { freePort } from "./lib/port-utils.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 
+// fileURLToPath（不是 URL.pathname）：Windows 上 ".pathname" 得到 "/E:/..."，
+// spawn 的 cwd 与脚本参数都不存在 → ENOENT，测试根本起不来。
+const ROOT = fileURLToPath(new URL("..", import.meta.url));
 const PORT = 30000 + Math.floor(Math.random() * 10000);
 const workdir = mkdtempSync(join(tmpdir(), "piweb-ui-"));
 const dataDir = mkdtempSync(join(tmpdir(), "piweb-ui-data-"));
@@ -15,16 +20,18 @@ process.env.PI_WEB_PORT = String(PORT);
 process.env.PI_WEB_CWD = workdir;
 process.env.PI_WEB_DATA_DIR = dataDir;
 
-const server = spawn(process.execPath, [join(new URL("..", import.meta.url).pathname, "dist", "server", "index.js")], {
-	cwd: new URL("..", import.meta.url).pathname,
+const server = spawn(process.execPath, [join(ROOT, "dist", "server", "index.js")], {
+	cwd: ROOT,
 	stdio: ["ignore", "pipe", "pipe"],
-	detached: true,
+	detached: process.platform !== "win32",
 });
 server.on("error", (e) => console.error("[srv spawn error]", e));
 server.stderr.on("data", (d) => process.stdout.write(`[srv!] ${d}`));
 process.on("exit", () => {
 	try {
-		process.kill(-server.pid, "SIGKILL");
+		// win32 没有负数 PID 的进程组，退回按端口清理。
+		if (process.platform === "win32") freePort(PORT);
+		else process.kill(-server.pid, "SIGKILL");
 	} catch {
 		/* gone */
 	}

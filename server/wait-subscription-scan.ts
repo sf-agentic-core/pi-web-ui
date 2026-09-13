@@ -278,6 +278,9 @@ export interface DisplacementDecisionInput {
 	reviewing: boolean;
 	wizardRunning: boolean;
 	streaming: boolean;
+	/** 存活 PTY 数（已退出、仅保留输出的终端不计入）——没有活进程的残留终端
+	 *  不应把空闲对话永久钉在运行列表里。Live PTY count only: exited
+	 *  terminals that merely retain output do not retain the conversation. */
 	openTerminals: number;
 	listed: boolean;
 	promptedSinceActive: boolean;

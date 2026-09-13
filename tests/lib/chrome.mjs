@@ -9,6 +9,11 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 
 const CANDIDATES = [
+	// Windows playwright 缓存
+	join(
+		homedir(),
+		"AppData/Local/ms-playwright/chromium_headless_shell-1243/chrome-headless-shell-win64/chrome-headless-shell.exe",
+	),
 	// playwright 缓存（各平台）
 	join(homedir(), "Library/Caches/ms-playwright/chromium_headless_shell-1228/chrome-headless-shell-mac-arm64/chrome-headless-shell"),
 	join(homedir(), "Library/Caches/ms-playwright/chrome-headless-shell-1228/chrome-headless-shell"),

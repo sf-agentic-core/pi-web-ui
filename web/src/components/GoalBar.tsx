@@ -2,6 +2,7 @@ import { memo, useEffect, useState } from "react";
 import { FiTarget, FiLock, FiUnlock, FiX, FiChevronUp } from "react-icons/fi";
 import type { GoalStatus, ModelInfo } from "../types";
 import { useT, useI18n } from "../i18n";
+import { appSend, useIsDsh } from "../app-globals";
 import { Dropdown, DropdownItem } from "./Dropdown";
 
 /** Messages this component sends. */
@@ -25,25 +26,16 @@ interface Props {
 	models: ModelInfo[];
 	modelsLoading: boolean;
 	activeConversationId: string;
-	/** 引擎 id（"pi" | "dsh"）—— DSH 无独立审查模型，隐藏 reviewModel 下拉。 */
-	engine?: string;
-	send: (msg: GoalBarMsg) => boolean;
 }
 
-export const GoalBar = memo(function GoalBar({
-	goal,
-	models,
-	modelsLoading,
-	activeConversationId,
-	engine,
-	send,
-}: Props) {
+export const GoalBar = memo(function GoalBar({ goal, models, modelsLoading, activeConversationId }: Props) {
 	const t = useT();
 	const { locale } = useI18n();
-	const goalDetail = locale === "en" && goal.statusEn ? goal.statusEn : goal.status || "";
-	const wizardDetail = locale === "en" && goal.wizard?.statusEn ? goal.wizard.statusEn : goal.wizard?.status || "";
+	const goalDetail = locale !== "zh" && goal.statusEn ? goal.statusEn : goal.status || "";
+	const wizardDetail = locale !== "zh" && goal.wizard?.statusEn ? goal.wizard.statusEn : goal.wizard?.status || "";
 	// DSH：无独立审查模型 —— 隐藏 reviewModel 下拉（轮次上限仍然有效）。
-	const isDsh = engine === "dsh";
+	// engine 走全局（web/src/app-globals.ts），不再从 App 一路传下来。
+	const isDsh = useIsDsh();
 	// Goals belong to the conversation that created them. The server keeps the
 	// status around while switching chats so returning to the owner restores the
 	// goal, but never show another conversation's goal as active.
@@ -78,9 +70,9 @@ export const GoalBar = memo(function GoalBar({
 	useEffect(() => {
 		if (modelOpen && models.length === 0 && !reqLoading && !modelsLoading) {
 			setReqLoading(true);
-			send({ type: "list_models" });
+			appSend({ type: "list_models" });
 		}
-	}, [modelOpen, models.length, reqLoading, modelsLoading, send]);
+	}, [modelOpen, models.length, reqLoading, modelsLoading]);
 	useEffect(() => {
 		if (models.length > 0) setReqLoading(false);
 	}, [models.length]);
@@ -93,7 +85,7 @@ export const GoalBar = memo(function GoalBar({
 	const set = () => {
 		const trimmed = text.trim();
 		if (!trimmed) return;
-		send({
+		appSend({
 			type: "set_goal",
 			goal: trimmed,
 			...(reviewModel ? { reviewModel } : {}),
@@ -110,7 +102,7 @@ export const GoalBar = memo(function GoalBar({
 	const startWizard = () => {
 		const trimmed = text.trim();
 		if (!trimmed) return;
-		send({
+		appSend({
 			type: "start_goal_wizard",
 			text: trimmed,
 			...(reviewModel ? { wizardModel: reviewModel } : {}),
@@ -143,7 +135,7 @@ export const GoalBar = memo(function GoalBar({
 						className="goalbar-x"
 						title={t("goalBarClear")}
 						onClick={() => {
-							send({ type: "clear_goal" });
+							appSend({ type: "clear_goal" });
 							setCollapsed(true);
 						}}
 					>
@@ -184,7 +176,7 @@ export const GoalBar = memo(function GoalBar({
 						title={t("goalBarClear")}
 						disabled={goal.reviewing}
 						onClick={() => {
-							send({ type: "clear_goal" });
+							appSend({ type: "clear_goal" });
 							setCollapsed(true);
 						}}
 					>
@@ -245,7 +237,7 @@ export const GoalBar = memo(function GoalBar({
 					title={locked ? t("goalBarLocked") : t("goalBarUnlocked")}
 					onClick={() =>
 						setLocked((v) => {
-							send({ type: "set_goal_prefs", locked: !v });
+							appSend({ type: "set_goal_prefs", locked: !v });
 							return !v;
 						})
 					}
@@ -278,7 +270,7 @@ export const GoalBar = memo(function GoalBar({
 							onClick={() => {
 								setReviewModel("");
 								setModelOpen(false);
-								send({ type: "set_goal_prefs", reviewModel: "" });
+								appSend({ type: "set_goal_prefs", reviewModel: "" });
 							}}
 						>
 							{t("goalBarUseMainModel")}
@@ -290,18 +282,19 @@ export const GoalBar = memo(function GoalBar({
 								onClick={() => {
 									setReviewModel(m.id);
 									setModelOpen(false);
-									send({ type: "set_goal_prefs", reviewModel: m.id });
+									appSend({ type: "set_goal_prefs", reviewModel: m.id });
 								}}
 							>
 								<span className="dd-model-cell">
 									<span className="dd-model-name">{m.name}</span>
 									<span className="dd-model-meta">
 										<span className="dd-model-provider">{m.provider}</span>
+										<span className="dd-model-id">{m.id.split("/").slice(1).join("/")}</span>
 									</span>
 								</span>
 							</DropdownItem>
 						))}
-						<button type="button" className="dd-refresh" onClick={() => send({ type: "list_models" })}>
+						<button type="button" className="dd-refresh" onClick={() => appSend({ type: "list_models" })}>
 							{t("refreshModels")}
 						</button>
 					</Dropdown>
@@ -323,10 +316,10 @@ export const GoalBar = memo(function GoalBar({
 							}
 							setMaxRounds(v);
 						}}
-						onBlur={() => send({ type: "set_goal_prefs", maxRounds: maxRounds })}
+						onBlur={() => appSend({ type: "set_goal_prefs", maxRounds: maxRounds })}
 						onKeyDown={(e) => {
 							if (e.key === "Enter") {
-								send({ type: "set_goal_prefs", maxRounds: maxRounds });
+								appSend({ type: "set_goal_prefs", maxRounds: maxRounds });
 								(e.target as HTMLInputElement).blur();
 							}
 						}}

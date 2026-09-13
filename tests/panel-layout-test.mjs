@@ -1,16 +1,19 @@
 /**
  * Left-panel layout: the running-conversations list is pinned above the
  * scrolling history; both section titles live OUTSIDE the scroll container.
- * (Without a background run the running list stays hidden — new chats are
- * only listed once displaced while streaming — so the layout asserts the
- * section stays absent and the history structure stays intact.)
+ * (Blank new chats stay OUT of the running list — so with nothing but blank
+ * chats the section stays hidden — while the ACTIVE chat shows up there as
+ * soon as it has content, issue #140; the last section asserts both halves.)
+ *
+ * 零 token：本地起一个「永不回包」的假模型（同 recall-queue-test），制造流式窗口。
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { portUp, freePort } from "./lib/port-utils.mjs";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
 import { execSync, spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -21,8 +24,40 @@ const HEADLESS = CHROME_PATH;
 const PORT = 8899;
 const URL = `http://localhost:${PORT}`;
 const PROJ = REPO_ROOT;
-const WS = mkdtempSync(join(tmpdir(), "pi-layout-"));
+const base = mkdtempSync(join(tmpdir(), "pi-layout-"));
+const WS = join(base, "work");
+const DATA_DIR = join(base, "data");
+const AGENT_DIR = join(base, "agent");
+mkdirSync(WS, { recursive: true });
+mkdirSync(DATA_DIR, { recursive: true });
+mkdirSync(AGENT_DIR, { recursive: true });
 writeFileSync(join(WS, "a.txt"), "a");
+
+// 假模型：GET 正常回（防启动模型刷新卡死），POST 永不回包（制造流式窗口）。
+const hang = createServer((req, res) => {
+	if (req.method === "GET") {
+		res.writeHead(200, { "content-type": "application/json" });
+		res.end(JSON.stringify({ data: [] }));
+		return;
+	}
+	req.socket.on("error", () => {});
+});
+await new Promise((r) => hang.listen(0, "127.0.0.1", r));
+const HANG_PORT = hang.address().port;
+writeFileSync(join(AGENT_DIR, "auth.json"), JSON.stringify({ hang: { type: "api_key", key: "dummy" } }));
+writeFileSync(
+	join(AGENT_DIR, "models.json"),
+	JSON.stringify({
+		providers: {
+			hang: {
+				api: "openai-completions",
+				baseUrl: `http://127.0.0.1:${HANG_PORT}`,
+				apiKey: "dummy",
+				models: [{ id: "hang-1", name: "Hang" }],
+			},
+		},
+	}),
+);
 
 let failures = 0;
 const check = (name, ok, extra = "") => {
@@ -42,7 +77,13 @@ try {
 await sleep(400);
 const server = spawn("node", ["dist/server/index.js"], {
 	cwd: PROJ,
-	env: { ...process.env, PI_WEB_PORT: String(PORT), PI_WEB_CWD: WS },
+	env: {
+		...process.env,
+		PI_WEB_PORT: String(PORT),
+		PI_WEB_CWD: WS,
+		PI_WEB_DATA_DIR: DATA_DIR,
+		PI_CODING_AGENT_DIR: AGENT_DIR,
+	},
 	stdio: "ignore",
 });
 for (let i = 0; i < 40 && !(await portUp(PORT)); i++) await sleep(250);
@@ -116,6 +157,34 @@ const after = await page.evaluate(async () => {
 	return t ? t.getBoundingClientRect().top : null;
 });
 check("history title stays fixed after scroll", before !== null && before === after, `top=${before}→${after}`);
+
+// 6. issue #140：当前对话一旦有内容就在「运行的对话」里（还在流式输出时也要有）
+//    —— 假模型不回包，所以只看到 streaming 那一帧就行。
+await page.locator("textarea").first().fill("SLOW 第一条消息");
+await page.keyboard.press("Enter");
+const convsAppeared = await page
+	.waitForSelector(".panel-left .panel-convs", { timeout: 20000 })
+	.then(() => true)
+	.catch(() => false);
+check("running-conversations section appears for the active chat with content", convsAppeared);
+const titlesNow = await page.locator(".panel-left .panel-section-title").allTextContents();
+check(
+	"运行的对话 title is rendered now",
+	titlesNow.some((t) => t.includes("运行的对话")),
+	titlesNow.join("|"),
+);
+check(
+	"the row is the row of the chat we are looking at (当前)",
+	(await page.locator(".panel-convs .session-item .session-sub").allTextContents()).some((s) => s.includes("当前")),
+);
+check(
+	"the row shows the streaming indicator while the run is in flight",
+	(await page.locator(".panel-convs .conv-streaming").count()) === 1,
+);
+check(
+	"only that one row is listed (blank chats stay out)",
+	(await page.locator(".panel-convs .session-item").count()) === 1,
+);
 
 await browser.close();
 server.kill("SIGKILL");

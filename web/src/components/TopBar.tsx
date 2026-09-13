@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
 	FiDownload,
 	FiFolder,
@@ -17,18 +17,20 @@ import {
 	FiVolume2,
 } from "react-icons/fi";
 import type { ChatState, UpdateAllItem } from "../use-chat";
-import type { ClientMessage, CommandDef } from "../types";
+import type { CommandDef } from "../types";
 import { buildUpdateCommand } from "../update-command";
 import { randomUuid } from "../uuid";
 import { Dropdown, DropdownItem } from "./Dropdown";
 import { SoundSettingsPanel } from "./SoundSettings";
+import { BrowserControl } from "./BrowserControl";
 import { NotifyToggle } from "./NotifyToggle";
 import type { SoundKind, SoundSettings } from "../sounds";
-import { useI18n, type Locale } from "../i18n";
+import { useI18n, localeShort } from "../i18n";
+import { appSend, useAppGlobals, useIsManaged, useServiceInfo } from "../app-globals";
+import { LocaleModal } from "./LocaleModal";
 
 interface TopBarProps {
 	chat: ChatState;
-	send: (msg: ClientMessage) => boolean;
 	/** Minimal terminal-tab bridge (same shape SCMPanel uses) — updates run there. */
 	terminal: {
 		create: (meta: {
@@ -46,8 +48,9 @@ interface TopBarProps {
 	};
 	view: "chat" | "terminal" | "git" | `plugin:${string}`;
 	onViewChange: (view: "chat" | "terminal" | "git" | `plugin:${string}`) => void;
-	/** Installed optional plugins (<dataDir>/plugins) — one view tab each. */
-	plugins: { id: string; name: string; icon?: string; description?: string; error?: string }[];
+	/** Installed optional plugins (<dataDir>/plugins) — one view tab each
+	 *  (view:false renderer-only plugins are filtered out by the caller). */
+	plugins: { id: string; name: string; icon?: string; description?: string; error?: string; view?: boolean }[];
 	/** Open a side panel as a mobile drawer ("left" = history, "right" = files). */
 	onOpenPanel: (side: "left" | "right") => void;
 	/** Open the settings panel (system prompt / skills / extensions / presets). */
@@ -61,14 +64,13 @@ interface TopBarProps {
 	onSoundChange: (settings: SoundSettings) => void;
 	onSoundPreview: (kind: SoundKind) => void;
 	/** Theme list + current selection + switch handler (owned by App). */
-	themes: { id: string; name: string; builtin: boolean }[];
+	themes: { id: string; name: string; builtin: boolean; nameEn?: string }[];
 	theme: string | null;
 	onThemeChange: (id: string | null) => void;
 }
 
 export function TopBar({
 	chat,
-	send,
 	terminal,
 	view,
 	plugins,
@@ -84,17 +86,27 @@ export function TopBar({
 	theme,
 	onThemeChange,
 }: TopBarProps) {
-	const { locale, setLocale, t } = useI18n();
+	const { locale, setLocale, t, packs } = useI18n();
+	// 受管标记与自身版本号：走全局（web/src/app-globals.ts），整个连接内不变。
+	const { appVersion } = useAppGlobals();
+	const managed = useIsManaged();
+	// 由 pi-web-ui 服务启动的实例（launchd/systemd/Windows watchdog）：退出后会被
+	// supervisor 拉起，所以更新面板给出「重启服务」按钮；前台/dev 实例没有值。
+	const service = useServiceInfo();
+	const [restarting, setRestarting] = useState(false);
+	// 「重启服务」会断开连接（进程退出→supervisor 拉起）：重新连上（open）后
+	// 把按钮恢复可用，否则它会永远停在「重启中…」。
+	useEffect(() => {
+		if (restarting && chat.status === "open") setRestarting(false);
+	}, [restarting, chat.status]);
 	const [soundOpen, setSoundOpen] = useState(false);
 	const [langOpen, setLangOpen] = useState(false);
 	const [themeOpen, setThemeOpen] = useState(false);
 	const [updateOpen, setUpdateOpen] = useState(false);
 	const [moreOpen, setMoreOpen] = useState(false);
+	const [localeModalOpen, setLocaleModalOpen] = useState(false);
 
-	const LANGUAGES: { value: Locale; label: string }[] = [
-		{ value: "zh", label: t("langZh") },
-		{ value: "en", label: t("langEn") },
-	];
+	/** Switcher shows each pack's native name verbatim (never translated). */
 
 	const connLabel = chat.ready ? t("connected") : chat.status === "closed" ? t("reconnecting") : t("connecting");
 	const connClass = chat.ready ? "ok" : "busy";
@@ -113,7 +125,7 @@ export function TopBar({
 		const existing = chat.terminals.find((tm) => tm.title === title);
 		if (existing) {
 			terminal.restart(existing.id);
-			send({
+			appSend({
 				type: "run_command",
 				terminalId: existing.id,
 				conversationId: existing.conversationId,
@@ -155,7 +167,7 @@ export function TopBar({
 		const existing = chat.terminals.find((tm) => tm.title === title);
 		if (existing) {
 			terminal.restart(existing.id);
-			send({
+			appSend({
 				type: "run_command",
 				terminalId: existing.id,
 				conversationId: existing.conversationId,
@@ -182,6 +194,12 @@ export function TopBar({
 	};
 
 	// Shared by the desktop update dropdown and the mobile "⋯" panel.
+	/* PI_WEB_TABS: an instance can be set up to offer only some tabs — the
+	   server refuses the messages of the others anyway (server/tabs.ts), so
+	   drawing them would only offer an action that comes back refused. No list
+	   means every tab, which is the default. */
+	const tabOn = (tab: string) => !chat.tabs || tab === "chat" || chat.tabs.includes(tab);
+
 	const allUpdates = chat.updatesAll ?? [];
 	// Pure errors don't count as "updates" — they're shown as failed rows.
 	const updatesCount = allUpdates.filter((i) => !i.upToDate && !i.error).length;
@@ -248,7 +266,7 @@ export function TopBar({
 					type="button"
 					className="dd-refresh"
 					style={updatable.length > 0 ? { flex: 1 } : undefined}
-					onClick={() => send({ type: "check_updates_all", force: true })}
+					onClick={() => appSend({ type: "check_updates_all", force: true })}
 				>
 					{t("updatesAllRefresh")}
 				</button>
@@ -291,12 +309,27 @@ export function TopBar({
 				)}
 			</div>
 			<div className="dd-actions">
-				<button type="button" className="dd-refresh" onClick={() => send({ type: "check_update" })}>
+				<button type="button" className="dd-refresh" onClick={() => appSend({ type: "check_update" })}>
 					{chat.update === null ? t("checkingUpdate") : t("checkUpdate")}
 				</button>
 				{chat.update && !chat.update.upToDate && chat.update.latest && (
 					<button type="button" className="dd-refresh accent" onClick={runUpdate}>
 						{t("updateNow")}
+					</button>
+				)}
+				{service && (
+					<button
+						type="button"
+						className="dd-refresh accent"
+						disabled={restarting}
+						title={t("restartServiceTip", { name: service.name })}
+						onClick={() => {
+							if (restarting) return;
+							setRestarting(true);
+							appSend({ type: "restart_service" });
+						}}
+					>
+						{restarting ? t("restartingService") : t("restartService")}
 					</button>
 				)}
 			</div>
@@ -306,9 +339,15 @@ export function TopBar({
 	return (
 		<header className="topbar">
 			<div className="brand">
-				<button type="button" className="panel-toggle" title={t("openHistory")} onClick={() => onOpenPanel("left")}>
-					<FiMenu />
-				</button>
+				{/* 抽屉开合按钮只在 chat 视图渲染：抽屉节点躺在 chat 视图的面板树里
+				   （App.tsx 的 .panel-drawer 是 `.view-pane` 的子节点，非 chat 视图整棵
+				   display:none），所以终端 / Git / 插件视图里点它只会拉出一层遮罩、
+				   抽屉永远不出现 —— 而且顶栏这个 ☰ 会和终端面板自己的 ☰ 并排成两个。 */}
+				{view === "chat" && (
+					<button type="button" className="panel-toggle" title={t("openHistory")} onClick={() => onOpenPanel("left")}>
+						<FiMenu />
+					</button>
+				)}
 				<span className="brand-logo">π</span>
 				<span className="brand-name">pi-web-ui</span>
 				<span className={`conn-dot ${connClass}`} title={connLabel} />
@@ -327,65 +366,80 @@ export function TopBar({
 						<FiMessageSquare />
 						<span>{t("chat")}</span>
 					</button>
-					<button
-						type="button"
-						role="tab"
-						aria-selected={view === "terminal"}
-						className={view === "terminal" ? "active" : ""}
-						onClick={() => onViewChange("terminal")}
-					>
-						<FiTerminal />
-						<span>{t("terminal")}</span>
-					</button>
-					<button
-						type="button"
-						role="tab"
-						aria-selected={view === "git"}
-						className={view === "git" ? "active" : ""}
-						onClick={() => onViewChange("git")}
-					>
-						<FiGitBranch />
-						<span>{t("scmTab")}</span>
-					</button>
-					{plugins.map((p) => {
-						const tip = p.error ? `${p.name}: ${p.error}` : p.description ? `${p.name} — ${p.description}` : p.name;
-						return (
-							<button
-								key={p.id}
-								type="button"
-								role="tab"
-								aria-selected={view === `plugin:${p.id}`}
-								className={`plugin-tab${view === `plugin:${p.id}` ? " active" : ""}${p.error ? " broken" : ""}`}
-								title={tip}
-								onClick={() => onViewChange(`plugin:${p.id}`)}
-							>
-								{p.icon ? <span aria-hidden>{p.icon}</span> : null}
-								<span>{p.name}</span>
-							</button>
-						);
-					})}
+					{tabOn("terminal") && (
+						<button
+							type="button"
+							role="tab"
+							aria-selected={view === "terminal"}
+							className={view === "terminal" ? "active" : ""}
+							onClick={() => onViewChange("terminal")}
+						>
+							<FiTerminal />
+							<span>{t("terminal")}</span>
+						</button>
+					)}
+					{tabOn("git") && (
+						<button
+							type="button"
+							role="tab"
+							aria-selected={view === "git"}
+							className={view === "git" ? "active" : ""}
+							onClick={() => onViewChange("git")}
+						>
+							<FiGitBranch />
+							<span>{t("scmTab")}</span>
+						</button>
+					)}
+					{(tabOn("plugins") ? plugins : [])
+						.filter((p) => p.view !== false)
+						.map((p) => {
+							const tip = p.error ? `${p.name}: ${p.error}` : p.description ? `${p.name} — ${p.description}` : p.name;
+							return (
+								<button
+									key={p.id}
+									type="button"
+									role="tab"
+									aria-selected={view === `plugin:${p.id}`}
+									className={`plugin-tab${view === `plugin:${p.id}` ? " active" : ""}${p.error ? " broken" : ""}`}
+									title={tip}
+									onClick={() => onViewChange(`plugin:${p.id}`)}
+								>
+									{p.icon ? <span aria-hidden>{p.icon}</span> : null}
+									<span>{p.name}</span>
+								</button>
+							);
+						})}
 				</div>
 
 				{/* Desktop toolbar — hidden on mobile (model/thinking move into the
 				    input row; sound/lang/update/github fold into "⋯" below). */}
 				<div className="topbar-desktop">
 					{/* Global search — sessions / projects / workspace files. */}
-					<button type="button" className="chip" title={t("searchGlobalTip")} onClick={onOpenGlobalSearch}>
-						<FiSearch />
-						<span className="chip-sub">{t("searchGlobal")}</span>
-					</button>
+					{tabOn("search") && (
+						<button type="button" className="chip" title={t("searchGlobalTip")} onClick={onOpenGlobalSearch}>
+							<FiSearch />
+							<span className="chip-sub">{t("searchGlobal")}</span>
+						</button>
+					)}
+					{/* Browser control — the discovery entry for 「AI 操作浏览器页面」：状态、授权入口、
+					    可照抄的例子全在那个面板里（能力在扩展里，网页这边只能把人送过去）。 */}
+					<BrowserControl />
 					{/* Background tasks — AI-started servers still listening. Always shown
 					    so the list survives the conversation that started them (badge = count). */}
-					<button type="button" className="chip bg-task-chip" data-tip={t("bgTasksTip")} onClick={onOpenBgTasks}>
-						<FiLayers />
-						<span className="chip-sub">{t("bgTasks")}</span>
-						{chat.bgServers.length > 0 && <span className="bg-task-badge">{chat.bgServers.length}</span>}
-					</button>
+					{tabOn("tasks") && (
+						<button type="button" className="chip bg-task-chip" data-tip={t("bgTasksTip")} onClick={onOpenBgTasks}>
+							<FiLayers />
+							<span className="chip-sub">{t("bgTasks")}</span>
+							{chat.bgServers.length > 0 && <span className="bg-task-badge">{chat.bgServers.length}</span>}
+						</button>
+					)}
 
-					<button type="button" className="chip" title={t("settingsTitle")} onClick={onOpenSettings}>
-						<FiSettings />
-						<span className="chip-sub">{t("settings")}</span>
-					</button>
+					{tabOn("settings") && (
+						<button type="button" className="chip" title={t("settingsTitle")} onClick={onOpenSettings}>
+							<FiSettings />
+							<span className="chip-sub">{t("settings")}</span>
+						</button>
+					)}
 
 					<Dropdown
 						trigger={
@@ -405,25 +459,33 @@ export function TopBar({
 						trigger={
 							<>
 								<FiGlobe />
-								<span className="chip-sub">{locale === "zh" ? t("langZh") : "EN"}</span>
+								<span className="chip-sub">{localeShort(locale)}</span>
 							</>
 						}
 						open={langOpen}
 						onOpenChange={setLangOpen}
 					>
 						<div className="dd-header">{t("language")}</div>
-						{LANGUAGES.map((l) => (
+						{packs.map((l) => (
 							<DropdownItem
-								key={l.value}
-								active={locale === l.value}
+								key={l.code}
+								active={locale === l.code}
 								onClick={() => {
-									setLocale(l.value);
+									setLocale(l.code);
 									setLangOpen(false);
 								}}
 							>
-								{l.label}
+								{l.nativeName}
 							</DropdownItem>
 						))}
+						<DropdownItem
+							onClick={() => {
+								setLangOpen(false);
+								setLocaleModalOpen(true);
+							}}
+						>
+							<FiDownload /> {t("localeGetMore")}
+						</DropdownItem>
 					</Dropdown>
 
 					<Dropdown
@@ -455,41 +517,53 @@ export function TopBar({
 									setThemeOpen(false);
 								}}
 							>
-								{th.name}
+								{locale === "zh" ? th.name : (th.nameEn ?? th.name)}
 							</DropdownItem>
 						))}
 					</Dropdown>
 
-					<Dropdown
-						trigger={
-							<>
-								<FiDownload />
-								<span className="chip-sub">v{chat.update?.current ?? "…"}</span>
-								{chat.update && !chat.update.upToDate && (
-									<span
-										className="update-dot"
-										title={t("updateAvailable", {
-											version: chat.update.latest ?? "",
-										})}
-									/>
-								)}
-								{updatesCount > 0 && <span className="update-badge">{t("updatesAllBadge", { n: updatesCount })}</span>}
-							</>
-						}
-						open={updateOpen}
-						onOpenChange={(v) => {
-							setUpdateOpen(v);
-							if (v) {
-								send({ type: "check_update" });
-								send({ type: "check_updates_all" });
+					{/* Managed instance: the version is worth seeing, the update
+					    machinery is not — whoever deploys this decides when it
+					    changes. The server refuses those messages anyway. */}
+					{managed ? (
+						<span className="chip" title={t("updatesManaged")}>
+							<FiDownload />
+							<span className="chip-sub">v{appVersion ?? chat.update?.current ?? "…"}</span>
+						</span>
+					) : (
+						<Dropdown
+							trigger={
+								<>
+									<FiDownload />
+									<span className="chip-sub">v{chat.update?.current ?? "…"}</span>
+									{chat.update && !chat.update.upToDate && (
+										<span
+											className="update-dot"
+											title={t("updateAvailable", {
+												version: chat.update.latest ?? "",
+											})}
+										/>
+									)}
+									{updatesCount > 0 && (
+										<span className="update-badge">{t("updatesAllBadge", { n: updatesCount })}</span>
+									)}
+								</>
 							}
-						}}
-						fit
-					>
-						<div className="dd-header">{t("update")}</div>
-						{renderUpdateBody()}
-						{renderAllUpdatesBody()}
-					</Dropdown>
+							open={updateOpen}
+							onOpenChange={(v) => {
+								setUpdateOpen(v);
+								if (v) {
+									appSend({ type: "check_update" });
+									appSend({ type: "check_updates_all" });
+								}
+							}}
+							fit
+						>
+							<div className="dd-header">{t("update")}</div>
+							{renderUpdateBody()}
+							{renderAllUpdatesBody()}
+						</Dropdown>
+					)}
 
 					<a
 						className="chip github"
@@ -506,7 +580,7 @@ export function TopBar({
 					type="button"
 					className="chip newchat"
 					data-tip={t("newChatTip")}
-					onClick={() => send({ type: "new_chat" })}
+					onClick={() => appSend({ type: "new_chat" })}
 				>
 					<FiPlus />
 					<span>{t("newChat")}</span>
@@ -520,15 +594,15 @@ export function TopBar({
 							<>
 								<FiMoreHorizontal />
 								<span className="chip-sub">{t("more")}</span>
-								{chat.update && !chat.update.upToDate && <span className="update-dot" />}
+								{!managed && chat.update && !chat.update.upToDate && <span className="update-dot" />}
 							</>
 						}
 						open={moreOpen}
 						onOpenChange={(v) => {
 							setMoreOpen(v);
-							if (v) {
-								send({ type: "check_update" });
-								send({ type: "check_updates_all" });
+							if (v && !managed) {
+								appSend({ type: "check_update" });
+								appSend({ type: "check_updates_all" });
 							}
 						}}
 					>
@@ -562,9 +636,9 @@ export function TopBar({
 						<SoundSettingsPanel settings={sound} onChange={onSoundChange} onPreview={onSoundPreview} />
 						<NotifyToggle />
 						<div className="dd-header">{t("language")}</div>
-						{LANGUAGES.map((l) => (
-							<DropdownItem key={l.value} active={locale === l.value} onClick={() => setLocale(l.value)}>
-								{l.label}
+						{packs.map((l) => (
+							<DropdownItem key={l.code} active={locale === l.code} onClick={() => setLocale(l.code)}>
+								{l.nativeName}
 							</DropdownItem>
 						))}
 						<div className="dd-header">{t("theme")}</div>
@@ -586,7 +660,7 @@ export function TopBar({
 									setMoreOpen(false);
 								}}
 							>
-								{th.name}
+								{locale === "zh" ? th.name : (th.nameEn ?? th.name)}
 							</DropdownItem>
 						))}
 						<div className="dd-header">{t("update")}</div>
@@ -602,11 +676,16 @@ export function TopBar({
 						</a>
 					</Dropdown>
 				</div>
+			</div>
 
+			{/* 文件面板折叠按钮：顶栏直接子项，不能放进可横滑的 .topbar-actions，
+			   否则窄屏下会被 tab/chip 挤出屏幕（固定在右上角，永不被推走）。 */}
+			{view === "chat" && (
 				<button type="button" className="panel-toggle" title={t("openFiles")} onClick={() => onOpenPanel("right")}>
 					<FiFolder />
 				</button>
-			</div>
+			)}
+			{localeModalOpen && <LocaleModal onClose={() => setLocaleModalOpen(false)} />}
 		</header>
 	);
 }

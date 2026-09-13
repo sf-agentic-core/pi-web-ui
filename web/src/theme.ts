@@ -17,6 +17,7 @@ export interface ThemeInfo {
 	id: string;
 	name: string;
 	builtin: boolean;
+	nameEn?: string;
 }
 
 const STORAGE_KEY = "pi-web-ui:theme";

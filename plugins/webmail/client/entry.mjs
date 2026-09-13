@@ -41,7 +41,7 @@ export default {
 		.wmx .chip.badge { color: var(--amber, #fbbf24); }
 		.wmx .head-actions { margin-left: auto; display: flex; gap: 6px; align-items: center; }
 		.wmx button {
-			background: var(--bg-elev1, #16161d); color: inherit;
+			background: var(--bg-elev, #16161d); color: inherit;
 			border: 1px solid var(--border, #333); border-radius: 6px;
 			padding: 3px 10px; cursor: pointer; font: inherit; font-size: 12px;
 		}
@@ -51,7 +51,7 @@ export default {
 		.wmx button.primary { background: var(--accent, #7c5cff); color: #fff; border-color: transparent; }
 		.wmx button.danger:hover { color: var(--red, #f87171); border-color: var(--red, #f87171); }
 		.wmx input, .wmx select, .wmx textarea {
-			background: var(--bg-elev1, #16161d); color: inherit;
+			background: var(--bg-elev, #16161d); color: inherit;
 			border: 1px solid var(--border, #333); border-radius: 6px;
 			padding: 5px 8px; font: inherit; font-size: 12px; resize: vertical;
 		}
@@ -66,7 +66,7 @@ export default {
 		.wmx .toolbar input[type="search"] { flex: 1; min-width: 120px; }
 		.wmx ul.maillist {
 			list-style: none; margin: 0; padding: 0; display: grid; gap: 5px;
-			max-height: calc(100vh - 260px); overflow: auto;
+			max-height: calc(100vh - 260px); max-height: calc(100dvh - 260px); overflow: auto;
 		}
 		.wmx ul.maillist li {
 			border: 1px solid var(--border, #333); border-radius: 7px;
@@ -94,8 +94,8 @@ export default {
 		.wmx .empty-reader { display: grid; place-content: center; height: 100%; min-height: 300px; opacity: .4; }
 		.wmx .reader pre.body {
 			margin: 0; white-space: pre-wrap; word-break: break-word;
-			font: inherit; max-height: calc(100vh - 340px); overflow: auto;
-			background: var(--bg-elev1, #16161d); border-radius: 6px; padding: 10px;
+			font: inherit; max-height: calc(100vh - 340px); max-height: calc(100dvh - 340px); overflow: auto;
+			background: var(--bg-elev, #16161d); border-radius: 6px; padding: 10px;
 		}
 		.wmx .reader .actions { display: flex; gap: 6px; flex-wrap: wrap; }
 
@@ -109,7 +109,7 @@ export default {
 		.wmx .modal-backdrop[hidden] { display: none; }
 		.wmx .modal {
 			width: min(600px, 94vw); max-height: 88vh;
-			background: var(--bg-elev0, #101016); border: 1px solid var(--border, #333);
+			background: var(--bg, #101016); border: 1px solid var(--border, #333);
 			border-radius: 12px; padding: 0; box-shadow: 0 18px 48px rgba(0,0,0,.45);
 			display: flex; flex-direction: column; overflow: hidden;
 		}
@@ -132,6 +132,22 @@ export default {
 		.wmx .cfg .full { grid-column: 1 / -1; display: flex; gap: 6px; align-items: center; }
 		.wmx form.compose input, .wmx form.compose textarea { width: 100%; box-sizing: border-box; }
 		.wmx form.compose .row { display: flex; gap: 8px; justify-content: flex-end; }
+
+		/* 手机竖屏（360~430px）：单列 + 大字号防 iOS 聚焦缩放 + 大点击区 + 底部弹层。桌面端零变化。 */
+		@media (max-width: 640px) {
+			.wmx input, .wmx select, .wmx textarea { font-size: 16px; }
+			.wmx button { min-height: 36px; }
+			/* 设置弹窗：label/input 上下排；占位空元素不占行 */
+			.wmx .cfg fieldset { grid-template-columns: 1fr; }
+			.wmx .cfg fieldset label:empty, .wmx .cfg fieldset span:empty { display: none; }
+			/* 弹窗变底部弹层，底部留 safe-area */
+			.wmx .modal-backdrop { align-items: flex-end; }
+			.wmx .modal {
+				width: 100%; max-height: 92vh; max-height: 92dvh;
+				border-radius: 14px 14px 0 0;
+			}
+			.wmx .modal-body { padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+		}
 	</style>
 
 	<header class="wmx-head">
@@ -308,6 +324,8 @@ export default {
 				ctx.send({ action: "mark", uids: [mail.uid], seen: !mail.seen });
 			$(".act-delete").onclick = () => ctx.send({ action: "delete", uids: [mail.uid] });
 			$(".act-reply").onclick = () => openCompose({ to: mail.from, subject: `Re: ${mail.subject}` });
+			// 窄屏单列时列表在上、阅读区在下：选中后把阅读区滚入视野（桌面端不执行）
+			if (window.matchMedia("(max-width: 640px)").matches) r.scrollIntoView({ behavior: "smooth", block: "nearest" });
 		}
 
 		function clearReader() {

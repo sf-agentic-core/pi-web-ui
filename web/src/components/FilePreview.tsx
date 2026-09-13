@@ -15,12 +15,13 @@ import {
 	FiZoomIn,
 	FiZoomOut,
 } from "react-icons/fi";
-import type { ClientMessage, FileContent } from "../types";
+import type { FileContent } from "../types";
 import { Markdown } from "./Markdown";
 import { useT } from "../i18n";
 import { getClientId } from "../use-chat";
 import { withToken } from "../auth-token";
 import { appUrl } from "../base-url";
+import { appSend } from "../app-globals";
 
 /** Cap rendered lines so a pathological file can't freeze the modal. */
 const MAX_PREVIEW_LINES = 5000;
@@ -34,7 +35,6 @@ interface FilePreviewProps {
 	file: PreviewFile;
 	/** Latest file content from the server (path-matched inside the modal). */
 	content: FileContent | null;
-	send: (msg: ClientMessage) => boolean;
 	/** Add the selected line range as a "lines" attachment to the chat input. */
 	onAddLines: (path: string, name: string, start: number, end: number) => void;
 	/** Attach the whole file (inline content / path reference) like the row buttons. */
@@ -48,7 +48,7 @@ interface Range {
 	end: number;
 }
 
-export function FilePreview({ file, content, send, onAddLines, onAttach, onClose }: FilePreviewProps) {
+export function FilePreview({ file, content, onAddLines, onAttach, onClose }: FilePreviewProps) {
 	const t = useT();
 	const [loaded, setLoaded] = useState<FileContent | null>(null);
 	const [loading, setLoading] = useState(false);
@@ -60,6 +60,11 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 	const [draft, setDraft] = useState("");
 	// Markdown files open in rendered view; raw source remains one click away.
 	const [markdownPreview, setMarkdownPreview] = useState(true);
+	// Same for HTML files: sandboxed iframe render by default, source on toggle.
+	const [htmlPreview, setHtmlPreview] = useState(true);
+	// HTML preview script gate: off by default (pure static render). Turning it
+	// on is an explicit per-file opt-in — resets on file switch, never persisted.
+	const [allowJs, setAllowJs] = useState(false);
 	const editViewRef = useRef(false);
 	// Word wrap for the text preview (default on).
 	const [wrap, setWrap] = useState(true);
@@ -79,9 +84,11 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 		setEditing(false);
 		setDraft("");
 		setMarkdownPreview(true);
+		setHtmlPreview(true);
+		setAllowJs(false);
 		editViewRef.current = false;
-		send({ type: "read_file", path: file.path });
-	}, [file.path, send]);
+		appSend({ type: "read_file", path: file.path });
+	}, [file.path]);
 
 	// Accept responses only for the file currently shown (stale responses for
 	// previously previewed files are ignored).
@@ -172,7 +179,10 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 	const cancelEditing = () => {
 		setDraft(loaded?.text ?? "");
 		setEditing(false);
-		if (editViewRef.current) setMarkdownPreview(true);
+		if (editViewRef.current) {
+			if (isMarkdownFile(file.name)) setMarkdownPreview(true);
+			if (isHtmlFile(file.name)) setHtmlPreview(true);
+		}
 	};
 
 	const toggleEditing = () => {
@@ -184,8 +194,9 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 			return;
 		}
 		if (!canEdit || !loaded) return;
-		editViewRef.current = isMarkdownFile(file.name) && markdownPreview;
+		editViewRef.current = (isMarkdownFile(file.name) && markdownPreview) || (isHtmlFile(file.name) && htmlPreview);
 		if (isMarkdownFile(file.name)) setMarkdownPreview(false);
+		if (isHtmlFile(file.name)) setHtmlPreview(false);
 		setSel(null);
 		setDraft(loaded.text);
 		setEditing(true);
@@ -193,9 +204,12 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 
 	const saveEditing = () => {
 		if (!editing || !loaded || !canEdit) return;
-		if (!send({ type: "write_file", path: file.path, text: draft })) return;
+		if (!appSend({ type: "write_file", path: file.path, text: draft })) return;
 		setEditing(false);
-		if (editViewRef.current) setMarkdownPreview(true);
+		if (editViewRef.current) {
+			if (isMarkdownFile(file.name)) setMarkdownPreview(true);
+			if (isHtmlFile(file.name)) setHtmlPreview(true);
+		}
 		setSel(null);
 	};
 
@@ -217,11 +231,28 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 	// streamed over the /api/file HTTP endpoint; "none" is never previewable.
 	const kind = loaded?.kind ?? "text";
 	const isMarkdown = isMarkdownFile(file.name);
+	const isHtml = isHtmlFile(file.name);
 	const showMarkdown = isMarkdown && markdownPreview && !editing && kind === "text" && !isBinary;
+	const showHtml = isHtml && htmlPreview && !editing && kind === "text" && !isBinary;
 	// /api/file resolves against the requesting client's workspace (the opened
 	// project), not the server's startup cwd — pass clientId so they can differ.
 	const mediaUrl = (p: string) =>
 		withToken(appUrl(`/api/file?clientId=${encodeURIComponent(getClientId())}&path=${encodeURIComponent(p)}`));
+	// HTML render URL: directory-mapped /api/preview so the page's RELATIVE
+	// subresources (<link href="../web/src/styles.css">, ./app.js, images…)
+	// resolve against the file's own directory. ?allowJs=1 lifts the script
+	// block (server CSP + iframe sandbox switch together).
+	const htmlUrl = (p: string) => {
+		const segs = p
+			.split("/")
+			.map((s) => encodeURIComponent(s))
+			.join("/");
+		// Machine browsing sends absolute wire paths ("C:/..." / "/...");
+		// workspace-relative paths never start with "/" or a drive letter.
+		const abs = /^[A-Za-z]:([\\/]|$)/.test(p) || p.startsWith("/");
+		const base = abs ? `/api/preview/__abs__/${segs}` : `/api/preview/${segs}`;
+		return withToken(appUrl(`${base}?clientId=${encodeURIComponent(getClientId())}${allowJs ? "&allowJs=1" : ""}`));
+	};
 
 	return (
 		<div
@@ -252,6 +283,17 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 								{markdownPreview ? <FiEye /> : <FiCode />}
 							</button>
 						)}
+						{isHtml && kind === "text" && !isBinary && loaded && (
+							<button
+								type="button"
+								className={`fp-attach html ${htmlPreview ? "on" : ""}`}
+								data-tip={htmlPreview ? t("showHtmlSource") : t("showHtmlPreview")}
+								disabled={editing}
+								onClick={() => setHtmlPreview((value) => !value)}
+							>
+								{htmlPreview ? <FiCode /> : <FiEye />}
+							</button>
+						)}
 						{kind === "text" && !isBinary && loaded && (
 							<button
 								type="button"
@@ -263,7 +305,7 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 								<FiEdit3 />
 							</button>
 						)}
-						{kind === "text" && !isBinary && !showMarkdown && (
+						{kind === "text" && !isBinary && !showMarkdown && !showHtml && (
 							<button
 								type="button"
 								className={`fp-attach wrap ${wrap ? "on" : ""}`}
@@ -348,6 +390,38 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 					</div>
 				)}
 
+				{!loading && showHtml && loaded && (
+					<div className="fp-html">
+						<div className="fp-html-bar">
+							<span className="fp-html-hint" title={t(allowJs ? "htmlJsOnTip" : "htmlJsOffTip")}>
+								{allowJs ? t("htmlJsOn") : t("htmlJsOff")}
+							</span>
+							<button
+								type="button"
+								className={`fp-html-js ${allowJs ? "on" : ""}`}
+								data-tip={allowJs ? t("htmlDisableJs") : t("htmlEnableJs")}
+								onClick={() => setAllowJs((v) => !v)}
+							>
+								{allowJs ? t("htmlDisableJs") : t("htmlEnableJs")}
+							</button>
+						</div>
+						<iframe
+							// key forces a reload when the gate flips (script blocking is
+							// decided at document load — toggling attributes alone reuses
+							// the already-parsed page).
+							key={allowJs ? "js" : "nojs"}
+							className="fp-html-frame"
+							src={htmlUrl(file.path)}
+							title={file.name}
+							// No allow-same-origin, ever: even with scripts on, the page
+							// runs in an opaque origin — no access to our DOM, cookies,
+							// storage; forms and top-navigation stay blocked too.
+							sandbox={allowJs ? "allow-scripts" : ""}
+							referrerPolicy="no-referrer"
+						/>
+					</div>
+				)}
+
 				{!loading && showMarkdown && loaded && (
 					<div className="fp-markdown msg-text">
 						<div className="fp-markdown-zoom">
@@ -377,11 +451,16 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 					/>
 				)}
 
-				{!loading && !showMarkdown && !editing && kind === "text" && !isBinary && loaded && lines.length === 0 && (
-					<div className="fp-empty">{t("emptyFile")}</div>
-				)}
+				{!loading &&
+					!showMarkdown &&
+					!showHtml &&
+					!editing &&
+					kind === "text" &&
+					!isBinary &&
+					loaded &&
+					lines.length === 0 && <div className="fp-empty">{t("emptyFile")}</div>}
 
-				{!loading && !showMarkdown && !editing && kind === "text" && !isBinary && lines.length > 0 && (
+				{!loading && !showMarkdown && !showHtml && !editing && kind === "text" && !isBinary && lines.length > 0 && (
 					<div
 						className={`fp-code ${dragging ? "dragging" : ""} ${wrap ? "" : "no-wrap"}`}
 						onMouseDown={(e) => {
@@ -437,6 +516,7 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 						</>
 					) : (
 						!showMarkdown &&
+						!showHtml &&
 						kind === "text" && (
 							<>
 								<span className="fp-hint">
@@ -472,6 +552,11 @@ export function FilePreview({ file, content, send, onAddLines, onAttach, onClose
 function isMarkdownFile(name: string): boolean {
 	const lower = name.toLowerCase();
 	return lower.endsWith(".md") || lower.endsWith(".markdown");
+}
+
+function isHtmlFile(name: string): boolean {
+	const lower = name.toLowerCase();
+	return lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml");
 }
 
 function formatSize(bytes: number): string {

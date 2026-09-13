@@ -11,7 +11,7 @@
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const REPO = fileURLToPath(new globalThis.URL("../", import.meta.url));
 const {
@@ -25,8 +25,10 @@ const {
 	detectStdoutRedirect,
 	queryTerminalOutput,
 	terminalIdleNotifyLines,
-} = await import(join(REPO, "dist", "server", "terminals.js"));
-const { makeAdaptiveBashTool, makeKillableBashTool } = await import(join(REPO, "dist", "server", "agent-service.js"));
+} = await import(pathToFileURL(join(REPO, "dist", "server", "terminals.js")).href);
+const { makeAdaptiveBashTool, makeKillableBashTool } = await import(
+	pathToFileURL(join(REPO, "dist", "server", "agent-service.js")).href
+);
 
 const workdir = mkdtempSync(join(tmpdir(), "piweb-tbash-"));
 mkdirSync(join(workdir, "subdir"));
@@ -98,6 +100,8 @@ const tool = makeTerminalBashTool(mgr, {
 	// 一次性（persist:false）与 head 参数在后面的新增用例里显式传。
 	defaultPersist: () => true,
 	idleMs: () => idleMsOverride,
+	// 钉死服务端语言：本文件的提示文案断言写的是中文（默认语言是英文）。
+	lang: () => "zh",
 	kills: new Set(),
 	notifyBackgroundDone: (info) => {
 		bgDone = info;
@@ -289,8 +293,12 @@ try {
 		check("一次性输出完整返回", /1\n2\n3\n4\n5/.test(text), JSON.stringify(text));
 		check("一次性退出码 0", /\[exit:0\]$/.test(text.trim()));
 		// 一次性终端跑完 shell 退出 → 生成的终端进入 history（running:false）供查阅
-		await sleep(400); // 等 shell 真正退出、被移入 history
-		const oneShot = mgr.list().find((t) => t.id.startsWith("ai-bash-") && !t.running && !before.has(t.id));
+		// （Windows/ConPTY 下退出事件晚到，轮询而非固定 400ms 等待）
+		let oneShot;
+		for (let i = 0; i < 20 && !oneShot; i++) {
+			await sleep(200);
+			oneShot = mgr.list().find((t) => t.id.startsWith("ai-bash-") && !t.running && !before.has(t.id));
+		}
 		check("一次性终端进程已结束并保留在列表", oneShot !== undefined);
 		if (oneShot) {
 			check("一次性终端标记 agentBash（单独归 AI bash 分组）", oneShot.agentBash === true);
@@ -360,6 +368,49 @@ try {
 		const nativeText = native?.content?.[0]?.text ?? "";
 		check("设置关走原生 bash：输出返回", nativeText.includes("native-hi"), JSON.stringify(nativeText));
 		check("设置关不开终端", mgr.list().filter((t) => t.id.startsWith("ai-bash-")).length === beforeNative);
+
+		// Native bash must receive the current context through both wrappers.
+		const context = {
+			cwd: workdir,
+			model: { provider: "test-provider", id: "test-model" },
+			thinkingLevel: "high",
+			sessionManager: {
+				getSessionId: () => "test-session",
+				getSessionFile: () => join(workdir, "test-session.jsonl"),
+			},
+		};
+		const envCommand =
+			'bash -c \'printf "%s|%s|%s|%s|%s" "$PI_SESSION_ID" "${PI_SESSION_FILE-unset}" "$PI_PROVIDER" "$PI_MODEL" "$PI_REASONING_LEVEL"\'';
+		const sessionEnv = await adaptive.execute(
+			"env1",
+			{ command: envCommand, timeout: 5 },
+			undefined,
+			undefined,
+			context,
+		);
+		const envText = sessionEnv.content[0].text;
+		check(
+			"native subshell receives session metadata",
+			envText === `test-session|${join(workdir, "test-session.jsonl")}|test-provider|test-model|high`,
+			JSON.stringify(envText),
+		);
+		context.model = { provider: "next-provider", id: "next-model" };
+		context.thinkingLevel = "off";
+		context.sessionManager.getSessionId = () => "next-session";
+		context.sessionManager.getSessionFile = () => undefined;
+		const refreshedEnv = await adaptive.execute(
+			"env2",
+			{ command: envCommand, timeout: 5 },
+			undefined,
+			undefined,
+			context,
+		);
+		check(
+			"native subshell refreshes model, reasoning and session metadata",
+			refreshedEnv.content[0].text === "next-session|unset|next-provider|next-model|off",
+			JSON.stringify(refreshedEnv.content[0].text),
+		);
+		check("native bash releases abort controllers", kills.size === 0);
 
 		// 设置开：走终端（persist 默认 false → 一次性），新建 ai-bash-<n>
 		useT = true;

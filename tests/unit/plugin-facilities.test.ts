@@ -100,7 +100,7 @@ describe("apiVersion 门控", () => {
 	it("manifest apiVersion 高于宿主 → 激活失败并提示升级；低于等于 → 正常激活", async () => {
 		makePlugin("futuristic", "export default {};", { apiVersion: PLUGIN_API_VERSION + 1 });
 		makePlugin("classic", "export default {};", { apiVersion: 1 });
-		const list = await mgr.ensureLoaded();
+		const list = await mgr.ensureLoaded(() => "zh");
 		expect(list.find((p) => p.id === "futuristic")?.error).toContain("请升级 pi-web-ui");
 		expect(list.find((p) => p.id === "classic")?.error).toBeUndefined();
 	});

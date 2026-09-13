@@ -4,6 +4,9 @@
  * 解耦 refactor):
  *
  *   themes/white.css     — 纯白底 + GitHub 蓝强调（浅色）
+ *   themes/paper.css     — 暖纸米黄底 + 赭石强调（浅色护眼）
+ *   themes/mist.css      — 雾蓝灰底 + 天青蓝强调（浅色冷淡风）
+ *   themes/sakura.css    — 粉白底 + 樱粉强调（浅色柔和风）
  *   themes/md-preview.css— 暗色紫晕：深黑底 + 紫色径向渐变，chrome 全透明
  *   themes/cyberpunk.css — 赛博朋克（霓虹青/品红，近黑底）
  *   themes/dazzle.css    — 炫彩（高对比多彩，近黑底）
@@ -46,8 +49,10 @@ for (const line of rootBlock[0].split("\n")) {
 }
 
 /** Emit a theme file: full :root (defaults + overrides) + optional tail. */
-const emitTheme = (name, overrides = {}, tail = "") => {
-	const lines = ["/* theme-name: " + name + " */", ":root {"];
+const emitTheme = (name, overrides = {}, tail = "", nameEn = "") => {
+	const lines = ["/* theme-name: " + name + " */"];
+	if (nameEn) lines.push("/* theme-name-en: " + nameEn + " */");
+	lines.push(":root {");
 	// color-scheme: themes default to light unless told otherwise.
 	lines.push("\tcolor-scheme: " + (overrides["color-scheme"] ?? "light") + ";");
 	for (const [k, v] of defaults) {
@@ -86,7 +91,19 @@ const LIGHT_DERIVED = {
 	"--notice-info-border": "#2563eb",
 	"--send-blue": "#0969da",
 	"--send-blue-hover": "#0550ae",
+	/* 收起/展开按钮的常驻对照色（issue #100）：浅色下用灰底灰边框 */
+	"--control-fg": "#59636e",
+	"--control-bg": "#f6f8fa",
+	"--control-border": "#d0d7de",
+	/* 壁纸默认关闭（纯色背景），用户/主题按需打开 */
+	"--bg-image": "none",
+	"--bg-image-dim": "0.78",
+	"--bg-image-blur": "0px",
 	"--bg-elev3": "rgba(0, 0, 0, 0.03)",
+	/* 凹陷内容面（右栏扩展 widgets 区等）：深色默认是 15% 黑（压在深底上只深一点点），
+	   浅色下压到 4%（浅底上 15% 会变成一块明显的深灰），既与面板分区分层、
+	   又不至于吃撑卡片（.widget 用 --bg-elev2） */
+	"--sunken-bg": "rgba(0, 0, 0, 0.04)",
 	"--glow-015": "rgba(0, 0, 0, 0.02)",
 	"--glow-025": "rgba(0, 0, 0, 0.02)",
 	"--glow-03": "rgba(0, 0, 0, 0.02)",
@@ -139,6 +156,92 @@ const WHITE = {
 	"--term-bright-white": "#000000",
 	...LIGHT_DERIVED,
 	// 品牌渐变保持紫色系（原 colorMap 不改它）
+};
+
+// 「暖纸」— warm paper page, 赭石 accents (vs. GitHub-blue in WHITE).
+const PAPER = {
+	"color-scheme": "light",
+	"--bg": "#f7f1e3",
+	"--bg-elev": "#fffdf6",
+	"--bg-elev2": "#efe7d3",
+	"--border": "#ddcfae",
+	"--border-soft": "#e7dcc2",
+	"--text": "#3f372c",
+	"--text-dim": "#6f6250",
+	"--text-faint": "#a2937a",
+	"--accent": "#b45309",
+	"--accent-soft": "rgba(180, 83, 9, 0.12)",
+	"--green": "#15803d",
+	"--green-soft": "rgba(21, 128, 61, 0.12)",
+	"--red": "#b91c1c",
+	"--red-soft": "rgba(185, 28, 28, 0.1)",
+	"--amber": "#d97706",
+	"--term-bg": "#f7f1e3",
+	"--term-fg": "#3f372c",
+	"--term-cursor": "#b45309",
+	"--term-cursor-accent": "#fffdf6",
+	"--term-selection": "rgba(180, 83, 9, 0.28)",
+	"--term-black": "#e2d5b8",
+	"--term-red": "#b91c1c",
+	"--term-green": "#15803d",
+	"--term-yellow": "#a16207",
+	"--term-blue": "#1d4ed8",
+	"--term-magenta": "#9333ea",
+	"--term-cyan": "#0e7490",
+	"--term-white": "#3f372c",
+	"--term-bright-black": "#a2937a",
+	"--term-bright-red": "#b91c1c",
+	"--term-bright-green": "#15803d",
+	"--term-bright-yellow": "#a16207",
+	"--term-bright-blue": "#1d4ed8",
+	"--term-bright-magenta": "#9333ea",
+	"--term-bright-cyan": "#0e7490",
+	"--term-bright-white": "#1c1917",
+	"--brand-grad-a": "#d97706",
+	"--brand-grad-b": "#b45309",
+	"--send-blue": "#b45309",
+	"--send-blue-hover": "#92400e",
+	"--link": "#9a3412",
+	"--link-hover": "#7c2d12",
+	"--link-soft": "#9a3412",
+	"--md-strong": "#292019",
+	"--skill-blue": "#b45309",
+	"--info-blue": "#1d4ed8",
+	"--auth-green": "#15803d",
+	"--err-text": "#b91c1c",
+	"--red-text": "#b91c1c",
+	"--amber-text": "#92400e",
+	"--code-bg": "#efe7d3",
+	"--code-text": "#43382c",
+	"--tooltip-bg": "#fffdf6",
+	"--scroll-thumb": "#d3c4a3",
+	"--scroll-thumb-hover": "#b8a67f",
+	"--notice-err-bg": "#f5dcd2",
+	"--notice-warn-bg": "#f0e5c8",
+	"--notice-info-bg": "#e6dfc9",
+	"--notice-err-border": "#b91c1c",
+	"--notice-warn-border": "#b45309",
+	"--notice-info-border": "#57534e",
+	/* 收起/展开按钮的常驻对照色（issue #100）：暖纸下用纸深灰底 */
+	"--control-fg": "#6f6250",
+	"--control-bg": "#efe7d3",
+	"--control-border": "#ddcfae",
+	/* 壁纸默认关闭（纯色背景），用户/主题按需打开 */
+	"--bg-image": "none",
+	"--bg-image-dim": "0.78",
+	"--bg-image-blur": "0px",
+	"--bg-elev3": "rgba(120, 90, 30, 0.06)",
+	/* 凹陷内容面：暖棕调与纸面对味（同 --bg-elev3 的调子，只低一点点） */
+	"--sunken-bg": "rgba(120, 90, 30, 0.05)",
+	"--glow-015": "rgba(120, 90, 30, 0.02)",
+	"--glow-025": "rgba(120, 90, 30, 0.02)",
+	"--glow-03": "rgba(120, 90, 30, 0.02)",
+	"--glow-04": "rgba(120, 90, 30, 0.03)",
+	"--glow-05": "rgba(120, 90, 30, 0.03)",
+	"--glow-12": "rgba(120, 90, 30, 0.08)",
+	"--glow-18": "rgba(120, 90, 30, 0.12)",
+	"--glow-22": "rgba(120, 90, 30, 0.15)",
+	"--glow-38": "rgba(120, 90, 30, 0.25)",
 };
 
 // 浅色主题的 hljs 覆盖（github-dark 静态打包，浅色下必须整块覆盖）——
@@ -221,6 +324,426 @@ const hljsLight = `
 .hljs-deletion {
 	color: #82071e;
 	background: #ffebe9;
+}
+`;
+
+// 「雾蓝灰」— misty blue-gray page, 天青蓝 accents (vs. GitHub-blue in WHITE,
+// warm 赭石 in PAPER).
+const MIST = {
+	"color-scheme": "light",
+	"--bg": "#e9eef4",
+	"--bg-elev": "#f8fafc",
+	"--bg-elev2": "#dde5ec",
+	"--border": "#cbd5e1",
+	"--border-soft": "#dde5ec",
+	"--text": "#1e293b",
+	"--text-dim": "#475569",
+	"--text-faint": "#94a3b8",
+	"--accent": "#0284c7",
+	"--accent-soft": "rgba(2, 132, 199, 0.12)",
+	"--green": "#059669",
+	"--green-soft": "rgba(5, 150, 105, 0.12)",
+	"--red": "#dc2626",
+	"--red-soft": "rgba(220, 38, 38, 0.1)",
+	"--amber": "#d97706",
+	"--term-bg": "#f8fafc",
+	"--term-fg": "#1e293b",
+	"--term-cursor": "#0284c7",
+	"--term-cursor-accent": "#ffffff",
+	"--term-selection": "rgba(2, 132, 199, 0.28)",
+	"--term-black": "#dbe3ec",
+	"--term-red": "#dc2626",
+	"--term-green": "#059669",
+	"--term-yellow": "#d97706",
+	"--term-blue": "#2563eb",
+	"--term-magenta": "#9333ea",
+	"--term-cyan": "#0e7490",
+	"--term-white": "#1e293b",
+	"--term-bright-black": "#94a3b8",
+	"--term-bright-red": "#dc2626",
+	"--term-bright-green": "#059669",
+	"--term-bright-yellow": "#d97706",
+	"--term-bright-blue": "#2563eb",
+	"--term-bright-magenta": "#9333ea",
+	"--term-bright-cyan": "#0e7490",
+	"--term-bright-white": "#020617",
+	"--brand-grad-a": "#38bdf8",
+	"--brand-grad-b": "#0284c7",
+	"--send-blue": "#0284c7",
+	"--send-blue-hover": "#0369a1",
+	"--link": "#0284c7",
+	"--link-hover": "#0369a1",
+	"--link-soft": "#0284c7",
+	"--md-strong": "#0f172a",
+	"--skill-blue": "#0284c7",
+	"--info-blue": "#2563eb",
+	"--auth-green": "#059669",
+	"--err-text": "#dc2626",
+	"--red-text": "#dc2626",
+	"--amber-text": "#b45309",
+	"--code-bg": "#dde5ec",
+	"--code-text": "#1e293b",
+	"--tooltip-bg": "#ffffff",
+	"--scroll-thumb": "#b6c2d1",
+	"--scroll-thumb-hover": "#94a3b8",
+	"--notice-err-bg": "#f9dee0",
+	"--notice-warn-bg": "#f0e6cb",
+	"--notice-info-bg": "#d9e6f5",
+	"--notice-err-border": "#dc2626",
+	"--notice-warn-border": "#b45309",
+	"--notice-info-border": "#2563eb",
+	/* 收起/展开按钮的常驻对照色（issue #100）：雾蓝灰下用 slate 底 */
+	"--control-fg": "#475569",
+	"--control-bg": "#dde5ec",
+	"--control-border": "#cbd5e1",
+	/* 壁纸默认关闭（纯色背景），用户/主题按需打开 */
+	"--bg-image": "none",
+	"--bg-image-dim": "0.78",
+	"--bg-image-blur": "0px",
+	"--bg-elev3": "rgba(30, 58, 95, 0.05)",
+	/* 凹陷内容面：冷蓝调与雾蓝灰对味 */
+	"--sunken-bg": "rgba(30, 58, 95, 0.05)",
+	"--glow-015": "rgba(30, 58, 95, 0.02)",
+	"--glow-025": "rgba(30, 58, 95, 0.02)",
+	"--glow-03": "rgba(30, 58, 95, 0.02)",
+	"--glow-04": "rgba(30, 58, 95, 0.03)",
+	"--glow-05": "rgba(30, 58, 95, 0.03)",
+	"--glow-12": "rgba(30, 58, 95, 0.08)",
+	"--glow-18": "rgba(30, 58, 95, 0.12)",
+	"--glow-22": "rgba(30, 58, 95, 0.15)",
+	"--glow-38": "rgba(30, 58, 95, 0.25)",
+};
+
+// 暖纸主题的 hljs 覆盖：纸色底，其余 token 沿用浅色 GitHub 色系。
+const hljsPaper = `
+/* ---- syntax highlighting (overrides static github-dark import) ---- */
+.hljs {
+	color: #3f372c;
+	background: #efe7d3;
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+	color: #cf222e;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+	color: #8250df;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+	color: #0550ae;
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+	color: #0a3069;
+}
+.hljs-built_in,
+.hljs-symbol {
+	color: #953800;
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+	color: #8a7d64;
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+	color: #116329;
+}
+.hljs-subst {
+	color: #3f372c;
+}
+.hljs-section {
+	color: #0550ae;
+	font-weight: 700;
+}
+.hljs-bullet {
+	color: #0550ae;
+}
+.hljs-emphasis {
+	color: #3f372c;
+	font-style: italic;
+}
+.hljs-strong {
+	color: #3f372c;
+	font-weight: 700;
+}
+.hljs-addition {
+	color: #116329;
+	background: #dfe8cf;
+}
+.hljs-deletion {
+	color: #82071e;
+	background: #f0d4c4;
+}
+`;
+
+// 「樱粉」— 粉白底 + 樱粉强调（vs. GitHub 蓝 in WHITE / 赭石 in PAPER /
+// 天青蓝 in MIST）。
+const SAKURA = {
+	"color-scheme": "light",
+	"--bg": "#fdf2f5",
+	"--bg-elev": "#fffbfc",
+	"--bg-elev2": "#f8e2e8",
+	"--border": "#eccdd6",
+	"--border-soft": "#f4dde3",
+	"--text": "#4a2b35",
+	"--text-dim": "#7d5561",
+	"--text-faint": "#b08e98",
+	"--accent": "#db2777",
+	"--accent-soft": "rgba(219, 39, 119, 0.12)",
+	"--green": "#059669",
+	"--green-soft": "rgba(5, 150, 105, 0.12)",
+	"--red": "#e11d48",
+	"--red-soft": "rgba(225, 29, 72, 0.1)",
+	"--amber": "#d97706",
+	"--term-bg": "#fffbfc",
+	"--term-fg": "#4a2b35",
+	"--term-cursor": "#db2777",
+	"--term-cursor-accent": "#ffffff",
+	"--term-selection": "rgba(219, 39, 119, 0.28)",
+	"--term-black": "#eed3dc",
+	"--term-red": "#e11d48",
+	"--term-green": "#059669",
+	"--term-yellow": "#d97706",
+	"--term-blue": "#2563eb",
+	"--term-magenta": "#c026d3",
+	"--term-cyan": "#0e7490",
+	"--term-white": "#4a2b35",
+	"--term-bright-black": "#b08e98",
+	"--term-bright-red": "#e11d48",
+	"--term-bright-green": "#059669",
+	"--term-bright-yellow": "#d97706",
+	"--term-bright-blue": "#2563eb",
+	"--term-bright-magenta": "#c026d3",
+	"--term-bright-cyan": "#0e7490",
+	"--term-bright-white": "#2a1219",
+	"--brand-grad-a": "#f472b6",
+	"--brand-grad-b": "#db2777",
+	"--send-blue": "#db2777",
+	"--send-blue-hover": "#be185d",
+	"--link": "#be185d",
+	"--link-hover": "#9d174d",
+	"--link-soft": "#be185d",
+	"--md-strong": "#3a1c25",
+	"--skill-blue": "#db2777",
+	"--info-blue": "#2563eb",
+	"--auth-green": "#059669",
+	"--err-text": "#e11d48",
+	"--red-text": "#e11d48",
+	"--amber-text": "#b45309",
+	"--code-bg": "#f8e2e8",
+	"--code-text": "#4a2b35",
+	"--tooltip-bg": "#fffbfc",
+	"--scroll-thumb": "#dfb9c4",
+	"--scroll-thumb-hover": "#c795a3",
+	"--notice-err-bg": "#f9dfe4",
+	"--notice-warn-bg": "#f3e7cf",
+	"--notice-info-bg": "#eadff0",
+	"--notice-err-border": "#e11d48",
+	"--notice-warn-border": "#b45309",
+	"--notice-info-border": "#a855f7",
+	/* 收起/展开按钮的常驻对照色（issue #100）：樱粉下用粉灰底 */
+	"--control-fg": "#7d5561",
+	"--control-bg": "#f8e2e8",
+	"--control-border": "#eccdd6",
+	/* 壁纸默认关闭（纯色背景），用户/主题按需打开 */
+	"--bg-image": "none",
+	"--bg-image-dim": "0.78",
+	"--bg-image-blur": "0px",
+	"--bg-elev3": "rgba(150, 50, 90, 0.05)",
+	/* 凹陷内容面：粉调与樱粉对味 */
+	"--sunken-bg": "rgba(150, 50, 90, 0.05)",
+	"--glow-015": "rgba(150, 50, 90, 0.02)",
+	"--glow-025": "rgba(150, 50, 90, 0.02)",
+	"--glow-03": "rgba(150, 50, 90, 0.02)",
+	"--glow-04": "rgba(150, 50, 90, 0.03)",
+	"--glow-05": "rgba(150, 50, 90, 0.03)",
+	"--glow-12": "rgba(150, 50, 90, 0.08)",
+	"--glow-18": "rgba(150, 50, 90, 0.12)",
+	"--glow-22": "rgba(150, 50, 90, 0.15)",
+	"--glow-38": "rgba(150, 50, 90, 0.25)",
+};
+
+// 雾蓝灰主题的 hljs 覆盖：冷灰蓝底，其余 token 沿用浅色 GitHub 色系。
+const hljsMist = `
+/* ---- syntax highlighting (overrides static github-dark import) ---- */
+.hljs {
+	color: #1e293b;
+	background: #dde5ec;
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+	color: #cf222e;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+	color: #8250df;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+	color: #0550ae;
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+	color: #0a3069;
+}
+.hljs-built_in,
+.hljs-symbol {
+	color: #953800;
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+	color: #7c8da0;
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+	color: #116329;
+}
+.hljs-subst {
+	color: #1e293b;
+}
+.hljs-section {
+	color: #0550ae;
+	font-weight: 700;
+}
+.hljs-bullet {
+	color: #0550ae;
+}
+.hljs-emphasis {
+	color: #1e293b;
+	font-style: italic;
+}
+.hljs-strong {
+	color: #1e293b;
+	font-weight: 700;
+}
+.hljs-addition {
+	color: #116329;
+	background: #d7e9db;
+}
+.hljs-deletion {
+	color: #82071e;
+	background: #f2d3d6;
+}
+`;
+
+// 樱粉主题的 hljs 覆盖：粉底，其余 token 沿用浅色 GitHub 色系。
+const hljsSakura = `
+/* ---- syntax highlighting (overrides static github-dark import) ---- */
+.hljs {
+	color: #4a2b35;
+	background: #f8e2e8;
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+	color: #cf222e;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+	color: #8250df;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+	color: #0550ae;
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+	color: #0a3069;
+}
+.hljs-built_in,
+.hljs-symbol {
+	color: #953800;
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+	color: #a78b93;
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+	color: #116329;
+}
+.hljs-subst {
+	color: #4a2b35;
+}
+.hljs-section {
+	color: #0550ae;
+	font-weight: 700;
+}
+.hljs-bullet {
+	color: #0550ae;
+}
+.hljs-emphasis {
+	color: #4a2b35;
+	font-style: italic;
+}
+.hljs-strong {
+	color: #4a2b35;
+	font-weight: 700;
+}
+.hljs-addition {
+	color: #116329;
+	background: #ddefdc;
+}
+.hljs-deletion {
+	color: #82071e;
+	background: #f4cdd6;
 }
 `;
 
@@ -338,9 +861,12 @@ const DAZZLE = {
 };
 
 // --- 3) emit ----------------------------------------------------------------
-writeTheme("白色", "white.css", emitTheme("白色", WHITE, hljsLight));
-writeTheme("紫晕", "md-preview.css", emitTheme("紫晕", { "color-scheme": "dark" }, MD_PREVIEW_TAIL));
-writeTheme("赛博朋克", "cyberpunk.css", emitTheme("赛博朋克", CYBERPUNK));
-writeTheme("炫彩", "dazzle.css", emitTheme("炫彩", DAZZLE));
+writeTheme("白色", "white.css", emitTheme("白色", WHITE, hljsLight, "White"));
+writeTheme("暖纸", "paper.css", emitTheme("暖纸", PAPER, hljsPaper, "Warm Paper"));
+writeTheme("雾蓝灰", "mist.css", emitTheme("雾蓝灰", MIST, hljsMist, "Misty Blue Gray"));
+writeTheme("樱粉", "sakura.css", emitTheme("樱粉", SAKURA, hljsSakura, "Sakura Pink"));
+writeTheme("紫晕", "md-preview.css", emitTheme("紫晕", { "color-scheme": "dark" }, MD_PREVIEW_TAIL, "Purple Haze"));
+writeTheme("赛博朋克", "cyberpunk.css", emitTheme("赛博朋克", CYBERPUNK, "", "Cyberpunk"));
+writeTheme("炫彩", "dazzle.css", emitTheme("炫彩", DAZZLE, "", "Dazzle"));
 
-console.log("themes regenerated: white / md-preview / cyberpunk / dazzle");
+console.log("themes regenerated: white / paper / mist / sakura / md-preview / cyberpunk / dazzle");

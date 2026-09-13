@@ -16,7 +16,7 @@
  *   all share one conversation list per project.
  *   PI_CODING_AGENT_DIR  pi config dir (auth/models/skills) — passed to the SDK
  */
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer, type IncomingMessage } from "node:http";
 import { createConnection } from "node:net";
@@ -30,12 +30,30 @@ import { WebSocket, WebSocketServer } from "ws";
 import { VERSION, getAgentDir } from "@earendil-works/pi-coding-agent";
 import { PROTOCOL_VERSION } from "./protocol-version.js";
 import { AgentService, workspacePath, QuiesceRejectedError } from "./agent-service.js";
+import { isAbsoluteWirePath, wireToAbs } from "./files-service.js";
 import { previewKind } from "./text-sniff.js";
 import { startControlServer } from "./control-socket.js";
 import { scheduleUploadCleanup } from "./uploads.js";
 import { ensureWindowsBash, windowsBashDir } from "./ensure-bash.js";
 import { listThemes, resolveThemeFile } from "./themes.js";
-import { PluginManager, resolvePluginClientFile } from "./plugins.js";
+import { isManaged, managedRefusal } from "./managed.js";
+import { launchOrigin, toServiceInfo } from "./launch-origin.js";
+import { parseTabs, tabsRefusal } from "./tabs.js";
+import {
+	installPack,
+	isKnownPack,
+	listPacks,
+	loadServerStrings,
+	readPackFile,
+	removePack,
+	unloadServerStrings,
+} from "./locales.js";
+import {
+	PluginManager,
+	resolvePluginClientFile,
+	type PluginConversationSnapshot,
+	type PluginRunEvent,
+} from "./plugins.js";
 import { McpBridge } from "./mcp-bridge.js";
 import type {
 	BgServer,
@@ -43,6 +61,7 @@ import type {
 	CommandDef,
 	PromptAttachment,
 	ServerMessage,
+	UiServiceInfo,
 	UiSubagentTemplate,
 } from "./protocol.js";
 
@@ -84,6 +103,31 @@ const ALLOW_ORIGINS = (process.env.PI_WEB_ALLOW_ORIGINS ?? "")
  *  Authorization: Bearer / X-PI-Token 头、?token= 查询参数或 pi_web_token cookie
  *  任一匹配即可；供 0.0.0.0 / 反代等暴露场景兜底，未设置则行为不变。 */
 const AUTH_TOKEN = process.env.PI_WEB_TOKEN?.trim() ?? "";
+/** 语言包下载根（语言包仓库的 raw 文件地址；版本 tag 优先、main 兜底，见 locales.ts）。 */
+const LOCALE_BASE_URL =
+	process.env.PI_WEB_LOCALE_BASE_URL?.trim() || "https://raw.githubusercontent.com/xing-shuyin/pi-web-ui";
+/**
+ * 本包版本 —— 下载语言包时优先取同版本 tag，保证 key 对齐。
+ *
+ * Read on first use, not here. `resolvePkgRoot()` is hoisted, but it reads
+ * `here`, which is a `const` declared further down: calling it at module-init
+ * time throws on the temporal dead zone, the catch swallows it, and the
+ * version was silently "" — so the language packs never used the version tag
+ * and always fell back to `main`. Reading it lazily costs one branch and
+ * gives the real number.
+ */
+let appVersionCache: string | null = null;
+function appVersion(): string {
+	if (appVersionCache === null) {
+		try {
+			const pkg = JSON.parse(readFileSync(join(resolvePkgRoot(), "package.json"), "utf8")) as { version?: string };
+			appVersionCache = pkg.version ?? "";
+		} catch {
+			appVersionCache = "";
+		}
+	}
+	return appVersionCache;
+}
 // Root of the SDK default per-project session dirs — chat transcripts live in
 // <SESSION_DIR_ROOT>/--<cwd>--/, shared with the pi CLI/TUI (getAgentDir
 // honors PI_CODING_AGENT_DIR).
@@ -127,29 +171,67 @@ function tokenOk(req: Parameters<typeof requestTokens>[0]): boolean {
 	return requestTokens(req).includes(AUTH_TOKEN);
 }
 
+/** 请求携带的 pi_web_token cookie 值（未带/损坏时为空串）。 */
+function cookieToken(req: { headers: IncomingMessage["headers"] }): string {
+	const cookie = req.headers.cookie;
+	if (typeof cookie !== "string") return "";
+	for (const part of cookie.split(";")) {
+		const [k, ...rest] = part.trim().split("=");
+		if (k === "pi_web_token") return rest.join("=").trim();
+	}
+	return "";
+}
+
 if (AUTH_TOKEN) {
 	// /api/health 保持开放：无敏感信息，容器/监控探针需要它。
-	// 但绝不能因命中 /api/health 就反射下发真实 token cookie（安全漏洞）。
+	// 但绝不能因命中 /api/health 就反射下发真实 token cookie（安全漏洞：issue #45）。
 	app.use((req, res, next) => {
 		const ok = tokenOk(req);
-		// 浏览器经 ?token= 首次进入后下发 HttpOnly cookie，后续导航/资源请求免带参数；
-		// 只有请求确实携带着有效 token 时才下发——匿名命中 /api/health 不触发。
-		if (ok && !req.headers.cookie?.includes("pi_web_token=")) {
-			res.setHeader(
-				"Set-Cookie",
-				`pi_web_token=${encodeURIComponent(AUTH_TOKEN)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`,
-			);
+		const cookie = cookieToken(req);
+		// 浏览器经 ?token= 首次进入后下发 HttpOnly cookie，后续导航/资源请求免带参数。
+		// 重要：只要请求携带着有效 token（query/header/cookie 任一匹配）就把 cookie 刷新为
+		// 当前 AUTH_TOKEN——服务端重启改了 PI_WEB_TOKEN 后，旧 cookie 经一次正确的
+		// ?token= 进入即被重新同步，无需用户清缓存（issue #71）。
+		if (ok) {
+			if (cookie !== encodeURIComponent(AUTH_TOKEN)) {
+				res.setHeader(
+					"Set-Cookie",
+					`pi_web_token=${encodeURIComponent(AUTH_TOKEN)}; Path=/; HttpOnly; SameSite=Strict; Max-Age=31536000`,
+				);
+			}
+		} else if (cookie) {
+			// 请求带的 cookie 已是失效旧值（服务端口令已更换）——立即让其过期，
+			// 避免浏览器被残留 cookie 卡死一年（本来也不该再信任它鉴权）。
+			res.setHeader("Set-Cookie", "pi_web_token=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0");
 		}
 		if (req.path === "/api/health" || ok) {
 			next();
 			return;
 		}
-		res.status(401).send("unauthorized: PI_WEB_TOKEN required (?token=…)");
+		res
+			.status(401)
+			.send(
+				cookie
+					? "unauthorized: PI_WEB_TOKEN required — 服务端口令已变更？已清除旧 token cookie，请用当前 ?token= 重新进入"
+					: "unauthorized: PI_WEB_TOKEN required (?token=…)",
+			);
 	});
 }
 
 /** 引擎选择：PI_WEB_ENGINE=pi|dsh（默认 pi）。重启生效。 */
 const ENGINE: "pi" | "dsh" = process.env.PI_WEB_ENGINE === "dsh" ? "dsh" : "pi";
+
+/** PI_WEB_MANAGED=1: this instance is updated by whoever deploys it. */
+const MANAGED = isManaged();
+/** Who started this process: a platform service manager (launchd / systemd /
+ *  Windows watchdog — i.e. `pi-web-ui server start|install`) or nothing
+ *  (foreground / dev / Docker). Decides whether the UPDATE panel offers
+ *  "restart service" and what quitting means (see scheduleQuit). */
+const ORIGIN = launchOrigin();
+/** 下发给浏览器的服务信息（null = 没有 supervisor）。 */
+const SERVICE_INFO = toServiceInfo(ORIGIN);
+/** PI_WEB_TABS: the tabs this instance offers. null = all of them, as before. */
+const TABS = parseTabs();
 
 app.get("/api/health", (_req, res) => {
 	res.json({ ok: true, piVersion: VERSION, cwd: CWD, pid: process.pid, engine: ENGINE });
@@ -175,16 +257,28 @@ app.get("/api/file", async (req, res) => {
 		// back to the server cwd for requests without a known client.
 		const cid = typeof req.query.clientId === "string" ? req.query.clientId : "";
 		const cs = cid ? service.get(cid) : undefined;
-		const wp = workspacePath(cs?.cwd ?? CWD, raw);
-		if (!wp) {
-			res.status(400).end("path outside workspace");
-			return;
+		const root = cs?.cwd ?? CWD;
+		const absWire = isAbsoluteWirePath(raw);
+		let abs: string;
+		if (absWire) {
+			abs = wireToAbs(raw);
+		} else {
+			const wp = workspacePath(root, raw);
+			if (!wp) {
+				res.status(400).end("path outside workspace");
+				return;
+			}
+			abs = wp.abs;
 		}
-		const abs = wp.abs;
 		const name = basename(abs);
 		const kind = previewKind(name);
 		const isDownload = req.query.download === "1";
-		if (!isDownload && kind !== "image" && kind !== "video") {
+		// HTML files preview through a sandboxed <iframe> in the file modal
+		// (FilePreview.tsx). They are text as far as previewKind goes, so
+		// allowlist them explicitly here.
+		const lower = name.toLowerCase();
+		const isHtmlPreview = lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml");
+		if (!isDownload && kind !== "image" && kind !== "video" && !isHtmlPreview) {
 			res.status(400).end("not a previewable media file");
 			return;
 		}
@@ -198,8 +292,83 @@ app.get("/api/file", async (req, res) => {
 			// filename* encoding for non-ASCII names.
 			res.download(abs, name);
 		} else {
+			if (isHtmlPreview) {
+				// Sandbox even a top-level navigation to this URL: a workspace
+				// HTML file must never get our origin (it could otherwise read
+				// the token cookie). The modal iframe carries its own sandbox
+				// attribute as well (defense in depth).
+				//
+				// ?allowJs=1 is the explicit per-file opt-in from the preview
+				// modal ("启用脚本"): scripts run, but still in an opaque
+				// origin — no DOM/cookie/storage access to our app, no forms,
+				// no top-navigation. NEVER add allow-same-origin here.
+				const allowJs = req.query.allowJs === "1";
+				res.setHeader("Content-Security-Policy", allowJs ? "sandbox allow-scripts" : "sandbox");
+				res.setHeader("X-Content-Type-Options", "nosniff");
+			}
 			res.sendFile(abs);
 		}
+	} catch {
+		res.status(404).end("not found");
+	}
+});
+
+/**
+ * Directory-mapped preview: serves a workspace file at a URL that mirrors its
+ * directory location, so an HTML preview's RELATIVE subresources
+ * (<link href="../web/src/styles.css">, <img src="./x.png">, <script
+ * src="./app.js">, …) resolve and load with normal browser semantics. The
+ * iframe document URL itself carries the file's directory — no HTML rewriting.
+ *
+ *   /api/preview/<workspace-rel-path>?clientId=…[&allowJs=1]
+ *   /api/preview/__abs__/<absolute-wire-path>?clientId=…[&allowJs=1]
+ *   (each path segment URI-encoded; ".." is normalized by the browser before
+ *   the request is sent, workspace containment is still re-checked here)
+ *
+ * Same footing as /api/file: workspace containment enforced, HTML documents
+ * get a sandboxed CSP (?allowJs=1 relaxes scripts only — never same-origin),
+ * everything else streams with its real content type.
+ */
+app.get("/api/preview/*", async (req, res) => {
+	try {
+		const captured = String((req.params as unknown as Record<string, string>)[0] ?? "");
+		const ABS_MARKER = "__abs__/";
+		const cid = typeof req.query.clientId === "string" ? req.query.clientId : "";
+		const cs = cid ? service.get(cid) : undefined;
+		const root = cs?.cwd ?? CWD;
+		// Express decodes %XX in the wildcard, so this is back to the wire
+		// form (filenames never contain "/", so per-segment encoding from
+		// the client round-trips exactly).
+		let abs: string;
+		if (captured === "__abs__" || captured.startsWith(ABS_MARKER)) {
+			// Machine browsing: absolute wire path ("C:/..." / "/...").
+			const wire = captured.slice(ABS_MARKER.length);
+			if (!isAbsoluteWirePath(wire)) {
+				res.status(400).end("bad absolute preview path");
+				return;
+			}
+			abs = wireToAbs(wire);
+		} else {
+			const wp = workspacePath(root, captured);
+			if (!wp) {
+				res.status(400).end("path outside workspace");
+				return;
+			}
+			abs = wp.abs;
+		}
+		const name = basename(abs);
+		const st = await stat(abs);
+		if (!st.isFile()) {
+			res.status(400).end("not a file");
+			return;
+		}
+		res.setHeader("X-Content-Type-Options", "nosniff");
+		const lower = name.toLowerCase();
+		if (lower.endsWith(".html") || lower.endsWith(".htm") || lower.endsWith(".xhtml")) {
+			const allowJs = req.query.allowJs === "1";
+			res.setHeader("Content-Security-Policy", allowJs ? "sandbox allow-scripts" : "sandbox");
+		}
+		res.sendFile(abs);
 	} catch {
 		res.status(404).end("not found");
 	}
@@ -229,6 +398,63 @@ const USER_THEMES_DIR = join(DATA_DIR, "themes");
 
 app.get("/api/themes", (_req, res) => {
 	res.json({ themes: listThemes(BUILTIN_THEMES_DIR, USER_THEMES_DIR) });
+});
+// 语言包：核心只随包发布中英，其余按需下载到 <dataDir>/locales/<code>.json。
+// 手工放进去的同名 JSON 也会被识别（离线安装）。PI_WEB_TOKEN 鉴权自动覆盖。
+/**
+ * PI_WEB_LOCALE — the language a first visit falls back to.
+ *
+ * It is a fallback, not an override: an explicit choice, and then the
+ * browser's own languages, come first (web/src/pick-locale.ts). It rides on
+ * /api/locales because the client already asks for that at boot, so naming a
+ * default costs no extra request.
+ */
+const DEFAULT_LOCALE = (process.env.PI_WEB_LOCALE ?? "").trim().toLowerCase() || null;
+
+app.get("/api/locales", (_req, res) => {
+	res.json({ packs: listPacks(DATA_DIR), defaultLocale: DEFAULT_LOCALE });
+});
+app.get("/api/locales/:code", (req, res) => {
+	const code = String(req.params.code ?? "");
+	if (!isKnownPack(code)) {
+		res.status(404).end("unknown locale");
+		return;
+	}
+	const pack = readPackFile(DATA_DIR, code);
+	if (!pack) {
+		res.status(404).end("locale not installed");
+		return;
+	}
+	res.setHeader("Cache-Control", "no-cache");
+	res.json(pack);
+});
+app.post("/api/locales/:code/install", async (req, res) => {
+	const code = String(req.params.code ?? "");
+	if (!isKnownPack(code)) {
+		res.status(400).json({ error: `unknown locale: ${code}` });
+		return;
+	}
+	try {
+		const meta = await installPack(DATA_DIR, code, { baseUrl: LOCALE_BASE_URL, version: appVersion() });
+		// 新包可能自带 serverStrings（issue #91 v2）——重扫注册，无表则跳过。
+		loadServerStrings(DATA_DIR);
+		res.json({ ok: true, ...meta });
+	} catch (e) {
+		res.status(502).json({ error: e instanceof Error ? e.message : String(e) });
+	}
+});
+app.delete("/api/locales/:code", (req, res) => {
+	const code = String(req.params.code ?? "");
+	if (!isKnownPack(code)) {
+		res.status(404).end("unknown locale");
+		return;
+	}
+	if (!removePack(DATA_DIR, code)) {
+		res.status(404).end("locale not installed");
+		return;
+	}
+	unloadServerStrings(code);
+	res.json({ ok: true });
 });
 // Serve a theme's full CSS file so the frontend can swap the whole stylesheet.
 // Registered before the SPA catch-all below (otherwise it'd return index.html).
@@ -294,6 +520,23 @@ if (existsSync(webDist)) {
 			},
 		}),
 	);
+	// 缺失的静态文件必须 404（不能落进下面的 SPA catch-all）：缺少的 hash 产物若
+	// 回 index.html（200），浏览器会把 HTML 当 JS/CSS 执行失败黑屏，SW 还会把
+	// 它按 200 缓进 STATIC_CACHE，之后即使文件恢复也要清缓存才能好。
+	app.use((req, res, next) => {
+		const p = req.path;
+		if (
+			p.startsWith("/assets/") ||
+			p.startsWith("/icons/") ||
+			p === "/favicon.svg" ||
+			p === "/icon.ico" ||
+			p === "/manifest.webmanifest"
+		) {
+			res.status(404).end();
+			return;
+		}
+		next();
+	});
 	app.get(/^\/(?!api\/|ws).*/, (_req, res) => {
 		// Callback form: a failed stat here (npm i -g is mid-replacement of the
 		// package dir) responds 503 instead of crashing the request pipeline
@@ -431,6 +674,7 @@ export interface TerminalManagerLike {
 	input(id: string, data: string): void;
 	resize(id: string, cols: number, rows: number): void;
 	kill(id: string): void;
+	rename(id: string, title: string): void;
 	runCommand(id: string, command: CommandDef, cols: number, rows: number, fallbackCwd: string): unknown;
 }
 
@@ -441,10 +685,14 @@ export interface DispatchSession {
 	removeQueued(kind: "steer" | "followUp", text: string): void;
 	abort(): Promise<void>;
 	abortBash(): Promise<void>;
+	/** 手动重试上次失败的模型调用（自动重试次数用完、已停止标红后）。 */
+	retryLast(): Promise<void>;
 	killBackgroundServer(port?: number, taskId?: string): Promise<boolean>;
 	killAllBackgroundServers(): Promise<string[]>;
 	listBgServers(): Promise<void>;
-	newChat(): Promise<void>;
+	/** 返回值语义见 SlashHost.newChat：布尔值 = 是否落在一个可接收首条的空白
+	 *  新对话（/new <prompt> 用）。此处只管转发，返回值被丢弃，故允许 void。 */
+	newChat(): Promise<boolean | void>;
 	editMessage(messageId: string, text: string, attachments?: PromptAttachment[]): Promise<void>;
 	cycleModel(): Promise<void>;
 	cycleThinking(): void;
@@ -454,7 +702,10 @@ export interface DispatchSession {
 	pushProjects(): Promise<void>;
 	removeProject(path: string): Promise<void>;
 	deleteSession(path: string): Promise<void>;
-	dismissConversation(id: string): Promise<void>;
+	renameSession(path: string, name: string): Promise<void>;
+	renameConversation(id: string, name: string): Promise<void>;
+	dismissConversation(id: string, withFinishedSubagents?: boolean, force?: boolean): Promise<void>;
+	dismissFinishedSubagents(parentId?: string): Promise<void>;
 	switchSession(path: string): Promise<void>;
 	switchConversation(id: string): Promise<void>;
 	listFiles(path?: string): Promise<void>;
@@ -473,6 +724,7 @@ export interface DispatchSession {
 	setThinking(level: string): void;
 	setCwd(path: string): Promise<void>;
 	completePath(path: string): Promise<void>;
+	makeDir(path: string): Promise<void>;
 	checkUpdate(): Promise<void>;
 	checkUpdatesAll(force?: boolean): Promise<void>;
 	resolveDialog(id: number, value: string | boolean | null): void;
@@ -480,6 +732,7 @@ export interface DispatchSession {
 	setProviderApiKey(provider: string, apiKey: string): Promise<void>;
 	clearProviderApiKey(provider: string): Promise<void>;
 	listModelsConfig(): Promise<void>;
+	reloadModelsConfig(): Promise<void>;
 	saveModelConfig(providerId: string, config: unknown): Promise<void>;
 	deleteModelConfig(providerId: string): Promise<void>;
 	listProviders(): Promise<void>;
@@ -502,12 +755,15 @@ export interface DispatchSession {
 	setSettings(partial: {
 		promptMode?: "append" | "replace";
 		customSystemPrompt?: string;
+		promptTemplate?: string;
+		promptOverrides?: Record<string, string>;
 		disabledSkills?: string[];
 		disabledExtensions?: string[];
 		disabledPlugins?: string[];
 		terminalToolsEnabled?: boolean;
 		terminalBash?: boolean;
 		terminalBashIdleMs?: number;
+		editSoftEnabled?: boolean;
 		thinkingWrap?: boolean;
 		toolsWrap?: boolean;
 		visionBridgeEnabled?: boolean;
@@ -527,14 +783,22 @@ export interface DispatchSession {
 		answers: { id: string; selected: string[]; custom?: string }[],
 		cancelled?: boolean,
 	): Promise<void>;
+	/** 浏览器页面调用回包（browser_page 工具，pi 引擎专有；DSH 无页面桥，
+	 *  方法缺失时 dispatch 侧的 `?.` 直接忽略这条消息）。 */
+	resolvePageCall?(id: string, ok: boolean, result?: unknown, error?: string): void;
 	savePreset(name: string): Promise<void>;
 	applyPreset(name: string): Promise<void>;
 	deletePreset(name: string): Promise<void>;
 	/** Upsert 一个子代理模板（全局共享）。 */
 	saveSubagentTemplate(template: UiSubagentTemplate): Promise<void>;
+	/** 当前客户端的服务端语言（issue #91 v2：归一化 UI 代码，zh/EN/ja/…）。 */
+	getLang(): string;
+	/** Browser UI locale report (hello.locale / set_locale) — persist per
+	 *  client and refresh lang-aware prompts (streaming-safe). */
+	setLocale(locale: string): Promise<void>;
 	/** 删除一个子代理模板。 */
 	deleteSubagentTemplate(name: string): Promise<void>;
-	emitNotice(level: "info" | "warning" | "error", text: string): void;
+	emitNotice(level: "info" | "warning" | "error", text: string, textEn?: string): void;
 	activeConversations(): number;
 	pendingMessages(): number;
 }
@@ -560,12 +824,16 @@ export interface EngineService {
 		connectedClients: number;
 		activeConversations: number;
 		pendingMessages: number;
+		service: UiServiceInfo | null;
 	};
 	activeConversations(): number;
 	pendingMessages(): number;
 	applyPluginAgentTools(): void;
 	applyPluginCommandCatalog(): void;
 	refreshBackgroundServers(): void;
+	/** Browser UI locale report (hello.locale / set_locale) — persist per
+	 *  client and refresh lang-aware prompts (streaming-safe). */
+	setLocale(clientId: string, locale: string): Promise<void>;
 	onQuit?: (() => boolean) | undefined;
 	onToolEvent?:
 		| ((ev: {
@@ -576,6 +844,12 @@ export interface EngineService {
 				isError?: boolean;
 		  }) => void)
 		| undefined;
+	/** 运行轨迹事件转发（pi 引擎发射；dsh 引擎暂不发射，插件收不到即无轨迹）。 */
+	onRunEvent?: ((ev: PluginRunEvent) => void) | undefined;
+	/** 对话切换通知（切历史会话/切 running 对话/新对话/切项目，pi 引擎）。 */
+	onConversationChanged?: (() => void) | undefined;
+	/** 当前打开对话的快照（pi 引擎；dsh 引擎无此方法，插件回退空态）。 */
+	readConversationForPlugins?: (() => PluginConversationSnapshot | null) | undefined;
 	pluginToolsProvider?: (() => unknown[]) | undefined;
 	pluginCommandsProvider?: (() => unknown[]) | undefined;
 	pluginBgTasksProvider?: (() => BgServer[]) | undefined;
@@ -592,9 +866,12 @@ const service: EngineService =
 				join(DATA_DIR, "client-state.json"),
 			);
 
+// Server-string tables (issue #91 v2): packs' `serverStrings` sections feed
+// pick() lookup for non-zh/en UI languages (missing key → English fallback).
+loadServerStrings(DATA_DIR);
 // Optional UI plugins (<dataDir>/plugins/<id>/): scanned on every client
 // attach so freshly dropped plugins appear without a server restart.
-const pluginMgr = new PluginManager(DATA_DIR, CWD);
+const pluginMgr = new PluginManager(DATA_DIR, CWD, join(pkgRoot, "plugins", "catalog.json"));
 // MCP 工具桥：读取 <dataDir>/mcp.json 启动外部 MCP 服务器（stdio），把它们的
 // 工具并入与插件工具相同的 customTools 管线；单服务器失败不炸进程。
 const mcpBridge = new McpBridge(DATA_DIR, (...a) => console.log("[mcp]", ...a));
@@ -603,6 +880,12 @@ void mcpBridge.load().then(() => {
 });
 // 插件扩展点：SDK 工具执行事件（bash/读文件等 start+end）转发给已注册的插件。
 service.onToolEvent = (ev) => pluginMgr.emitToolEvent(ev);
+service.onRunEvent = (ev) => pluginMgr.emitRunEvent(ev);
+// 插件扩展点：对话切换通知（轨迹视图切会话后即重拉；dsh 引擎暂无）。
+service.onConversationChanged = () => pluginMgr.emitConversationChanged();
+// 插件扩展点：当前打开对话的快照（轨迹视图直接显示打开对话的时间线；
+// dsh 引擎无此方法时回退 null，插件显示空态）。
+pluginMgr.conversationProvider = () => service.readConversationForPlugins?.() ?? null;
 // 插件扩展点：插件注册的 AI 工具（registerAgentTool）+ MCP 桥工具 → 会话创建时
 // 带上 + 变化时动态注入/移除已有会话。
 service.pluginToolsProvider = () => [...pluginMgr.getAgentTools(), ...mcpBridge.getTools()];
@@ -629,8 +912,12 @@ service.onClientCwdChanged = (cwd) => pluginMgr.notifyCwd(cwd);
 function scheduleQuit(): boolean {
 	const isLaunchd = process.platform === "darwin" && process.ppid === 1;
 	const isSystemd = process.platform === "linux" && !!process.env.INVOCATION_ID;
+	// Windows `server install` runs the server under the powershell watchdog
+	// launcher (`while ($true) { node …; Start-Sleep 10 }`) — exiting brings it
+	// back within ~10s, same contract as launchd/systemd (see launch-origin.ts).
+	const isWinWatchdog = ORIGIN.supervisor === "windows-watchdog";
 	const inDocker = existsSync("/.dockerenv");
-	if (isLaunchd || isSystemd || inDocker) {
+	if (isLaunchd || isSystemd || isWinWatchdog || inDocker) {
 		setTimeout(() => {
 			console.log("pi-web-ui:quit — shutting down (supervisor will restart)…");
 			if (isSystemd) process.exit(3);
@@ -748,6 +1035,15 @@ wss.on("connection", (ws) => {
 			pending.push(msg);
 			return;
 		}
+		// Managed instances do not install software on themselves, and tabs this
+		// instance does not offer stay closed. Both refusals live here, on the
+		// server, because hiding them in the client would still leave the message
+		// reachable to anything that can open the socket. See managed.ts / tabs.ts.
+		const refusal = managedRefusal(msg.type, MANAGED) ?? tabsRefusal(msg.type, TABS);
+		if (refusal) {
+			send({ type: "notice", level: "error", text: refusal });
+			return;
+		}
 		switch (msg.type) {
 			case "prompt":
 				void cs.prompt(msg.text, msg.attachments, msg.queue);
@@ -760,6 +1056,9 @@ wss.on("connection", (ws) => {
 				break;
 			case "abort_bash":
 				void cs.abortBash();
+				break;
+			case "retry_last":
+				void cs.retryLast();
 				break;
 			case "kill_background_server":
 				void cs.killBackgroundServer(msg.port, msg.taskId);
@@ -802,8 +1101,17 @@ wss.on("connection", (ws) => {
 			case "delete_session":
 				void cs.deleteSession(msg.path);
 				break;
+			case "rename_session":
+				void cs.renameSession(msg.path, msg.name);
+				break;
+			case "rename_conversation":
+				void cs.renameConversation(msg.id, msg.name);
+				break;
 			case "dismiss_conversation":
-				void cs.dismissConversation(msg.id);
+				void cs.dismissConversation(msg.id, msg.withFinishedSubagents, msg.force);
+				break;
+			case "dismiss_finished_subagents":
+				void cs.dismissFinishedSubagents(msg.parentId);
 				break;
 			case "switch_session":
 				void cs.switchSession(msg.path);
@@ -853,8 +1161,16 @@ wss.on("connection", (ws) => {
 			case "set_cwd":
 				void cs.setCwd(msg.path);
 				break;
+			case "set_locale":
+				// UI language report — per-client persist + lang-aware prompt
+				// refresh (streaming-safe). Engine-agnostic via DispatchSession.
+				void service.setLocale(clientId, msg.locale);
+				break;
 			case "complete_path":
 				void cs.completePath(msg.path);
+				break;
+			case "make_dir":
+				void cs.makeDir(msg.path);
 				break;
 			case "check_update":
 				void cs.checkUpdate();
@@ -862,6 +1178,31 @@ wss.on("connection", (ws) => {
 			case "check_updates_all":
 				void cs.checkUpdatesAll(msg.force === true);
 				break;
+			case "restart_service": {
+				// Same effect as `pi-web-ui server restart`: this process exits and its
+				// supervisor brings it back (launchd/systemd immediately, the Windows
+				// watchdog within ~10s). Refused without a supervisor — exiting there
+				// would just stop the server the user is looking at.
+				if (!ORIGIN.supervisor) {
+					send({
+						type: "notice",
+						level: "error",
+						text: "当前实例不是由 pi-web-ui 服务启动的（前台运行），无法自动重启；请在终端里重启，或先用 pi-web-ui server install 安装服务。",
+						textEn:
+							"This instance runs in the foreground, not as a pi-web-ui service — nothing would bring it back. Restart it in its terminal, or install the service with `pi-web-ui server install`.",
+					});
+					break;
+				}
+				send({
+					type: "notice",
+					level: "info",
+					text: "正在重启服务…页面会在服务恢复后自动重连。",
+					textEn: "Restarting the service… this page reconnects once it is back.",
+				});
+				// Let the notice (and this socket's backlog) flush before we go down.
+				setTimeout(() => void scheduleQuit(), 400);
+				break;
+			}
 			case "dialog_response":
 				cs.resolveDialog(msg.id, msg.value);
 				break;
@@ -876,6 +1217,9 @@ wss.on("connection", (ws) => {
 				break;
 			case "list_models_config":
 				void cs.listModelsConfig();
+				break;
+			case "reload_models_config":
+				void cs.reloadModelsConfig();
 				break;
 			case "save_model_config":
 				void cs.saveModelConfig(msg.providerId, msg.config);
@@ -930,6 +1274,9 @@ wss.on("connection", (ws) => {
 			case "terminal_kill":
 				cs.getTerminalManager(msg.conversationId)?.kill(msg.terminalId);
 				break;
+			case "rename_terminal":
+				cs.getTerminalManager(msg.conversationId)?.rename(msg.terminalId, msg.title);
+				break;
 			case "run_command":
 				cs.getTerminalManager(msg.conversationId)?.runCommand(
 					msg.terminalId,
@@ -973,23 +1320,37 @@ wss.on("connection", (ws) => {
 				cs.pushSettings();
 				break;
 			case "set_settings":
-				void cs.setSettings({
+				void (cs as unknown as { setSettings: (p: Record<string, unknown>) => Promise<void> }).setSettings({
 					promptMode: msg.promptMode,
 					customSystemPrompt: msg.customSystemPrompt,
+					promptTemplate: (msg as { promptTemplate?: string }).promptTemplate,
+					promptOverrides: (msg as { promptOverrides?: Record<string, string> }).promptOverrides,
 					disabledSkills: msg.disabledSkills,
 					disabledExtensions: msg.disabledExtensions,
+					disabledAgentTools: msg.disabledAgentTools,
 					disabledPlugins: msg.disabledPlugins,
 					terminalToolsEnabled: msg.terminalToolsEnabled,
 					terminalBash: msg.terminalBash,
 					terminalBashIdleMs: msg.terminalBashIdleMs,
+					editSoftEnabled: (msg as { editSoftEnabled?: boolean }).editSoftEnabled,
+					questionnaireEnabled: (msg as { questionnaireEnabled?: boolean }).questionnaireEnabled,
+					goalModeEnabled: (msg as { goalModeEnabled?: boolean }).goalModeEnabled,
 					thinkingWrap: msg.thinkingWrap,
 					toolsWrap: msg.toolsWrap,
+					skillsFullText: (msg as { skillsFullText?: string[] }).skillsFullText,
 					visionBridgeEnabled: msg.visionBridgeEnabled,
 					visionBridgeModel: msg.visionBridgeModel,
 					visionBridgePromptMode: msg.visionBridgePromptMode,
 					visionBridgePrompt: msg.visionBridgePrompt,
+					subagentDefaultModel: (msg as { subagentDefaultModel?: string | null }).subagentDefaultModel,
+					retryMaxAttempts: (msg as { retryMaxAttempts?: number }).retryMaxAttempts,
 					reviewPrompt: msg.reviewPrompt,
 					reviewDisabledSkills: msg.reviewDisabledSkills,
+					markersEnabled: (msg as { markersEnabled?: boolean }).markersEnabled,
+					disabledMarkers: (msg as { disabledMarkers?: string[] }).disabledMarkers,
+					quickPhrases: (msg as { quickPhrases?: string[] }).quickPhrases,
+					quickPhrasesEnabled: (msg as { quickPhrasesEnabled?: boolean }).quickPhrasesEnabled,
+					quickPhrasesSeeded: (msg as { quickPhrasesSeeded?: boolean }).quickPhrasesSeeded,
 				});
 				break;
 			case "extensions_reload":
@@ -999,17 +1360,35 @@ wss.on("connection", (ws) => {
 				pluginMgr.handleMessage(msg.pluginId, msg.payload, clientId ?? undefined);
 				break;
 			case "plugin_settings": {
-				const r = pluginMgr.savePluginSettings(msg.pluginId, msg.values ?? {});
+				const r = pluginMgr.savePluginSettings(msg.pluginId, msg.values ?? {}, () => cs?.getLang() ?? "en");
 				if (r.error) {
-					cs?.emitNotice("error", `插件设置保存失败：${r.error}`);
+					cs?.emitNotice("error", `插件设置保存失败：${r.error}`, `Failed to save plugin settings: ${r.error}`);
 				} else {
-					cs?.emitNotice("info", "插件设置已保存");
+					cs?.emitNotice("info", "插件设置已保存", "Plugin settings saved");
 				}
 				break;
 			}
 			case "plugins_reload":
-				void pluginMgr.reload().then(() => pluginMgr.pushToAll());
+				void pluginMgr.reload(() => cs?.getLang() ?? "en").then(() => pluginMgr.pushToAll());
 				break;
+			case "plugin_catalog_add": {
+				const r = pluginMgr.addCatalogEntry(msg.entry ?? {}, () => cs?.getLang() ?? "en");
+				if (r.error) {
+					cs?.emitNotice("error", `添加到插件列表失败：${r.error}`, `Failed to add to plugin list: ${r.error}`);
+				} else {
+					cs?.emitNotice("info", "已添加到插件列表", "Added to the plugin list");
+				}
+				break;
+			}
+			case "plugin_catalog_remove": {
+				const r = pluginMgr.removeCatalogEntry(msg.id, () => cs?.getLang() ?? "en");
+				if (r.error) {
+					cs?.emitNotice("error", `从插件列表移除失败：${r.error}`, `Failed to remove from plugin list: ${r.error}`);
+				} else {
+					cs?.emitNotice("info", "已从插件列表移除", "Removed from the plugin list");
+				}
+				break;
+			}
 			case "dsh_patches_list":
 				void cs.listDshPatches?.();
 				break;
@@ -1018,6 +1397,11 @@ wss.on("connection", (ws) => {
 				break;
 			case "question_answer":
 				void cs.answerQuestion?.(msg.id, msg.answers, msg.cancelled);
+				break;
+			case "page_response":
+				// 浏览器（page-picker 扩展经前端）对 browser_page 的回包：恢复挂起的
+				// pageCall；id 不匹配（超时后迟到/页面刷新）由 resolvePageCall 静默忽略。
+				cs.resolvePageCall?.(msg.id, msg.ok, msg.result, msg.error);
 				break;
 			case "save_preset":
 				void cs.savePreset(msg.name);
@@ -1060,22 +1444,47 @@ wss.on("connection", (ws) => {
 						serverVersion: VERSION,
 						protocolVersion: PROTOCOL_VERSION,
 						engine: ENGINE,
+						// This package's own version. `serverVersion` is the pi SDK's,
+						// and the client used to learn ours from the update check —
+						// which a managed instance never runs.
+						appVersion: appVersion(),
+						managed: MANAGED,
+						tabs: TABS ? [...TABS] : undefined,
+						service: SERVICE_INFO ?? undefined,
 					});
-					cs.flushSnapshot();
 					// Plugin catalog: re-scan + activate new dirs on every attach so
 					// freshly dropped plugins show up without a server restart.
 					pluginMgr
-						.ensureLoaded()
+						.ensureLoaded(() => service.get(cid)?.getLang() ?? "en")
 						.then((plugins) => {
+							if (closed) return;
 							send({ type: "plugins", plugins, epoch: pluginMgr.epoch });
+							// 插件市场列表（可一键安装的清单）随附推一次。
+							send({
+								type: "plugin_catalog",
+								entries: pluginMgr.catalog(),
+								epoch: pluginMgr.catalogEpochValue,
+							});
 							// 让各插件向新接入的客户端推送自身初始状态（onAttach 钩子）——
 							// 插件不要依赖客户端挂载后自己拉（见 plugins.ts onAttach 注释）。
 							pluginMgr.notifyAttach(cid);
 							// 插件命令可能在本客户端 attach 过程中才注册（首载竞态）——
 							// 重推一次目录，保证选择器完整。
 							service.applyPluginCommandCatalog();
+							// 插件清单【先于】快照推送：前端渲染历史消息前就拿到 renderer
+							// 注册表（plugin-fence.ts），`` ```lang `` 围栏才能立即命中插件；
+							// 否则消息先落成普通代码块，清单后到也不会重渲。
+							cs.flushSnapshot();
 						})
-						.catch(() => {});
+						.catch(() => {
+							if (closed) return;
+							// ensureLoaded 失败（如磁盘读错）不能卡死快照——前端 30s 无消息
+							// 会重连，重连又失败会陷入循环。至少把状态推下去。
+							cs.flushSnapshot();
+						});
+					// hello may carry the UI locale — persist it before replaying
+					// anything queued during startup (issue #91).
+					if (msg.locale) void service.setLocale(cid, msg.locale);
 					// Replay anything that arrived while the session was starting.
 					const queued = pending;
 					pending = [];

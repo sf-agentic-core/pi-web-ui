@@ -22,6 +22,8 @@ const base: SubagentTemplate = {
 	systemPrompt: "你是一名严格的代码审查者。",
 	enabledSkills: ["code-review"],
 	enabledExtensions: ["npm:pi-scm"],
+	model: "",
+	thinkingLevel: "",
 	enabled: true,
 };
 
@@ -34,6 +36,25 @@ describe("SubagentTemplatesStore", () => {
 			expect(t.enabled).toBe(true);
 			expect(t.promptMode).toMatch(/^(replace|append)$/);
 		}
+	});
+
+	it("老用户旧文件：缺失的内置模板一次性补齐；此后删除不再复活", () => {
+		const dir = mkdtempSync(join(tmpdir(), "satpl-"));
+		dirs.push(dir);
+		const file = join(dir, "subagent-templates.json");
+		// 模拟发版前的旧文件：只有 review（无 sidecar 档）
+		writeFileSync(file, JSON.stringify([{ name: "review", systemPrompt: "old" }]));
+		const a = new SubagentTemplatesStore(file);
+		// 新内置模板（oracle 等）被补齐
+		expect(a.get("oracle")).toBeDefined();
+		expect(a.get("review")!.systemPrompt).toBe("old");
+		// 旧文件没有 thinkingLevel：归一为空 = 跟随主对话（升级不改变已有模板行为）
+		expect(a.get("review")!.thinkingLevel).toBe("");
+		// 用户删掉 review 后重载：不再复活（已在 seeded 名单）
+		a.remove("review");
+		const b = new SubagentTemplatesStore(file);
+		expect(b.get("review")).toBeUndefined();
+		expect(b.get("oracle")).toBeDefined();
 	});
 
 	it("upsert / get / list / remove 基础流程（默认之上增删）", () => {
@@ -103,7 +124,8 @@ describe("SubagentTemplatesStore", () => {
 		);
 		const store = new SubagentTemplatesStore(file);
 		const list = store.list();
-		expect(list).toHaveLength(1);
+		// 脏条目丢弃 + 缺失的内置模板一次性补齐（sidecar 无档）
+		expect(list).toHaveLength(1 + DEFAULT_TEMPLATES.length);
 		expect(list[0]).toEqual({
 			name: "ok",
 			description: "",
@@ -111,8 +133,57 @@ describe("SubagentTemplatesStore", () => {
 			systemPrompt: "x",
 			enabledSkills: [],
 			enabledExtensions: [],
+			model: "",
+			thinkingLevel: "",
 			enabled: true,
 		});
+	});
+
+	it("model 字段归一：空白 → 空串（跟随主对话）；脏类型 → 空串", () => {
+		const dir = mkdtempSync(join(tmpdir(), "satpl-"));
+		dirs.push(dir);
+		const file = join(dir, "subagent-templates.json");
+		writeFileSync(
+			file,
+			JSON.stringify([{ name: "a", model: "anthropic/claude-opus-4-5" }, { name: "b", model: 42 }, { name: "c" }]),
+		);
+		const store = new SubagentTemplatesStore(file);
+		expect(store.get("a")!.model).toBe("anthropic/claude-opus-4-5");
+		expect(store.get("b")!.model).toBe("");
+		expect(store.get("c")!.model).toBe("");
+		// upsert 时同样归一
+		store.upsert({ ...base, name: "withModel", model: "  dashscope/qwen-max " });
+		expect(store.get("withModel")!.model).toBe("dashscope/qwen-max");
+	});
+
+	it("thinkingLevel 字段归一：只认 SDK 档位；空/脏值 → 空串（跟随主对话）", () => {
+		const dir = mkdtempSync(join(tmpdir(), "satpl-"));
+		dirs.push(dir);
+		const file = join(dir, "subagent-templates.json");
+		writeFileSync(
+			file,
+			JSON.stringify([
+				{ name: "a", thinkingLevel: "high" },
+				{ name: "b", thinkingLevel: "  xhigh " },
+				{ name: "c", thinkingLevel: "off" },
+				{ name: "d", thinkingLevel: "ultra" },
+				{ name: "e", thinkingLevel: 42 },
+				{ name: "f" },
+			]),
+		);
+		const store = new SubagentTemplatesStore(file);
+		expect(store.get("a")!.thinkingLevel).toBe("high");
+		expect(store.get("b")!.thinkingLevel).toBe("xhigh");
+		expect(store.get("c")!.thinkingLevel).toBe("off");
+		// 写错的值当未配置（不报错、不猜），回落「跟随主对话」
+		expect(store.get("d")!.thinkingLevel).toBe("");
+		expect(store.get("e")!.thinkingLevel).toBe("");
+		expect(store.get("f")!.thinkingLevel).toBe("");
+		// upsert 同样校验
+		store.upsert({ ...base, name: "ok", thinkingLevel: "medium" });
+		expect(store.get("ok")!.thinkingLevel).toBe("medium");
+		store.upsert({ ...base, name: "bad", thinkingLevel: "MAX" });
+		expect(store.get("bad")!.thinkingLevel).toBe("");
 	});
 
 	it("list 返回副本（外部修改不影响库内）", () => {
@@ -121,5 +192,35 @@ describe("SubagentTemplatesStore", () => {
 		const copy = store.list().find((t) => t.name === "reviewer")!;
 		copy.enabledSkills.push("hack");
 		expect(store.get("reviewer")!.enabledSkills).toEqual(["code-review"]);
+	});
+});
+
+describe("oh-my-pi specialist 内置模板", () => {
+	const names = ["oracle", "librarian", "explore", "metis", "momus", "multimodal-looker", "sisyphus-junior"];
+
+	it("7 个 specialist 齐全且为 replace 模式", () => {
+		for (const n of names) {
+			const t = DEFAULT_TEMPLATES.find((x) => x.name === n);
+			expect(t, n).toBeDefined();
+			expect(t!.promptMode).toBe("replace");
+			expect(t!.enabled).toBe(true);
+			expect(t!.model).toBe("");
+		}
+	});
+
+	it("内置模板不预设思考强度（空 = 跟随主对话，老用户升级后行为一致）", () => {
+		for (const t of DEFAULT_TEMPLATES) {
+			expect(t.thinkingLevel, t.name).toBe("");
+		}
+	});
+
+	it("双语简介与提示词齐全", () => {
+		for (const n of names) {
+			const t = DEFAULT_TEMPLATES.find((x) => x.name === n)!;
+			expect(t.description.trim().length, `${n}.description`).toBeGreaterThan(0);
+			expect(t.descriptionEn?.trim().length, `${n}.descriptionEn`).toBeGreaterThan(0);
+			expect(t.systemPrompt.trim().length, `${n}.systemPrompt`).toBeGreaterThan(100);
+			expect(t.systemPromptEn?.trim().length, `${n}.systemPromptEn`).toBeGreaterThan(100);
+		}
 	});
 });

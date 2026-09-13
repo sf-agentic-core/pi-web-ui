@@ -1,34 +1,64 @@
 import { useEffect, useRef, useState } from "react";
 import {
+	FiArchive,
 	FiBox,
+	FiClock,
 	FiCpu,
+	FiDownload,
+	FiEdit3,
 	FiEye,
 	FiFileText,
+	FiHelpCircle,
 	FiMessageSquare,
 	FiPackage,
 	FiPlus,
 	FiRefreshCw,
+	FiSend,
 	FiSettings,
 	FiSliders,
-	FiTerminal,
+	FiTool,
 	FiTrash2,
+	FiUpload,
 	FiUsers,
 	FiX,
 	FiZap,
 } from "react-icons/fi";
 import { CopyButton } from "./copy-button";
+import { HintTip } from "./HintTip";
 import { PluginSettingsForm } from "./PluginSettingsForm";
 import type {
-	ClientMessage,
 	CommandDef,
 	UiExtensionInfo,
+	UiPluginCatalogEntry,
 	UiPluginInfo,
 	UiSettingsState,
 	UiSkillInfo,
 	UiSubagentTemplate,
 } from "../types";
+import {
+	clearPromptHistory,
+	loadPromptHistory,
+	loadPromptHistorySettings,
+	savePromptHistorySettings,
+} from "../prompt-history";
 import { randomUuid } from "../uuid";
-import { useT } from "../i18n";
+import { THINKING_VALUES } from "../thinking-levels";
+import { useWideChat, saveChatWidthSettings } from "../chat-width-settings";
+import { useProjectTitle, saveTitleSettings } from "../title-settings";
+import { sanitizeWallpaperUrl, fileToWallpaperUrl, saveWallpaperSettings, useWallpaperSettings } from "../wallpaper";
+import { useT, useI18n } from "../i18n";
+import { appSend, useAppGlobals } from "../app-globals";
+import { QUICK_PHRASE_DEFAULTS } from "../quick-phrases";
+import { DEFAULT_PROMPT_TEMPLATE, PROMPT_TOKENS, isReadonlyPromptSource } from "../../../server/prompt-composer.js";
+import {
+	ASK_USER_QUESTION_TOOL_NAME,
+	BROWSER_PAGE_TOOL_NAME,
+	DELEGATE_TASK_TOOL_NAME,
+	EDIT_SOFT_TOOL_NAME,
+	MARKERS_LIST_TOOL_NAME,
+	SUBAGENT_TOOL_NAMES,
+	TERMINAL_TOOL_NAMES,
+} from "../../../server/tool-manager.js";
 
 /** Minimal terminal-tab bridge (same shape SCMPanel uses). */
 interface SettingsTerminalBridge {
@@ -51,10 +81,11 @@ interface SettingsModalProps {
 	chat: {
 		settings: UiSettingsState | null;
 		plugins: UiPluginInfo[];
+		/** Installable-plugin list (marketplace) — one-click install candidates. */
+		pluginCatalog: UiPluginCatalogEntry[];
 		/** DSH engine: <dataDir>/dsh-patches user patch files. */
 		dshPatches: { patchDir: string; files: { name: string; path: string; size: number; mtimeMs: number }[] } | null;
-		/** Engine id ("pi" | "dsh") — dsh-only sections render when set. */
-		engine?: string;
+		/** Engine id ("pi" | "dsh") 与 PI_WEB_MANAGED 已移到全局（web/src/app-globals.ts）。 */
 		terminals: {
 			id: string;
 			title: string;
@@ -66,7 +97,6 @@ interface SettingsModalProps {
 		state?: { cwd: string; conversationId: string } | null;
 		activeConversationId?: string | null;
 	};
-	send: (msg: ClientMessage) => boolean;
 	terminal: SettingsTerminalBridge;
 	/** Switch the top-level view to the terminal (uninstall runs there). */
 	onSwitchToTerminal: () => void;
@@ -74,11 +104,6 @@ interface SettingsModalProps {
 }
 
 /** A row with an enable/disable switch (skill / extension). */
-/**
- * 「？」悬浮提示：长解释默认不占版面，hover / 键盘聚焦时浮出全文。
- * 靠近视口右缘时自动翻转气泡方向（.flip → 向左展开），避免弹窗超出
- * 容器/窗口被裁掉。
- */
 /** 文件大小人类可读（设置面板 DSH 补丁列表用）。 */
 function formatBytes(n: number): string {
 	if (n < 1024) return `${n} B`;
@@ -86,29 +111,10 @@ function formatBytes(n: number): string {
 	return `${(n / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-function HintTip({ text }: { text: string }) {
-	const ref = useRef<HTMLSpanElement>(null);
-	const [flip, setFlip] = useState(false);
-	// 气泡最大 320px；右侧剩余空间不足就向左展开。
-	const updateFlip = () => {
-		const rect = ref.current?.getBoundingClientRect();
-		if (rect) setFlip(window.innerWidth - rect.right < 340);
-	};
-	return (
-		<span
-			ref={ref}
-			className={`set-tip${flip ? " flip" : ""}`}
-			tabIndex={0}
-			aria-label={text}
-			onMouseEnter={updateFlip}
-			onFocus={updateFlip}
-		>
-			?
-			<span className="set-tip-bubble" role="tooltip">
-				{text}
-			</span>
-		</span>
-	);
+/** 各来源排序权重：append 置顶（最常用），可编辑居中，只读沉底（纯预览）。 */
+function rankPromptToken(tk: string): number {
+	if (tk === "append") return 0;
+	return isReadonlyPromptSource(tk) ? 2 : 1;
 }
 
 function ToggleRow({
@@ -156,8 +162,12 @@ function ToggleRow({
 /** 设置弹窗的左侧分组导航（一次只显示一个区块，消灭长滚动）。 */
 type SettingsTab =
 	| "prompt"
-	| "terminal"
+	| "prompt-history"
+	| "tools"
+	| "question"
 	| "display"
+	| "quick"
+	| "markers"
 	| "skills"
 	| "extensions"
 	| "plugins"
@@ -166,11 +176,16 @@ type SettingsTab =
 	| "presets"
 	| "subagent-templates";
 
-export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClose }: SettingsModalProps) {
+export function SettingsModal({ chat, terminal, onSwitchToTerminal, onClose }: SettingsModalProps) {
 	const t = useT();
+	const { locale } = useI18n();
+	// {{token}} 元数据文案键是动态的（promptTok_<token>[,_desc]），用 tt 跳过字面量类型。
+	const tt = (k: string) => t(k as Parameters<typeof t>[0]);
 	const settings = chat.settings;
+	// 全局运行态（引擎 / 受管）：不再从 App 一路传进来，见 web/src/app-globals.ts。
+	const { engine, managed } = useAppGlobals();
 	// DSH 引擎：无 pi 扩展/技能体系与视觉桥概念 —— 隐藏对应分区/改占位说明。
-	const isDsh = chat.engine === "dsh";
+	const isDsh = engine === "dsh";
 	// 当前左侧导航选中的分组。
 	const [tab, setTab] = useState<SettingsTab>("prompt");
 	// 内容滚动容器：切换分组后回到顶部（各组高度不同，停留旧滚动位置会像没切换）。
@@ -180,16 +195,22 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 	}, [tab]);
 	// DSH 引擎：打开插件分组时拉一次用户 patch 列表（pi 引擎忽略该消息）。
 	useEffect(() => {
-		if (tab === "plugins" && chat.engine === "dsh") {
-			send({ type: "dsh_patches_list" });
+		if (tab === "plugins" && isDsh) {
+			appSend({ type: "dsh_patches_list" });
 		}
-	}, [tab, chat.engine, send]);
+	}, [tab, isDsh]);
 
-	// Prompt draft — local while typing; re-synced from the server on each push
-	// UNLESS the textarea is focused (an echo must not clobber mid-edit text).
-	const [promptDraft, setPromptDraft] = useState("");
-	const [promptMode, setPromptMode] = useState<"append" | "replace">("append");
-	const promptFocus = useRef(false);
+	// Compose prompt — 组合模板（{{token}} 自由拼装）+ 各来源覆盖。本地草稿：
+	// 模板聚焦中不覆盖；某个来源的覆盖框聚焦中不覆盖该 key（防回显打断输入）。
+	const [promptTemplateDraft, setPromptTemplateDraft] = useState("");
+	const [promptOverridesDraft, setPromptOverridesDraft] = useState<Record<string, string>>({});
+	const templateFocus = useRef(false);
+	const overrideFocus = useRef<string | null>(null);
+	// 各来源展示顺序：append 置顶，其次可编辑来源，只读来源沉底（组内保持 PROMPT_TOKENS 原序）。
+	const orderedPromptTokens = [...PROMPT_TOKENS].sort((a, b) => rankPromptToken(a) - rankPromptToken(b));
+	// 未覆盖来源行内默认内容预览：点击预览进入覆盖输入（editingSource）；长文本展开/收起。
+	const [editingSource, setEditingSource] = useState<string | null>(null);
+	const [defaultOpen, setDefaultOpen] = useState<Record<string, boolean>>({});
 	// Vision-bridge prompt draft — same local-edit/re-sync pattern as above.
 	const [vbPromptDraft, setVbPromptDraft] = useState("");
 	const [vbPromptMode, setVbPromptMode] = useState<"append" | "replace">("append");
@@ -205,22 +226,91 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 	const [confirmTplDelete, setConfirmTplDelete] = useState<string | null>(null);
 	// Read-only viewer for the FULL system prompt actually in effect.
 	const [showFullPrompt, setShowFullPrompt] = useState(false);
+	const [showToolsSchema, setShowToolsSchema] = useState(false);
+	// 宽屏聊天列开关（纯前端 localStorage，见 chat-width-settings.ts）。
+	const wideChat = useWideChat();
+	const projectTitle = useProjectTitle();
+	// 聊天背景图（纯前端 localStorage，见 wallpaper.ts）：地址输入框用本地草稿，
+	// 失焦/回车才提交（避免边输边校验）；压暗/模糊滑杆直接提交即时预览。
+	const wallpaper = useWallpaperSettings();
+	const [wallpaperDraft, setWallpaperDraft] = useState(wallpaper.url);
+	const wallpaperFocus = useRef(false);
+	const wallpaperFileRef = useRef<HTMLInputElement>(null);
+	const [wallpaperUploading, setWallpaperUploading] = useState(false);
+	const [wallpaperUploadError, setWallpaperUploadError] = useState(false);
+	useEffect(() => {
+		// data: 图不回填输入框（太长），下方缩略预览即表示生效中。
+		if (!wallpaperFocus.current) setWallpaperDraft(wallpaper.url.startsWith("data:") ? "" : wallpaper.url);
+	}, [wallpaper.url]);
+	const onPickWallpaperFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
+		const file = e.target.files?.[0];
+		e.target.value = "";
+		if (!file) return;
+		setWallpaperUploading(true);
+		setWallpaperUploadError(false);
+		try {
+			const url = await fileToWallpaperUrl(file);
+			const clean = url ? sanitizeWallpaperUrl(url) : "";
+			if (!clean) {
+				setWallpaperUploadError(true);
+				return;
+			}
+			setWallpaperDraft("");
+			saveWallpaperSettings({ ...wallpaper, url: clean });
+		} finally {
+			setWallpaperUploading(false);
+		}
+	};
+	// Prompt history settings (纯前端 localStorage，不经过 server).
+	const [phSettings, setPhSettings] = useState(() => loadPromptHistorySettings());
+	const [phCount, setPhCount] = useState(() => {
+		try {
+			return loadPromptHistory().length;
+		} catch {
+			return 0;
+		}
+	});
+	const [phClearConfirm, setPhClearConfirm] = useState(false);
+	const refreshPhCount = () => {
+		try {
+			setPhCount(loadPromptHistory().length);
+		} catch {
+			setPhCount(0);
+		}
+	};
+	useEffect(() => {
+		if (tab === "prompt-history") refreshPhCount();
+	}, [tab]);
+	useEffect(() => {
+		if (!phClearConfirm) return;
+		const id = window.setTimeout(() => setPhClearConfirm(false), 3000);
+		return () => window.clearTimeout(id);
+	}, [phClearConfirm]);
 	// Two-step uninstall confirm: which extension id is awaiting confirmation.
 	const [confirmUninstall, setConfirmUninstall] = useState<string | null>(null);
 	// Two-step uninstall confirm for UI plugins (<dataDir>/plugins).
 	const [confirmUiUninstall, setConfirmUiUninstall] = useState<string | null>(null);
+	// "Add to plugin list" form fields (plugin marketplace).
+	const [catSource, setCatSource] = useState("");
+	const [catId, setCatId] = useState("");
+	const [catName, setCatName] = useState("");
+	const [catDesc, setCatDesc] = useState("");
+	const [catIcon, setCatIcon] = useState("");
+	const [showCatAdd, setShowCatAdd] = useState(false);
+	// 快捷短语新增输入框草稿（Enter / 添加按钮提交）。
+	const [quickNew, setQuickNew] = useState("");
+	// 快捷短语行内编辑（null = 未在编辑；输入框受控于 value，回显不打断输入）。
+	const [quickEdit, setQuickEdit] = useState<{ index: number; value: string } | null>(null);
 
 	useEffect(() => {
 		if (!settings) return;
-		setPromptMode(settings.promptMode);
-		if (promptFocus.current) return;
-		// append: show the user's own text; replace: prefill the built-in
-		// default prompt so the user sees exactly what they would replace.
-		setPromptDraft(
-			promptMode === "append" || settings.customSystemPrompt
-				? settings.customSystemPrompt
-				: settings.defaultSystemPrompt || "",
-		);
+		if (!templateFocus.current) setPromptTemplateDraft(settings.promptTemplate ?? "");
+		setPromptOverridesDraft((prev) => {
+			const next: Record<string, string> = {};
+			for (const [k, v] of Object.entries(settings.promptOverrides ?? {})) next[k] = v ?? "";
+			if (overrideFocus.current) next[overrideFocus.current] = prev[overrideFocus.current] ?? "";
+			return next;
+		});
 		setVbPromptMode(settings.visionBridgePromptMode);
 		if (vbPromptFocus.current) return;
 		setVbPromptDraft(
@@ -229,15 +319,23 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 				: settings.visionBridgeDefaultPrompt || "",
 		);
 		if (!reviewPromptFocus.current) setReviewPromptDraft(settings.reviewPrompt);
-	}, [settings, promptMode, vbPromptMode]);
+	}, [settings, vbPromptMode]);
 
 	const [idleMsDraft, setIdleMsDraft] = useState<string>(String(settings?.terminalBashIdleMs ?? 15000));
 	useEffect(() => {
 		setIdleMsDraft(String(settings?.terminalBashIdleMs ?? 15000));
 	}, [settings?.terminalBashIdleMs]);
+	// 模型报错自动重试次数：本地草稿（失焦/回车提交，0 = 失败即停）。
+	const [retryDraft, setRetryDraft] = useState<string>(String(settings?.retryMaxAttempts ?? 6));
+	useEffect(() => {
+		setRetryDraft(String(settings?.retryMaxAttempts ?? 6));
+	}, [settings?.retryMaxAttempts]);
 
 	if (!settings) return null;
 
+	// 统一工具禁用名单（工具 tab 唯一写入口；旧 tab 的遗留单开关已迁入）。
+	const disabledTools = new Set(settings.disabledAgentTools ?? []);
+	const disabledToolsCount = disabledTools.size;
 	const tabs: {
 		id: SettingsTab;
 		icon: React.ReactNode;
@@ -246,8 +344,26 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 		count?: number;
 	}[] = [
 		{ id: "prompt", icon: <FiFileText />, label: t("settingsSystemPrompt") },
-		{ id: "terminal", icon: <FiTerminal />, label: t("settingsTerminalTools") },
+		{
+			id: "prompt-history",
+			icon: <FiClock />,
+			label: t("settingsPromptHistory"),
+			count: phCount,
+		},
+		// 统一工具开关（tool-manager.ts 目录，逐工具）：DSH 引擎无子代理/edit_soft
+		// 概念，隐藏该分区；DSH 的问卷开关仍在“问卷提问”页（走 goal-rpc）。
+		...(isDsh
+			? [{ id: "question" as const, icon: <FiHelpCircle />, label: t("settingsQuestionnaire") }]
+			: [
+					{
+						id: "tools" as const,
+						icon: <FiTool />,
+						label: t("settingsTools"),
+						count: disabledToolsCount + (settings.disabledMarkers?.length ?? 0) || undefined,
+					},
+				]),
 		{ id: "display", icon: <FiMessageSquare />, label: t("settingsMessageDisplay") },
+		{ id: "quick", icon: <FiSend />, label: t("quickPhrases"), count: settings.quickPhrases.length },
 		{ id: "skills", icon: <FiCpu />, label: t("settingsSkills"), count: settings.skills.length },
 		{ id: "extensions", icon: <FiPackage />, label: t("settingsExtensions"), count: settings.extensions.length },
 		{ id: "plugins", icon: <FiBox />, label: t("settingsUiPlugins"), count: chat.plugins.length },
@@ -274,21 +390,47 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 	const setPartial = (patch: {
 		promptMode?: "append" | "replace";
 		customSystemPrompt?: string;
+		promptTemplate?: string;
+		promptOverrides?: Record<string, string>;
 		disabledSkills?: string[];
 		disabledExtensions?: string[];
 		disabledPlugins?: string[];
+		/** 统一工具禁用名单（工具 tab 逐工具开关；遗留单开关仍可用，会折回此名单）。 */
+		disabledAgentTools?: string[];
 		terminalToolsEnabled?: boolean;
 		terminalBash?: boolean;
 		terminalBashIdleMs?: number;
+		editSoftEnabled?: boolean;
+		questionnaireEnabled?: boolean;
+		goalModeEnabled?: boolean;
 		thinkingWrap?: boolean;
 		toolsWrap?: boolean;
+		skillsFullText?: string[];
+		quickPhrases?: string[];
+		quickPhrasesEnabled?: boolean;
 		visionBridgeEnabled?: boolean;
 		visionBridgeModel?: string | null;
 		visionBridgePromptMode?: "append" | "replace";
 		visionBridgePrompt?: string;
+		subagentDefaultModel?: string | null;
+		retryMaxAttempts?: number;
 		reviewPrompt?: string;
 		reviewDisabledSkills?: string[];
-	}) => send({ type: "set_settings", ...patch });
+		markersEnabled?: boolean;
+		disabledMarkers?: string[];
+	}) => appSend({ type: "set_settings", ...patch });
+
+	/** 提交快捷短语行内编辑（空 = 取消；与原值相同 = 无操作；其余走服务端归一化）。 */
+	const commitQuickEdit = () => {
+		if (!quickEdit || !settings) return;
+		const v = quickEdit.value.trim();
+		const i = quickEdit.index;
+		setQuickEdit(null);
+		if (!v || v === settings.quickPhrases[i]) return;
+		const next = [...settings.quickPhrases];
+		next[i] = v;
+		setPartial({ quickPhrases: next });
+	};
 
 	const toggleSkill = (s: UiSkillInfo) => {
 		const next = new Set(disabledSkills);
@@ -297,7 +439,17 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 		setPartial({ disabledSkills: [...next] });
 	};
 
+	// skill 全文注入名单：按技能单独勾选（空 = 名录模式）。
+	const fullTextSkills = new Set(settings.skillsFullText ?? []);
+	const toggleSkillFullText = (name: string) => {
+		const next = new Set(fullTextSkills);
+		if (next.has(name)) next.delete(name);
+		else next.add(name);
+		setPartial({ skillsFullText: [...next] });
+	};
+
 	const disabledPlugins = new Set(settings.disabledPlugins ?? []);
+	const installedPluginIds = new Set(chat.plugins.map((p) => p.id));
 	const togglePlugin = (p: UiPluginInfo) => {
 		const next = new Set(disabledPlugins);
 		if (next.has(p.id)) next.delete(p.id);
@@ -310,6 +462,35 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 		if (next.has(e.id)) next.delete(e.id);
 		else next.add(e.id);
 		setPartial({ disabledExtensions: [...next] });
+	};
+
+	// 子代理各工具的「?」说明（key 与 tool-manager.ts 的 SUBAGENT_TOOL_NAMES 对齐）。
+	const SUBAGENT_TOOL_TIPS: Record<string, string> = {
+		subagent_spawn: t("toolDescSubagentSpawn"),
+		subagent_get_result: t("toolDescSubagentGetResult"),
+		subagent_steer: t("toolDescSubagentSteer"),
+		subagent_list: t("toolDescSubagentList"),
+		subagent_stop: t("toolDescSubagentStop"),
+		subagent_wait_all: t("toolDescSubagentWaitAll"),
+		subagent_templates: t("toolDescSubagentTemplates"),
+	};
+	// 统一工具开关（工具 tab 逐工具；与 toggleSkill 同模式）。
+	const toggleAgentTool = (name: string) => {
+		const next = new Set(disabledTools);
+		if (next.has(name)) next.delete(name);
+		else next.add(name);
+		setPartial({ disabledAgentTools: [...next] });
+	};
+
+	// ---- markers ----
+	const markersEnabled = settings.markersEnabled ?? true;
+	const disabledMarkers = new Set(settings.disabledMarkers ?? []);
+	const toggleMarker = (name: string) => {
+		const next = new Set(disabledMarkers);
+		const currentlyEnabled = !next.has(name);
+		if (currentlyEnabled) next.add(name);
+		else next.delete(name);
+		setPartial({ disabledMarkers: [...next] });
 	};
 
 	/** Run a maintenance command (extension uninstall / UI-plugin install or
@@ -326,7 +507,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 		const existing = chat.terminals.find((tm) => tm.title === title);
 		if (existing) {
 			terminal.restart(existing.id);
-			send({
+			appSend({
 				type: "run_command",
 				terminalId: existing.id,
 				conversationId: existing.conversationId,
@@ -374,6 +555,40 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 		runTerminalCommand(`${t("pluginUpdate")} ${id}`, `pi-web-ui install ${source} --name ${id} --force`);
 	};
 
+	/** One-click install a plugin from the marketplace list (not installed
+	 *  yet). `--name <id>` pins the on-disk dir to the catalog id (drives
+	 *  installed-state match). 已装的走 runUiPluginUpdate（--force，即更新）。 */
+	const runCatalogInstall = (e: UiPluginCatalogEntry) => {
+		runTerminalCommand(`${t("pluginInstall")} ${e.id}`, `pi-web-ui install ${e.source} --name ${e.id}`);
+	};
+
+	/** Remove a user-added plugin from the marketplace list. */
+	const runCatalogRemove = (id: string) => {
+		appSend({ type: "plugin_catalog_remove", id });
+	};
+
+	/** Submit the "add to plugin list" form (server validates + persists). */
+	const submitCatalogAdd = () => {
+		const source = catSource.trim();
+		if (!source) return;
+		appSend({
+			type: "plugin_catalog_add",
+			entry: {
+				source,
+				...(catId.trim() ? { id: catId.trim() } : {}),
+				...(catName.trim() ? { name: catName.trim() } : {}),
+				...(catDesc.trim() ? { description: catDesc.trim() } : {}),
+				...(catIcon.trim() ? { icon: catIcon.trim() } : {}),
+			},
+		});
+		setCatSource("");
+		setCatId("");
+		setCatName("");
+		setCatDesc("");
+		setCatIcon("");
+		setShowCatAdd(false);
+	};
+
 	const toggleReviewSkill = (s: UiSkillInfo) => {
 		const disabled = new Set(settings.reviewSkills.filter((x) => !x.enabled).map((x) => x.name));
 		if (disabled.has(s.name)) disabled.delete(s.name);
@@ -381,16 +596,48 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 		setPartial({ reviewDisabledSkills: [...disabled] });
 	};
 
-	const savePrompt = () => {
-		// In replace mode, a draft identical to the built-in default means the
-		// user didn't actually modify it — store empty so the server falls back
-		// to the default (and switching to append later never duplicates it).
-		const text =
-			promptMode === "replace" && settings.defaultSystemPrompt && promptDraft === settings.defaultSystemPrompt
-				? ""
-				: promptDraft;
-		setPartial({ promptMode, customSystemPrompt: text });
+	const commitTemplate = () => setPartial({ promptTemplate: promptTemplateDraft });
+
+	const commitOverride = (token: string) => {
+		setPartial({ promptOverrides: { [token]: promptOverridesDraft[token] ?? "" } });
 	};
+
+	const resetOverride = (token: string) => {
+		if (overrideFocus.current === token) overrideFocus.current = null;
+		setEditingSource(null);
+		setPromptOverridesDraft((p) => {
+			const n = { ...p };
+			delete n[token];
+			return n;
+		});
+		setPartial({ promptOverrides: { [token]: "" } });
+	};
+
+	/** 来源默认内容预览的长文本展开/收起。 */
+	const toggleDefault = (tk: string) => setDefaultOpen((p) => ({ ...p, [tk]: !p[tk] }));
+
+	/** 覆盖输入时一键把默认（自动）内容填进覆盖框 —— 只想改一小部分时用它打底（填
+	 *  入后该来源内容固定，不再随每次对话自动重新生成）。 */
+	const seedFromDefault = (tk: string, def: string) => {
+		setPromptOverridesDraft((p) => ({ ...p, [tk]: def }));
+		setEditingSource(tk);
+	};
+
+	const resetAllPrompt = () => {
+		templateFocus.current = false;
+		overrideFocus.current = null;
+		setPromptTemplateDraft(DEFAULT_PROMPT_TEMPLATE);
+		setPromptOverridesDraft({});
+		setPartial({ promptTemplate: DEFAULT_PROMPT_TEMPLATE, promptOverrides: {} });
+	};
+
+	const appendTokenToTemplate = (token: string) => {
+		setPromptTemplateDraft((prev) => (prev.trim() ? `${prev}\n\n{{${token}}}` : `{{${token}}}`));
+	};
+
+	const hasPromptCustom =
+		(promptTemplateDraft.trim() && promptTemplateDraft.trim() !== DEFAULT_PROMPT_TEMPLATE) ||
+		Object.values(promptOverridesDraft).some((v) => v.trim());
 
 	return (
 		<div className="modal-backdrop" onClick={onClose}>
@@ -431,35 +678,250 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 								<div className="set-section-title">
 									<FiZap className="set-section-icon" />
 									{t("settingsSystemPrompt")}
+									<HintTip text={`${t("promptComposeHint")}\n${t("promptComposeDesc")}`} />
 								</div>
-								<div className="set-mode-row">
-									<label className="set-field-label">{t("settingsPromptMode")}</label>
-									<select
-										className="set-select"
-										value={promptMode}
-										onChange={(e) => {
-											const mode = e.target.value as "append" | "replace";
-											setPromptMode(mode);
-											setPartial({ promptMode: mode });
+								<div className="set-field">
+									<label className="set-field-label">{t("promptTemplateLabel")}</label>
+									<textarea
+										className="set-prompt-input"
+										rows={8}
+										spellCheck={false}
+										placeholder={DEFAULT_PROMPT_TEMPLATE}
+										value={promptTemplateDraft}
+										onFocus={() => (templateFocus.current = true)}
+										onBlur={() => {
+											templateFocus.current = false;
+											commitTemplate();
 										}}
-									>
-										<option value="append">{t("promptModeAppend")}</option>
-										<option value="replace">{t("promptModeReplace")}</option>
-									</select>
-									<HintTip text={promptMode === "append" ? t("promptAppendHint") : t("promptReplaceHint")} />
+										onChange={(e) => setPromptTemplateDraft(e.target.value)}
+									/>
+									<div className="compose-toolbar">
+										<span className="set-field-label set-muted">{t("promptInsertTokens")}</span>
+										{orderedPromptTokens.map((tk) => (
+											<button
+												key={tk}
+												type="button"
+												className="token-chip"
+												title={tt(`promptTok_${tk}_desc`)}
+												onClick={() => appendTokenToTemplate(tk)}
+											>
+												{`{{${tk}}}`}
+											</button>
+										))}
+									</div>
 								</div>
-								<textarea
-									className="set-prompt-input"
-									rows={6}
-									placeholder={t("promptPlaceholder")}
-									value={promptDraft}
-									onFocus={() => (promptFocus.current = true)}
-									onBlur={() => {
-										promptFocus.current = false;
-										savePrompt();
-									}}
-									onChange={(e) => setPromptDraft(e.target.value)}
-								/>
+								{/* 各来源覆盖：留空 = 用自动内容；未覆盖时行内直接展示该来源当前的默认（自动）内容 */}
+								<div className="set-field">
+									<label className="set-field-label">{t("promptSourcesLabel")}</label>
+									{orderedPromptTokens.map((tk) => {
+										const v = promptOverridesDraft[tk] ?? "";
+										// 该来源当前默认（自动）内容：会话未就绪时为空对象 → def = ""。
+										const def = settings.promptSourceDefaults?.[tk] ?? "";
+										const editing = editingSource === tk;
+										const isLong = def.split("\n").length > 6 || def.length > 480;
+										if (isReadonlyPromptSource(tk)) {
+											const shown = v.trim() ? v : def;
+											return (
+												<div className="override-row readonly" key={tk}>
+													<div className="override-row-head">
+														{`{{${tk}}}`}
+														<span className="set-muted">
+															{tt(`promptTok_${tk}`)} <HintTip text={tt(`promptTok_${tk}_desc`)} />
+														</span>
+														{v.trim() ? (
+															<button
+																type="button"
+																className="set-btn-mini"
+																title={t("promptReadonlyLockedHint")}
+																onClick={() => resetOverride(tk)}
+															>
+																{t("promptResetSource")}
+															</button>
+														) : (
+															<span className="set-muted">{t("promptReadonlyBadge")}</span>
+														)}
+													</div>
+													<div
+														className={`source-default readonly${shown.trim() ? "" : " empty"}`}
+														title={t("promptReadonlyTitle")}
+													>
+														{shown.trim() ? (
+															<>
+																<pre
+																	className={`source-default-text${
+																		isLong ? (defaultOpen[tk] ? " expanded" : " clamped") : ""
+																	}`}
+																>
+																	{shown}
+																</pre>
+																{isLong && (
+																	<span
+																		className="source-default-toggle"
+																		role="button"
+																		tabIndex={0}
+																		onClick={(e) => {
+																			e.stopPropagation();
+																			toggleDefault(tk);
+																		}}
+																		onKeyDown={(e) => {
+																			if (e.key === "Enter" || e.key === " ") {
+																				e.preventDefault();
+																				e.stopPropagation();
+																				toggleDefault(tk);
+																			}
+																		}}
+																	>
+																		{defaultOpen[tk] ? t("promptSourceCollapse") : t("promptSourceExpand")}
+																	</span>
+																)}
+															</>
+														) : (
+															<span className="source-default-empty">{t("promptSourceDefaultEmpty")}</span>
+														)}
+													</div>
+												</div>
+											);
+										}
+										return (
+											<div className="override-row" key={tk}>
+												<div className="override-row-head">
+													{`{{${tk}}}`}
+													<span className="set-muted">
+														{tt(`promptTok_${tk}`)} <HintTip text={tt(`promptTok_${tk}_desc`)} />
+													</span>
+													{v.trim() ? (
+														<button type="button" className="set-btn-mini" onClick={() => resetOverride(tk)}>
+															{t("promptResetSource")}
+														</button>
+													) : (
+														<span className="set-muted">{t("promptAutoBadge")}</span>
+													)}
+												</div>
+												{v.trim() || editing ? (
+													<>
+														<textarea
+															className="set-prompt-input override-input"
+															rows={Math.min(10, Math.max(1, v.split("\n").length))}
+															autoFocus={editing}
+															placeholder={t("promptOverridePlaceholder")}
+															value={v}
+															onFocus={(e) => {
+																overrideFocus.current = tk;
+																setEditingSource(tk);
+																// 刚点预览载入默认文本时把光标放到末尾，方便直接接着改。
+																const el = e.currentTarget as HTMLTextAreaElement;
+																if (el.value && el.value === def)
+																	el.setSelectionRange(el.value.length, el.value.length);
+															}}
+															onBlur={() => {
+																if (overrideFocus.current === tk) overrideFocus.current = null;
+																const val = promptOverridesDraft[tk] ?? "";
+																if (val.trim() && val === def) {
+																	// 点击预览载入默认后原样失焦（没改任何字）→ 不产生覆盖，仍用自动内容。
+																	resetOverride(tk);
+																	return;
+																}
+																commitOverride(tk);
+																if (!val.trim()) setEditingSource(null);
+															}}
+															onChange={(e) => setPromptOverridesDraft((p) => ({ ...p, [tk]: e.target.value }))}
+														/>
+														{/* 编辑覆盖内容时，下方始终展示该来源的默认（自动）内容，方便对照/复制/只改一小部分。 */}
+														<div className="override-edit-foot">
+															<div className="override-edit-foot-head">
+																<span className="set-muted">{t("promptSourceRefLabel")}</span>
+																{isLong && (
+																	<button
+																		type="button"
+																		className="source-default-toggle"
+																		onClick={() => toggleDefault(tk)}
+																	>
+																		{defaultOpen[tk] ? t("promptSourceCollapse") : t("promptSourceExpand")}
+																	</button>
+																)}
+															</div>
+															{def.trim() ? (
+																<pre
+																	className={`source-default-text${
+																		isLong ? (defaultOpen[tk] ? " expanded" : " clamped") : ""
+																	}`}
+																>
+																	{def}
+																</pre>
+															) : (
+																<span className="source-default-empty">{t("promptSourceDefaultEmpty")}</span>
+															)}
+															{!v.trim() && def.trim() && (
+																<button
+																	type="button"
+																	className="override-seed-btn"
+																	title={t("promptSourceSeedTip")}
+																	onClick={() => seedFromDefault(tk, def)}
+																>
+																	{t("promptSourceSeedButton")}
+																</button>
+															)}
+														</div>
+													</>
+												) : (
+													// 未覆盖：行内展示默认（自动）内容；点击 = 载入默认文本开始编辑（不改就失焦则回到自动内容）。
+													<div
+														className="source-default"
+														title={t("promptSourceDefaultEditHint")}
+														role="button"
+														tabIndex={0}
+														onClick={() => seedFromDefault(tk, def)}
+														onKeyDown={(e) => {
+															if (e.key === "Enter" || e.key === " ") {
+																e.preventDefault();
+																seedFromDefault(tk, def);
+															}
+														}}
+													>
+														{def.trim() ? (
+															<>
+																<pre
+																	className={`source-default-text${
+																		isLong ? (defaultOpen[tk] ? " expanded" : " clamped") : ""
+																	}`}
+																>
+																	{def}
+																</pre>
+																{isLong && (
+																	<span
+																		className="source-default-toggle"
+																		role="button"
+																		tabIndex={0}
+																		onClick={(e) => {
+																			e.stopPropagation();
+																			toggleDefault(tk);
+																		}}
+																		onKeyDown={(e) => {
+																			if (e.key === "Enter" || e.key === " ") {
+																				e.preventDefault();
+																				e.stopPropagation();
+																				toggleDefault(tk);
+																			}
+																		}}
+																	>
+																		{defaultOpen[tk] ? t("promptSourceCollapse") : t("promptSourceExpand")}
+																	</span>
+																)}
+															</>
+														) : (
+															<span className="source-default-empty">{t("promptSourceDefaultEmpty")}</span>
+														)}
+													</div>
+												)}
+											</div>
+										);
+									})}
+									<div className="compose-toolbar">
+										<button type="button" className="set-btn" onClick={resetAllPrompt} disabled={!hasPromptCustom}>
+											{t("promptResetAll")}
+										</button>
+									</div>
+								</div>
 								<button
 									type="button"
 									className="set-view-prompt-btn"
@@ -471,7 +933,8 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 								{showFullPrompt && (
 									<div className="set-prompt-view">
 										<div className="set-prompt-view-head">
-											<span>{t("settingsViewPromptHint")}</span>
+											<span>{t("settingsViewPrompt")}</span>
+											<HintTip text={t("settingsViewPromptHint")} />
 											<CopyButton text={settings.effectiveSystemPrompt} />
 										</div>
 										{settings.effectiveSystemPrompt ? (
@@ -481,23 +944,167 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 										)}
 									</div>
 								)}
+								<button
+									type="button"
+									className="set-view-prompt-btn"
+									aria-expanded={showToolsSchema}
+									onClick={() => setShowToolsSchema((v) => !v)}
+								>
+									{t("settingsViewToolsSchema")} {showToolsSchema ? "▴" : "▾"}
+								</button>
+								{showToolsSchema && (
+									<div className="set-prompt-view">
+										<div className="set-prompt-tools">
+											<div className="set-prompt-view-head">
+												<span>{t("settingsViewToolsSchema")}</span>
+												<HintTip text={t("settingsViewToolsSchemaHint")} />
+												<CopyButton text={settings.toolsSchema} />
+											</div>
+											{settings.toolsSchema ? (
+												<pre className="set-prompt-view-text">{settings.toolsSchema}</pre>
+											) : (
+												<p className="set-empty">{t("settingsViewToolsSchemaEmpty")}</p>
+											)}
+										</div>
+									</div>
+								)}
 							</div>
 						)}
 
-						{/* ---- terminal tools ------------------------------------------ */}
-						{tab === "terminal" && (
+						{/* ---- prompt history -------------------------------------------- */}
+						{tab === "prompt-history" && (
 							<div className="set-section">
 								<div className="set-section-title">
-									<FiTerminal className="set-section-icon" />
-									{t("settingsTerminalTools")}
+									<FiClock className="set-section-icon" />
+									{t("settingsPromptHistory")}
+									<HintTip text={t("settingsPromptHistoryDesc")} />
+									<span className="set-count">{t("promptHistoryCount", { n: String(phCount) })}</span>
+								</div>
+								{phCount === 0 ? (
+									<p className="set-empty">{t("promptHistoryEmpty")}</p>
+								) : (
+									<p className="set-hint">{t("promptHistoryCount", { n: String(phCount) })}</p>
+								)}
+								<div className="set-field">
+									<label className="set-field-label" htmlFor="ph-max">
+										{t("promptHistoryMax")}
+									</label>
+									<div className="set-mode-row">
+										<input
+											id="ph-max"
+											className="set-input"
+											type="number"
+											min={1}
+											max={500}
+											step={1}
+											value={String(phSettings.maxEntries)}
+											onChange={(e) => {
+												const v = Math.floor(Number(e.target.value) || 0);
+												const next = { ...phSettings, maxEntries: v };
+												setPhSettings(next);
+											}}
+											onBlur={() => {
+												const norm = { ...phSettings };
+												if (!Number.isFinite(norm.maxEntries) || norm.maxEntries < 1) norm.maxEntries = 1;
+												if (norm.maxEntries > 500) norm.maxEntries = 500;
+												norm.maxEntries = Math.floor(norm.maxEntries);
+												setPhSettings(norm);
+												savePromptHistorySettings(norm);
+												refreshPhCount();
+											}}
+										/>
+										<HintTip text={t("promptHistoryMaxHint")} />
+									</div>
 								</div>
 								<ToggleRow
-									title={t("terminalToolsEnabled")}
-									tip={t("settingsTerminalToolsDesc")}
-									enabled={settings.terminalToolsEnabled}
-									onToggle={() => setPartial({ terminalToolsEnabled: !settings.terminalToolsEnabled })}
+									title={t("promptHistoryCharLimit")}
+									tip={t("promptHistoryCharLimitHint")}
+									enabled={phSettings.charLimitEnabled}
+									onToggle={() => {
+										const next = { ...phSettings, charLimitEnabled: !phSettings.charLimitEnabled };
+										setPhSettings(next);
+										savePromptHistorySettings(next);
+										refreshPhCount();
+									}}
 								/>
-								{!settings.terminalToolsEnabled && <p className="set-hint">{t("terminalToolsOffHint")}</p>}
+								{phSettings.charLimitEnabled && (
+									<div className="set-field">
+										<label className="set-field-label" htmlFor="ph-char-limit">
+											{t("promptHistoryCharLimit")}
+										</label>
+										<input
+											id="ph-char-limit"
+											className="set-input"
+											type="number"
+											min={100}
+											max={20000}
+											step={100}
+											placeholder={t("promptHistoryCharLimitPlaceholder")}
+											value={String(phSettings.charLimit)}
+											onChange={(e) => {
+												const v = Math.floor(Number(e.target.value) || 0);
+												setPhSettings({ ...phSettings, charLimit: v });
+											}}
+											onBlur={() => {
+												let v = Math.floor(Number(phSettings.charLimit) || 0);
+												if (!Number.isFinite(v) || v < 100) v = 100;
+												if (v > 20000) v = 20000;
+												const norm = { ...phSettings, charLimit: v };
+												setPhSettings(norm);
+												savePromptHistorySettings(norm);
+												refreshPhCount();
+											}}
+										/>
+									</div>
+								)}
+								<div className="set-field" style={{ marginTop: 12 }}>
+									<button
+										type="button"
+										className={`set-uninstall${phClearConfirm ? " confirm" : ""}`}
+										disabled={phCount === 0}
+										title={phCount === 0 ? t("promptHistoryEmpty") : t("promptHistoryClear")}
+										onClick={() => {
+											if (!phClearConfirm) {
+												setPhClearConfirm(true);
+												return;
+											}
+											clearPromptHistory();
+											setPhClearConfirm(false);
+											refreshPhCount();
+										}}
+									>
+										<FiTrash2 /> {phClearConfirm ? t("promptHistoryClearConfirm") : t("promptHistoryClear")}
+									</button>
+									{phCount > 0 && (
+										<span className="set-hint" style={{ marginLeft: 8 }}>
+											{t("promptHistoryCount", { n: String(phCount) })}
+										</span>
+									)}
+								</div>
+								<p className="set-hint">
+									<FiArchive style={{ verticalAlign: "-2px", marginRight: 4 }} />
+									{t("settingsPromptHistoryDesc")}
+								</p>
+							</div>
+						)}
+
+						{/* ---- agent tools (unified tool_manage) ------------------------- */}
+						{tab === "tools" && (
+							<div className="set-section">
+								<div className="set-section-title">
+									<FiTool className="set-section-icon" />
+									{t("settingsTools")}
+								</div>
+								<div className="set-field-label">{t("toolsSectionTerminal")}</div>
+								{TERMINAL_TOOL_NAMES.map((n) => (
+									<ToggleRow
+										key={n}
+										title={n}
+										tip={t("settingsTerminalToolsDesc")}
+										enabled={!disabledTools.has(n)}
+										onToggle={() => toggleAgentTool(n)}
+									/>
+								))}
 								<ToggleRow
 									title={t("terminalBashTakeover")}
 									tip={t("terminalBashTakeoverDesc")}
@@ -527,6 +1134,97 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 										/>
 									</div>
 								)}
+								<div className="set-field-label">{t("toolsSectionSubagent")}</div>
+								<div className="set-row-desc">{t("toolsSubagentDepHint")}</div>
+								{SUBAGENT_TOOL_NAMES.map((n) => (
+									<ToggleRow
+										key={n}
+										title={n}
+										tip={SUBAGENT_TOOL_TIPS[n]}
+										enabled={!disabledTools.has(n)}
+										onToggle={() => toggleAgentTool(n)}
+									/>
+								))}
+								<div className="set-field-label">
+									{t("settingsMarkers")}
+									<HintTip text={`${t("settingsMarkersDesc")}\n${t("markerRenameTip")}`} />
+								</div>
+								<ToggleRow
+									title={t("markersEnabled")}
+									tip={`${t("markersEnabledDesc")}\n${t("markersOffHint")}`}
+									enabled={markersEnabled}
+									onToggle={() => setPartial({ markersEnabled: !markersEnabled })}
+								/>
+								{markersEnabled && (settings.markers?.length ?? 0) === 0 && (
+									<p className="set-empty">{t("loading")}...</p>
+								)}
+								{markersEnabled &&
+									settings.markers &&
+									settings.markers.length > 0 &&
+									settings.markers.map((m) => (
+										<ToggleRow
+											key={m.name}
+											title={
+												m.name === "todo"
+													? t("markerGroupTodo")
+													: m.name === "notify"
+														? t("markerGroupNotify")
+														: m.name === "conv"
+															? t("markerGroupRename")
+															: m.name
+											}
+											tip={m.guidance.join("\n")}
+											enabled={m.enabled}
+											onToggle={() => toggleMarker(m.name)}
+										/>
+									))}
+								<ToggleRow
+									title={MARKERS_LIST_TOOL_NAME}
+									tip={`${t("todoListEnabledDesc")}\n${t("todoListOffHint")}`}
+									enabled={!disabledTools.has(MARKERS_LIST_TOOL_NAME)}
+									onToggle={() => toggleAgentTool(MARKERS_LIST_TOOL_NAME)}
+								/>
+								<div className="set-field-label">{t("toolsSectionOther")}</div>
+								<ToggleRow
+									title={EDIT_SOFT_TOOL_NAME}
+									tip={`${t("editSoftEnabledDesc")}\n${t("editSoftOffHint")}`}
+									enabled={!disabledTools.has(EDIT_SOFT_TOOL_NAME)}
+									onToggle={() => toggleAgentTool(EDIT_SOFT_TOOL_NAME)}
+								/>
+								<ToggleRow
+									title={DELEGATE_TASK_TOOL_NAME}
+									tip={`${t("delegateTaskEnabledDesc")}\n${t("delegateTaskOffHint")}`}
+									enabled={!disabledTools.has(DELEGATE_TASK_TOOL_NAME)}
+									onToggle={() => toggleAgentTool(DELEGATE_TASK_TOOL_NAME)}
+								/>
+								<ToggleRow
+									title={ASK_USER_QUESTION_TOOL_NAME}
+									tip={`${t("questionnaireEnabledDesc")}\n${t("questionnaireOffHint")}`}
+									enabled={!disabledTools.has(ASK_USER_QUESTION_TOOL_NAME)}
+									onToggle={() => toggleAgentTool(ASK_USER_QUESTION_TOOL_NAME)}
+								/>
+								<ToggleRow
+									title={BROWSER_PAGE_TOOL_NAME}
+									tip={`${t("browserPageEnabledDesc")}\n${t("browserPageOffHint")}`}
+									enabled={!disabledTools.has(BROWSER_PAGE_TOOL_NAME)}
+									onToggle={() => toggleAgentTool(BROWSER_PAGE_TOOL_NAME)}
+								/>
+							</div>
+						)}
+
+						{/* ---- questionnaire (DSH only; pi moved into Tools) -------------- */}
+						{tab === "question" && (
+							<div className="set-section">
+								<div className="set-section-title">
+									<FiHelpCircle className="set-section-icon" />
+									{t("settingsQuestionnaire")}
+								</div>
+								<ToggleRow
+									title={t("questionnaireEnabled")}
+									tip={`${t("questionnaireEnabledDesc")}\n${t("questionnaireOffHint")}`}
+									enabled={settings.questionnaireEnabled}
+									onToggle={() => setPartial({ questionnaireEnabled: !settings.questionnaireEnabled })}
+								/>
 							</div>
 						)}
 
@@ -537,6 +1235,32 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 									<FiMessageSquare className="set-section-icon" />
 									{t("settingsMessageDisplay")}
 								</div>
+								<div className="set-field">
+									<label className="set-field-label" htmlFor="model-retry-max">
+										{t("modelRetryAttempts")} <HintTip text={t("modelRetryHint")} />
+									</label>
+									<input
+										id="model-retry-max"
+										className="set-input"
+										type="number"
+										min={0}
+										max={100}
+										step={1}
+										value={retryDraft}
+										onChange={(e) => setRetryDraft(e.target.value)}
+										onBlur={() => {
+											const n = Math.min(100, Math.max(0, Math.floor(Number(retryDraft) || 0)));
+											setRetryDraft(String(n));
+											if (n !== settings.retryMaxAttempts) {
+												setPartial({ retryMaxAttempts: n });
+											}
+										}}
+										onKeyDown={(e) => {
+											if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+										}}
+									/>
+								</div>
+								<hr className="set-sep" />
 								<ToggleRow
 									title={t("thinkingWrap")}
 									tip={t("thinkingWrapDesc")}
@@ -549,6 +1273,254 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 									enabled={settings.toolsWrap ?? true}
 									onToggle={() => setPartial({ toolsWrap: !(settings.toolsWrap ?? true) })}
 								/>
+								<hr className="set-sep" />
+								<ToggleRow
+									title={t("wideChat")}
+									tip={t("wideChatDesc")}
+									enabled={wideChat}
+									onToggle={() => saveChatWidthSettings({ wide: !wideChat })}
+								/>
+								<ToggleRow
+									title={t("projectTitle")}
+									tip={t("projectTitleDesc")}
+									enabled={projectTitle}
+									onToggle={() => saveTitleSettings({ projectName: !projectTitle })}
+								/>
+								<hr className="set-sep" />
+								<div className="set-row">
+									<div className="set-row-info">
+										<div className="set-row-name">
+											{t("wallpaperTitle")}
+											<HintTip text={t("wallpaperDesc")} />
+										</div>
+										<div className="wallpaper-url-row">
+											<input
+												className="set-input wallpaper-url"
+												placeholder={t("wallpaperUrlPh")}
+												value={wallpaperDraft}
+												maxLength={2000}
+												spellCheck={false}
+												onFocus={() => {
+													wallpaperFocus.current = true;
+												}}
+												onChange={(e) => setWallpaperDraft(e.target.value)}
+												onBlur={() => {
+													wallpaperFocus.current = false;
+													// 已上传的 data: 图不占输入框：空输入 = 未改动，不断然清空。
+													if (!wallpaperDraft.trim() && wallpaper.url.startsWith("data:")) {
+														setWallpaperDraft("");
+														return;
+													}
+													const url = sanitizeWallpaperUrl(wallpaperDraft);
+													setWallpaperDraft(url);
+													if (url !== wallpaper.url) saveWallpaperSettings({ ...wallpaper, url });
+												}}
+												onKeyDown={(e) => {
+													if (e.key === "Enter") (e.target as HTMLInputElement).blur();
+													else if (e.key === "Escape") {
+														setWallpaperDraft(wallpaper.url.startsWith("data:") ? "" : wallpaper.url);
+														(e.target as HTMLInputElement).blur();
+													}
+												}}
+											/>
+											<button
+												type="button"
+												className="set-save-btn"
+												disabled={wallpaperUploading}
+												onClick={() => wallpaperFileRef.current?.click()}
+											>
+												<FiUpload /> {t("wallpaperUpload")}
+											</button>
+											<input
+												ref={wallpaperFileRef}
+												type="file"
+												accept="image/*"
+												hidden
+												onChange={onPickWallpaperFile}
+											/>
+										</div>
+										{wallpaperUploadError && <p className="set-hint">{t("wallpaperUploadFailed")}</p>}
+										<div className="wallpaper-sliders">
+											<label className="wallpaper-slider">
+												<span>{t("wallpaperDim")}</span>
+												<input
+													type="range"
+													min={0}
+													max={95}
+													step={1}
+													value={wallpaper.dim}
+													onChange={(e) => saveWallpaperSettings({ ...wallpaper, dim: Number(e.target.value) })}
+												/>
+												<output>{wallpaper.dim}%</output>
+											</label>
+											<label className="wallpaper-slider">
+												<span>{t("wallpaperBlur")}</span>
+												<input
+													type="range"
+													min={0}
+													max={24}
+													step={1}
+													value={wallpaper.blur}
+													onChange={(e) => saveWallpaperSettings({ ...wallpaper, blur: Number(e.target.value) })}
+												/>
+												<output>{wallpaper.blur}px</output>
+											</label>
+										</div>
+									</div>
+									{wallpaper.url && (
+										<div className="wallpaper-current">
+											<img className="wallpaper-preview" src={wallpaper.url} alt="" />
+											<button
+												type="button"
+												className="wallpaper-clear"
+												onClick={() => {
+													setWallpaperDraft("");
+													saveWallpaperSettings({ ...wallpaper, url: "" });
+												}}
+											>
+												{t("wallpaperClear")}
+											</button>
+										</div>
+									)}
+								</div>
+							</div>
+						)}
+
+						{/* ---- 快捷短语（输入框上方一键发送） ------------------------------ */}
+						{tab === "quick" && (
+							<div className="set-section">
+								<div className="set-section-title">
+									<FiSend className="set-section-icon" />
+									{t("quickPhrases")}
+									<HintTip text={t("quickPhrasesDesc")} />
+									<span className="set-count">{settings.quickPhrases.length}</span>
+								</div>
+								<ToggleRow
+									title={t("quickPhrasesEnabled")}
+									tip={t("quickPhrasesDesc")}
+									enabled={settings.quickPhrasesEnabled}
+									onToggle={() => setPartial({ quickPhrasesEnabled: !settings.quickPhrasesEnabled })}
+								/>
+								{!settings.quickPhrasesEnabled && <p className="set-hint">{t("quickPhrasesOffHint")}</p>}
+								<div className="set-preset-save">
+									<input
+										className="set-input"
+										placeholder={t("quickPhrasesPlaceholder")}
+										value={quickNew}
+										maxLength={200}
+										onChange={(e) => setQuickNew(e.target.value)}
+										onKeyDown={(e) => {
+											if (e.key === "Enter" && quickNew.trim()) {
+												setPartial({ quickPhrases: [...settings.quickPhrases, quickNew.trim()] });
+												setQuickNew("");
+											}
+										}}
+									/>
+									<button
+										type="button"
+										className="set-save-btn"
+										disabled={!quickNew.trim()}
+										onClick={() => {
+											setPartial({ quickPhrases: [...settings.quickPhrases, quickNew.trim()] });
+											setQuickNew("");
+										}}
+									>
+										<FiPlus /> {t("quickPhrasesAdd")}
+									</button>
+								</div>
+								{settings.quickPhrases.length === 0 ? (
+									<p className="set-empty">{t("quickPhrasesEmpty")}</p>
+								) : (
+									<div className="set-list">
+										{settings.quickPhrases.map((p, i) => (
+											<div className="set-row" key={`${i}:${p}`}>
+												{quickEdit?.index === i ? (
+													<div className="set-row-info">
+														<input
+															className="set-input"
+															autoFocus
+															value={quickEdit.value}
+															maxLength={200}
+															placeholder={t("quickPhrasesEditPh")}
+															onChange={(e) => setQuickEdit({ index: i, value: e.target.value })}
+															onKeyDown={(e) => {
+																if (e.key === "Enter") commitQuickEdit();
+																else if (e.key === "Escape") setQuickEdit(null);
+															}}
+															onBlur={commitQuickEdit}
+														/>
+													</div>
+												) : (
+													<>
+														<div className="set-row-info">
+															<div className="set-row-name" title={p}>
+																{p}
+															</div>
+														</div>
+														<div className="set-row-actions">
+															<button
+																type="button"
+																className="set-icon-btn"
+																title={t("quickPhrasesEdit")}
+																onClick={() => setQuickEdit({ index: i, value: p })}
+															>
+																<FiEdit3 />
+															</button>
+															<button
+																type="button"
+																className="set-icon-btn"
+																title={t("quickPhrasesMoveUp")}
+																disabled={i === 0}
+																onClick={() => {
+																	const next = [...settings.quickPhrases];
+																	[next[i - 1], next[i]] = [next[i], next[i - 1]];
+																	setPartial({ quickPhrases: next });
+																}}
+															>
+																↑
+															</button>
+															<button
+																type="button"
+																className="set-icon-btn"
+																title={t("quickPhrasesMoveDown")}
+																disabled={i === settings.quickPhrases.length - 1}
+																onClick={() => {
+																	const next = [...settings.quickPhrases];
+																	[next[i], next[i + 1]] = [next[i + 1], next[i]];
+																	setPartial({ quickPhrases: next });
+																}}
+															>
+																↓
+															</button>
+															<button
+																type="button"
+																className="set-icon-btn danger"
+																title={t("quickPhrasesDelete")}
+																onClick={() =>
+																	setPartial({ quickPhrases: settings.quickPhrases.filter((_, j) => j !== i) })
+																}
+															>
+																<FiTrash2 />
+															</button>
+														</div>
+													</>
+												)}
+											</div>
+										))}
+									</div>
+								)}
+								<div className="compose-toolbar">
+									<button
+										type="button"
+										className="dd-refresh"
+										onClick={() => {
+											setQuickEdit(null);
+											setPartial({ quickPhrases: QUICK_PHRASE_DEFAULTS[locale] ?? QUICK_PHRASE_DEFAULTS.en });
+										}}
+									>
+										{t("quickPhrasesReset")}
+									</button>
+								</div>
 							</div>
 						)}
 
@@ -558,6 +1530,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 								<div className="set-section-title">
 									<FiCpu className="set-section-icon" />
 									{t("settingsSkills")}
+									<HintTip text={`${t("skillFullTextLabel")}：${t("skillFullTextDesc")}`} />
 									<span className="set-count">{settings.skills.length}</span>
 								</div>
 								{settings.skills.length === 0 ? (
@@ -571,6 +1544,16 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 												subtitle={s.description}
 												enabled={s.enabled}
 												onToggle={() => toggleSkill(s)}
+												action={
+													<button
+														type="button"
+														className={`tpl-chip${fullTextSkills.has(s.name) ? " on" : ""}`}
+														title={t("skillFullTextDesc")}
+														onClick={() => toggleSkillFullText(s.name)}
+													>
+														{t("skillFullTextShort")}
+													</button>
+												}
 											/>
 										))}
 									</div>
@@ -624,6 +1607,163 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 														) : undefined
 													}
 												/>
+											);
+										})}
+									</div>
+								)}
+							</div>
+						)}
+
+						{/* ---- 插件市场（可一键安装的插件列表） ------------------------ */}
+						{/* A managed instance installs software through its deploy, not
+						    through this page: the market would only offer an action the
+						    server refuses (server/managed.ts). Plugins already installed
+						    keep working and stay listed above. */}
+						{tab === "plugins" && managed && (
+							<div className="set-section">
+								<div className="set-note">{t("updatesManaged")}</div>
+							</div>
+						)}
+						{tab === "plugins" && !managed && (
+							<div className="set-section">
+								<div className="set-section-title">
+									<FiPackage className="set-section-icon" />
+									{t("pluginMarket")}
+									<span className="set-count">{chat.pluginCatalog.length}</span>
+									<button
+										type="button"
+										className="set-uninstall"
+										title={t("pluginCatalogAddHint")}
+										onClick={() => setShowCatAdd((v) => !v)}
+									>
+										<FiPlus />
+										{t("pluginCatalogAdd")}
+									</button>
+								</div>
+								{showCatAdd && (
+									<div className="set-catalog-add">
+										<input
+											className="set-input"
+											placeholder={t("pluginCatalogSource")}
+											value={catSource}
+											onChange={(ev) => setCatSource(ev.target.value)}
+										/>
+										<input
+											className="set-input"
+											placeholder={t("pluginCatalogId")}
+											value={catId}
+											onChange={(ev) => setCatId(ev.target.value)}
+										/>
+										<input
+											className="set-input"
+											placeholder={t("pluginCatalogName")}
+											value={catName}
+											onChange={(ev) => setCatName(ev.target.value)}
+										/>
+										<input
+											className="set-input"
+											placeholder={t("pluginCatalogIcon")}
+											value={catIcon}
+											onChange={(ev) => setCatIcon(ev.target.value)}
+										/>
+										<textarea
+											className="set-input"
+											rows={2}
+											placeholder={t("pluginCatalogDesc")}
+											value={catDesc}
+											onChange={(ev) => setCatDesc(ev.target.value)}
+										/>
+										<div className="set-catalog-add-actions">
+											<button
+												type="button"
+												className="set-uninstall confirm"
+												disabled={!catSource.trim()}
+												onClick={submitCatalogAdd}
+											>
+												{t("pluginCatalogAddSubmit")}
+											</button>
+											<button type="button" className="set-uninstall" onClick={() => setShowCatAdd(false)}>
+												{t("cancel")}
+											</button>
+										</div>
+									</div>
+								)}
+								{chat.pluginCatalog.length === 0 ? (
+									<p className="set-empty">{t("noPluginCatalog")}</p>
+								) : (
+									<div className="set-list">
+										{chat.pluginCatalog.map((e) => {
+											const installed = installedPluginIds.has(e.id);
+											return (
+												<div key={e.id} className="set-catalog-row">
+													<div className="set-catalog-main">
+														<div className="set-catalog-title">
+															<span>
+																{e.icon ? `${e.icon} ` : ""}
+																{e.name}
+															</span>
+															{installed && <span className="set-catalog-installed">{t("pluginInstalled")}</span>}
+															{!e.builtin && <span className="set-catalog-custom">{t("pluginCatalogCustom")}</span>}
+														</div>
+														{e.description && <div className="set-catalog-desc">{e.description}</div>}
+														<div className="set-catalog-source">{e.source}</div>
+													</div>
+													<div className="set-row-actions">
+														{installed ? (
+															<>
+																<button
+																	type="button"
+																	className="set-uninstall"
+																	title={t("pluginUpdateHint")}
+																	onClick={() => runUiPluginUpdate(e.id, e.source)}
+																>
+																	<FiRefreshCw />
+																	{t("pluginUpdate")}
+																</button>
+																{confirmUiUninstall === e.id ? (
+																	<button
+																		type="button"
+																		className="set-uninstall confirm"
+																		title={t("pluginUninstallHint")}
+																		onClick={() => runUiPluginUninstall(e.id)}
+																	>
+																		{t("uninstallConfirm")}
+																	</button>
+																) : (
+																	<button
+																		type="button"
+																		className="set-uninstall"
+																		title={t("pluginUninstallHint")}
+																		onClick={() => setConfirmUiUninstall(e.id)}
+																	>
+																		<FiTrash2 />
+																		{t("uninstallExt")}
+																	</button>
+																)}
+															</>
+														) : (
+															<button
+																type="button"
+																className="set-uninstall"
+																title={t("pluginInstallHint")}
+																onClick={() => runCatalogInstall(e)}
+															>
+																<FiDownload />
+																{t("pluginInstall")}
+															</button>
+														)}
+														{!e.builtin && (
+															<button
+																type="button"
+																className="set-uninstall"
+																title={t("pluginCatalogRemoveHint")}
+																onClick={() => runCatalogRemove(e.id)}
+															>
+																<FiX />
+															</button>
+														)}
+													</div>
+												</div>
 											);
 										})}
 									</div>
@@ -695,9 +1835,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 													}
 												/>
 												{/* 声明式设置：manifest settings schema → 自动渲染表单 */}
-												{p.settingsSchema && p.settingsSchema.length > 0 && (
-													<PluginSettingsForm plugin={p} send={send} />
-												)}
+												{p.settingsSchema && p.settingsSchema.length > 0 && <PluginSettingsForm plugin={p} />}
 											</>
 										))}
 									</div>
@@ -706,7 +1844,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 						)}
 
 						{/* ---- DSH 用户补丁（<dataDir>/dsh-patches，仅 dsh 引擎） ---------- */}
-						{tab === "plugins" && chat.engine === "dsh" && (
+						{tab === "plugins" && isDsh && (
 							<div className="set-section">
 								<div className="set-section-title">
 									<FiBox className="set-section-icon" />
@@ -717,7 +1855,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 										type="button"
 										className="set-uninstall"
 										title={t("dshPatchesRescanHint")}
-										onClick={() => send({ type: "dsh_patches_rescan" })}
+										onClick={() => appSend({ type: "dsh_patches_rescan" })}
 									>
 										<FiRefreshCw />
 										{t("dshPatchesRescan")}
@@ -754,7 +1892,12 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 									<HintTip text={t("settingsReviewDesc")} />
 									<span className="set-count">{settings.reviewSkills.length}</span>
 								</div>
-								{isDsh && <p className="set-hint">{t("dshReviewPromptNote")}</p>}
+								<ToggleRow
+									title={t("goalModeEnabled")}
+									tip={`${t("goalModeEnabledDesc")}\n${t("goalModeOffHint")}`}
+									enabled={settings.goalModeEnabled}
+									onToggle={() => setPartial({ goalModeEnabled: !settings.goalModeEnabled })}
+								/>
 								<textarea
 									className="set-prompt-input"
 									rows={5}
@@ -767,7 +1910,15 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 									}}
 									onChange={(e) => setReviewPromptDraft(e.target.value)}
 								/>
-								<div className="set-field-label">{t("settingsReviewSkills")}</div>
+								<div className="set-field-label">
+									{t("settingsReviewSkills")}
+									{isDsh && (
+										<>
+											{" "}
+											<HintTip text={t("dshReviewPromptNote")} />
+										</>
+									)}
+								</div>
 								{settings.reviewSkills.length === 0 ? (
 									<p className="set-empty">{t("noSkills")}</p>
 								) : (
@@ -795,11 +1946,10 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 								</div>
 								<ToggleRow
 									title={t("visionBridgeEnabled")}
-									tip={t("settingsVisionBridgeDesc")}
+									tip={`${t("settingsVisionBridgeDesc")}\n${t("visionBridgeOffHint")}`}
 									enabled={settings.visionBridgeEnabled}
 									onToggle={() => setPartial({ visionBridgeEnabled: !settings.visionBridgeEnabled })}
 								/>
-								{!settings.visionBridgeEnabled && <p className="set-hint">{t("visionBridgeOffHint")}</p>}
 								{settings.visionBridgeEnabled && (
 									<div className="set-mode-row">
 										<label className="set-field-label">{t("visionBridgeModel")}</label>
@@ -887,7 +2037,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 										onChange={(e) => setPresetName(e.target.value)}
 										onKeyDown={(e) => {
 											if (e.key === "Enter" && presetName.trim()) {
-												send({ type: "save_preset", name: presetName.trim() });
+												appSend({ type: "save_preset", name: presetName.trim() });
 												setPresetName("");
 											}
 										}}
@@ -897,7 +2047,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 										className="set-save-btn"
 										disabled={!presetName.trim()}
 										onClick={() => {
-											send({ type: "save_preset", name: presetName.trim() });
+											appSend({ type: "save_preset", name: presetName.trim() });
 											setPresetName("");
 										}}
 									>
@@ -923,7 +2073,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 													<button
 														type="button"
 														className="dd-refresh"
-														onClick={() => send({ type: "apply_preset", name: p.name })}
+														onClick={() => appSend({ type: "apply_preset", name: p.name })}
 													>
 														{t("applyPreset")}
 													</button>
@@ -931,7 +2081,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 														type="button"
 														className="set-icon-btn danger"
 														title={t("deletePreset")}
-														onClick={() => send({ type: "delete_preset", name: p.name })}
+														onClick={() => appSend({ type: "delete_preset", name: p.name })}
 													>
 														<FiTrash2 />
 													</button>
@@ -963,6 +2113,8 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 												systemPrompt: "",
 												enabledSkills: [],
 												enabledExtensions: [],
+												model: "",
+												thinkingLevel: "",
 												enabled: true,
 											})
 										}
@@ -970,6 +2122,26 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 										<FiPlus /> {t("subagentTemplateNew")}
 									</button>
 								</div>
+
+								{/* ---- 默认模型：全部子代理的兜底（模板/显式 model 参数优先） ---------- */}
+								<div className="set-mode-row">
+									<label className="set-field-label">
+										{t("subagentDefaultModelLabel")} <HintTip text={t("subagentDefaultModelHint")} />
+									</label>
+									<select
+										className="set-select"
+										value={settings.subagentDefaultModel ?? ""}
+										onChange={(e) => setPartial({ subagentDefaultModel: e.target.value || null })}
+									>
+										<option value="">{t("subagentFollowMain")}</option>
+										{settings.subagentModels.map((m) => (
+											<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
+												{m.label}
+											</option>
+										))}
+									</select>
+								</div>
+								{settings.subagentModels.length === 0 && <p className="set-hint">{t("subagentNoModels")}</p>}
 
 								{/* ---- 编辑器（新建 / 编辑同表单） ------------------------------ */}
 								{tplDraft && (
@@ -987,6 +2159,12 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 												value={tplDraft.description}
 												onChange={(e) => setTplDraft({ ...tplDraft, description: e.target.value })}
 											/>
+											<input
+												className="set-input"
+												placeholder={t("tplDescriptionEnPlaceholder")}
+												value={tplDraft.descriptionEn ?? ""}
+												onChange={(e) => setTplDraft({ ...tplDraft, descriptionEn: e.target.value })}
+											/>
 										</div>
 										<div className="set-mode-row">
 											<label className="set-field-label">{t("tplPromptModeLabel")}</label>
@@ -1001,12 +2179,51 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 												<option value="append">{t("promptModeAppend")}</option>
 											</select>
 										</div>
+										<div className="set-mode-row">
+											<label className="set-field-label">{t("tplModelLabel")}</label>
+											<select
+												className="set-select"
+												value={tplDraft.model ?? ""}
+												onChange={(e) => setTplDraft({ ...tplDraft, model: e.target.value })}
+											>
+												<option value="">{t("subagentFollowMain")}</option>
+												{settings.subagentModels.map((m) => (
+													<option key={`${m.provider}/${m.id}`} value={`${m.provider}/${m.id}`}>
+														{m.label}
+													</option>
+												))}
+											</select>
+										</div>
+										<div className="set-mode-row">
+											<label className="set-field-label">
+												{t("tplThinkingLabel")} <HintTip text={t("tplThinkingHint")} />
+											</label>
+											<select
+												className="set-select"
+												value={tplDraft.thinkingLevel ?? ""}
+												onChange={(e) => setTplDraft({ ...tplDraft, thinkingLevel: e.target.value })}
+											>
+												<option value="">{t("tplThinkingFollowMain")}</option>
+												{THINKING_VALUES.map((v) => (
+													<option key={v} value={v}>
+														{t(`thinking.${v}`)}
+													</option>
+												))}
+											</select>
+										</div>
 										<textarea
 											className="set-prompt-input"
 											rows={4}
-											placeholder={`${t("tplSystemPromptLabel")}：${t("tplSystemPromptPlaceholder")}`}
+											placeholder={`${t("tplSystemPromptLabel")}${locale === "zh" ? "：" : ": "}${t("tplSystemPromptPlaceholder")}`}
 											value={tplDraft.systemPrompt}
 											onChange={(e) => setTplDraft({ ...tplDraft, systemPrompt: e.target.value })}
+										/>
+										<textarea
+											className="set-prompt-input"
+											rows={4}
+											placeholder={`${t("tplSystemPromptLabel")}: ${t("tplSystemPromptEnPlaceholder")}`}
+											value={tplDraft.systemPromptEn ?? ""}
+											onChange={(e) => setTplDraft({ ...tplDraft, systemPromptEn: e.target.value })}
 										/>
 										<div className="tpl-pick-block">
 											<div className="tpl-pick-head">
@@ -1082,7 +2299,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 												className="set-save-btn"
 												disabled={!tplDraft.name.trim()}
 												onClick={() => {
-													send({
+													appSend({
 														type: "save_subagent_template",
 														template: { ...tplDraft, name: tplDraft.name.trim() },
 													});
@@ -1114,8 +2331,12 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 														{!tp.enabled && <span className="tpl-badge">{t("subagentTemplateClosed")}</span>}
 													</div>
 													<div className="set-row-desc">
-														{tp.description ||
+														{(locale !== "zh" && tp.descriptionEn ? tp.descriptionEn : tp.description) ||
 															`${tp.promptMode === "replace" ? t("promptModeReplace") : t("promptModeAppend")}`}
+														{tp.model ? ` · ${t("tplModelLabel")} ${tp.model}` : ` · ${t("subagentFollowMain")}`}
+														{tp.thinkingLevel
+															? ` · ${t("tplThinkingLabel")} ${tt(`thinking.${tp.thinkingLevel}`)}`
+															: ""}
 														{tp.enabledSkills.length > 0 && ` · ${t("tplSkillsLabel")} ${tp.enabledSkills.length}`}
 														{tp.enabledExtensions.length > 0 &&
 															` · ${t("tplExtensionsLabel")} ${tp.enabledExtensions.length}`}
@@ -1133,7 +2354,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 														aria-checked={tp.enabled}
 														title={`${tp.enabled ? t("subagentTemplateDisable") : t("subagentTemplateEnable")} · ${t("subagentTemplateOffHint")}`}
 														onClick={() =>
-															send({ type: "save_subagent_template", template: { ...tp, enabled: !tp.enabled } })
+															appSend({ type: "save_subagent_template", template: { ...tp, enabled: !tp.enabled } })
 														}
 													>
 														<span className="set-switch-knob" />
@@ -1152,7 +2373,7 @@ export function SettingsModal({ chat, send, terminal, onSwitchToTerminal, onClos
 															className="set-uninstall confirm"
 															title={t("uninstallConfirmHint")}
 															onClick={() => {
-																send({ type: "delete_subagent_template", name: tp.name });
+																appSend({ type: "delete_subagent_template", name: tp.name });
 																setConfirmTplDelete(null);
 															}}
 														>

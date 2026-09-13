@@ -106,10 +106,13 @@ try {
 	check("has skills array", Array.isArray(st0.settings.skills));
 	check("has extensions array", Array.isArray(st0.settings.extensions));
 	check("has presets array", Array.isArray(st0.settings.presets));
-	check("default promptMode=append", st0.settings.promptMode === "append");
 	check(
-		"settings_state carries built-in default prompts",
-		typeof st0.settings.defaultSystemPrompt === "string" &&
+		"settings_state carries compose template + overrides (default empty)",
+		typeof st0.settings.promptTemplate === "string" &&
+			st0.settings.promptTemplate === "" &&
+			typeof st0.settings.promptOverrides === "object" &&
+			typeof st0.settings.promptSourceDefaults === "object" &&
+			typeof st0.settings.effectiveSystemPrompt === "string" &&
 			typeof st0.settings.visionBridgeDefaultPrompt === "string" &&
 			st0.settings.visionBridgeDefaultPrompt.length > 0,
 	);
@@ -117,12 +120,50 @@ try {
 
 	c.send({ type: "get_settings" });
 	const st1 = await c.waitFor("settings_state");
-	check("get_settings echoes state", st1.settings.promptMode === "append");
+	check("get_settings echoes state", typeof st1.settings.promptTemplate === "string");
 
-	// append prompt, then save it as a preset
-	c.send({ type: "set_settings", promptMode: "append", customSystemPrompt: "你是一个测试助手。" });
-	const st2 = await c.waitFor("settings_state", 8000, (m) => m.settings.customSystemPrompt === "你是一个测试助手。");
-	check("append prompt persisted", st2.settings.customSystemPrompt === "你是一个测试助手。");
+	// compose 模板 + 单来源覆盖持久化，然后存为预设
+	const SAVED_TEMPLATE = "{{soul}}\n\n我的固定开场。\n\n{{context}}";
+	const SAVED_SOUL = "你是降世神龙，专精代码重构。";
+	c.send({ type: "set_settings", promptTemplate: SAVED_TEMPLATE });
+	const st2 = await c.waitFor("settings_state", 8000, (m) => m.settings.promptTemplate === SAVED_TEMPLATE);
+	check("compose template persisted", st2.settings.promptTemplate === SAVED_TEMPLATE);
+	const stEff = await c.waitFor("settings_state", 10000, (m) =>
+		(m.settings.effectiveSystemPrompt ?? "").includes("我的固定开场。"),
+	);
+	check(
+		"effective prompt = compose render（只拼模板里的 token）",
+		stEff.settings.effectiveSystemPrompt.includes("我的固定开场。") &&
+			stEff.settings.effectiveSystemPrompt.includes("<project_context>") &&
+			stEff.settings.effectiveSystemPrompt.includes("You are an expert coding assistant") &&
+			!stEff.settings.effectiveSystemPrompt.includes("Available tools:") &&
+			!stEff.settings.effectiveSystemPrompt.includes("{{soul}}") &&
+			!stEff.settings.effectiveSystemPrompt.includes("{{context}}"),
+	);
+	const dflt = stEff.settings.promptSourceDefaults ?? {};
+	check(
+		"promptSourceDefaults = per-source auto text（soul/cwd 等未覆盖时展开值）",
+		typeof dflt === "object" &&
+			typeof dflt.soul === "string" &&
+			dflt.soul.includes("You are an expert coding assistant") &&
+			typeof dflt.cwd === "string" &&
+			dflt.cwd.startsWith("Current working directory:"),
+	);
+	c.send({ type: "set_settings", promptOverrides: { soul: SAVED_SOUL } });
+	const stOv = await c.waitFor("settings_state", 8000, (m) => m.settings.promptOverrides?.soul === SAVED_SOUL);
+	check("per-source override persisted", stOv.settings.promptOverrides?.soul === SAVED_SOUL);
+	const stEff2 = await c.waitFor("settings_state", 10000, (m) =>
+		(m.settings.effectiveSystemPrompt ?? "").includes(SAVED_SOUL),
+	);
+	check(
+		"override 替换灵魂段生效",
+		stEff2.settings.effectiveSystemPrompt.includes(SAVED_SOUL) &&
+			!stEff2.settings.effectiveSystemPrompt.includes("You are an expert coding assistant"),
+	);
+
+	// 预设捕获终端工具开关：保存前显式设为开，应用预设时（当前已关）应恢复为开
+	c.send({ type: "set_settings", terminalToolsEnabled: true });
+	await c.waitFor("settings_state", 8000, (m) => m.settings.terminalToolsEnabled === true);
 
 	c.send({ type: "save_preset", name: "测试预设" });
 	const st6 = await c.waitFor("settings_state", 8000, (m) => m.settings.presets.some((p) => p.name === "测试预设"));
@@ -131,15 +172,16 @@ try {
 		st6.settings.presets.some((p) => p.name === "测试预设"),
 	);
 
-	// replace prompt
-	c.send({ type: "set_settings", promptMode: "replace", customSystemPrompt: "你是替换提示词。" });
-	const st2b = await c.waitFor("settings_state", 8000, (m) => m.settings.promptMode === "replace");
-	check("promptMode replace persisted", st2b.settings.promptMode === "replace");
-	c.send({ type: "set_settings", promptMode: "append" });
-	await c.waitFor("settings_state", 8000, (m) => m.settings.promptMode === "append");
+	// 覆盖清空 = 恢复自动内容
+	c.send({ type: "set_settings", promptOverrides: { soul: "" } });
+	const stOv2 = await c.waitFor("settings_state", 8000, (m) => !("soul" in (m.settings.promptOverrides ?? {})));
+	check("override cleared when sent empty", !("soul" in stOv2.settings.promptOverrides));
+	// 恢复默认模板
+	c.send({ type: "set_settings", promptTemplate: "" });
+	await c.waitFor("settings_state", 8000, (m) => m.settings.promptTemplate === "");
 
-	// terminal tools toggle：默认开 → 关 → 重连后仍记住；预设捕获该开关
-	check("terminalToolsEnabled defaults on", st0.settings.terminalToolsEnabled === true);
+	// terminal tools toggle：默认关 → 开 → 关 → 重连后仍记住；预设捕获该开关（保存前已显式设开）
+	check("terminalToolsEnabled defaults off", st0.settings.terminalToolsEnabled === false);
 	c.send({ type: "set_settings", terminalToolsEnabled: false });
 	const stT = await c.waitFor("settings_state", 8000, (m) => m.settings.terminalToolsEnabled === false);
 	check("terminalToolsEnabled off persisted", stT.settings.terminalToolsEnabled === false);
@@ -190,13 +232,17 @@ try {
 		console.log("  (no extensions loaded — skipping)");
 	}
 
-	// apply preset → restores append/你好
-	c.send({ type: "set_settings", customSystemPrompt: "临时内容" });
-	await c.waitFor("settings_state", 8000, (m) => m.settings.customSystemPrompt === "临时内容");
+	// apply preset → 恢复保存时的 compose 模板 + 覆盖
+	c.send({ type: "set_settings", promptTemplate: "临时模板 {{cwd}}" });
+	await c.waitFor("settings_state", 8000, (m) => m.settings.promptTemplate === "临时模板 {{cwd}}");
 	c.send({ type: "apply_preset", name: "测试预设" });
-	const st7 = await c.waitFor("settings_state", 8000, (m) => m.settings.customSystemPrompt === "你是一个测试助手。");
-	check("preset applied (prompt restored)", st7.settings.customSystemPrompt === "你是一个测试助手。");
-	check("preset applied (mode restored)", st7.settings.promptMode === "append");
+	const st7 = await c.waitFor(
+		"settings_state",
+		8000,
+		(m) => m.settings.promptTemplate === SAVED_TEMPLATE && m.settings.promptOverrides?.soul === SAVED_SOUL,
+	);
+	check("preset applied (template restored)", st7.settings.promptTemplate === SAVED_TEMPLATE);
+	check("preset applied (override restored)", st7.settings.promptOverrides?.soul === SAVED_SOUL);
 	// 预设保存时开关是开 → 应用预设把它恢复为 true（验证预设捕获该开关）
 	check("preset applied (terminal toggle restored to captured value)", st7.settings.terminalToolsEnabled === true);
 
@@ -214,11 +260,12 @@ try {
 	await c.waitFor("ready");
 	await c.waitFor(["snapshot", "snapshot_delta"]);
 	const st9 = await c.waitFor("settings_state");
-	check("prompt survives reconnect", st9.settings.customSystemPrompt === "你是一个测试助手。");
+	check("compose template survives reconnect", st9.settings.promptTemplate === SAVED_TEMPLATE);
+	check("override survives reconnect", st9.settings.promptOverrides?.soul === SAVED_SOUL);
 	check("terminalToolsEnabled survives reconnect (off)", st9.settings.terminalToolsEnabled === false);
-	// 恢复默认开，避免影响后续断言
-	c.send({ type: "set_settings", terminalToolsEnabled: true });
-	await c.waitFor("settings_state", 8000, (m) => m.settings.terminalToolsEnabled === true);
+	// 恢复默认关，避免影响后续断言
+	c.send({ type: "set_settings", terminalToolsEnabled: false });
+	await c.waitFor("settings_state", 8000, (m) => m.settings.terminalToolsEnabled === false);
 
 	// extensions_reload：外部变更（如终端里 pi remove 完成）后重发现扩展
 	c.send({ type: "extensions_reload" });

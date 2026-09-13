@@ -345,7 +345,8 @@ try {
 		"vision API received 1 image",
 		visionRequests.length === 1 && visionRequests[0].imageBlocks === 1 && visionRequests[0].model === "qwen-vl-mock",
 	);
-	check("vision prompt asks for transcription", /转写/.test(visionRequests[0]?.textPrompt ?? ""));
+	// issue #91：转写提示词默认英文（未上报 locale 时），中文 UI 下为中文——两种都接受。
+	check("vision prompt asks for transcription", /转写|transcri/i.test(visionRequests[0]?.textPrompt ?? ""));
 
 	// 3) bridged attachment card in the message list
 	const bridged = await c.waitForMessage((m) => m.customType === "file" && m.details?.mode === "bridged", 20000);
@@ -402,8 +403,8 @@ try {
 		"settings_state carries the built-in default prompts",
 		typeof ss.settings.visionBridgeDefaultPrompt === "string" &&
 			ss.settings.visionBridgeDefaultPrompt.includes("You are a vision bridge") &&
-			typeof ss.settings.defaultSystemPrompt === "string" &&
-			ss.settings.defaultSystemPrompt.length > 0,
+			typeof ss.settings.promptTemplate === "string" &&
+			typeof ss.settings.effectiveSystemPrompt === "string",
 	);
 
 	// Switch the preferred transcription model to the SECOND vision model.

@@ -1,10 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { FiCheck, FiDownload, FiEdit2, FiPlus, FiTrash2, FiX } from "react-icons/fi";
-import type { ClientMessage, ProviderKeyInfo, ProviderStatus, UiModelConfigEntry, UiProviderConfig } from "../types";
+import { FiCheck, FiDownload, FiEdit2, FiPlus, FiRefreshCw, FiTrash2, FiX } from "react-icons/fi";
+import type { ProviderKeyInfo, ProviderStatus, UiModelConfigEntry, UiProviderConfig } from "../types";
 import { useT } from "../i18n";
+import { appSend } from "../app-globals";
 
 interface ModelConfigModalProps {
-	send: (msg: ClientMessage) => boolean;
 	/** Custom providers from agentDir/models.json. */
 	providers: UiProviderConfig[];
 	/** Built-in providers with auth status (key-only config). */
@@ -97,7 +97,6 @@ function toDraft(p: UiProviderConfig): Draft {
 }
 
 export function ModelConfigModal({
-	send,
 	providers,
 	providerStatus,
 	providerKeys,
@@ -126,10 +125,10 @@ export function ModelConfigModal({
 
 	// Fresh config when the modal opens.
 	useEffect(() => {
-		send({ type: "list_models_config" });
-		send({ type: "list_providers" });
-		send({ type: "list_provider_keys" });
-	}, [send]);
+		appSend({ type: "list_models_config" });
+		appSend({ type: "list_providers" });
+		appSend({ type: "list_provider_keys" });
+	}, []);
 
 	/** Probe the custom provider's /models endpoint and merge the advertised
 	 *  models into the draft: rows whose id already exists keep their settings
@@ -148,7 +147,7 @@ export function ModelConfigModal({
 		setFetchMsg(null);
 		const reqId = fetchReqId + 1;
 		setFetchReqId(reqId);
-		send({
+		appSend({
 			type: "fetch_models",
 			reqId,
 			baseUrl: base,
@@ -214,7 +213,7 @@ export function ModelConfigModal({
 		const key = (addKeys[p.id] ?? "").trim();
 		if (!key || addKeyBusy) return;
 		setAddKeyBusy(p.id);
-		send({
+		appSend({
 			type: "add_provider_key",
 			provider: p.id,
 			apiKey: key,
@@ -224,22 +223,22 @@ export function ModelConfigModal({
 			setAddKeyBusy(null);
 			setAddKeys((k) => ({ ...k, [p.id]: "" }));
 			setAddKeyNames((n) => ({ ...n, [p.id]: "" }));
-			send({ type: "list_providers" });
-			send({ type: "list_provider_keys" });
+			appSend({ type: "list_providers" });
+			appSend({ type: "list_provider_keys" });
 		}, 1500);
 	};
 
 	/** Make a stored API key the ACTIVE one for a built-in provider, by NAME. */
 	const activateKey = (providerId: string, keyName: string) => {
-		send({ type: "activate_provider_key", provider: providerId, keyName });
-		send({ type: "list_provider_keys" });
+		appSend({ type: "activate_provider_key", provider: providerId, keyName });
+		appSend({ type: "list_provider_keys" });
 	};
 
 	/** Remove a stored API key by NAME; if it was active, the first remaining key takes over. */
 	const removeKey = (providerId: string, keyName: string) => {
 		if (!window.confirm(t("removeKeyConfirm"))) return;
-		send({ type: "remove_provider_key", provider: providerId, keyName });
-		send({ type: "list_provider_keys" });
+		appSend({ type: "remove_provider_key", provider: providerId, keyName });
+		appSend({ type: "list_provider_keys" });
 	};
 
 	const saveAddKey = () => {
@@ -265,7 +264,7 @@ export function ModelConfigModal({
 			authHeader: addKeyDraft.authHeader || undefined,
 			models,
 		};
-		send({ type: "save_model_config", providerId: pid, config });
+		appSend({ type: "save_model_config", providerId: pid, config });
 		setAddKeyDraft(null);
 		onClose();
 	};
@@ -292,7 +291,7 @@ export function ModelConfigModal({
 			authHeader: editing.authHeader || undefined,
 			models,
 		};
-		send({ type: "save_model_config", providerId, config });
+		appSend({ type: "save_model_config", providerId, config });
 		onClose();
 	};
 
@@ -320,7 +319,7 @@ export function ModelConfigModal({
 	 *  returns to unconfigured and its models leave the picker. */
 	const clearBuiltinKey = (id: string) => {
 		if (window.confirm(t("clearKeyConfirm", { id }))) {
-			send({ type: "clear_provider_api_key", provider: id });
+			appSend({ type: "clear_provider_api_key", provider: id });
 		}
 	};
 
@@ -333,7 +332,7 @@ export function ModelConfigModal({
 				}),
 			)
 		) {
-			send({ type: "delete_model_config", providerId: p.providerId });
+			appSend({ type: "delete_model_config", providerId: p.providerId });
 		}
 	};
 
@@ -521,7 +520,7 @@ export function ModelConfigModal({
 											authHeader: d.authHeader || undefined,
 											models,
 										};
-										send({ type: "save_model_config", providerId: pid, config });
+										appSend({ type: "save_model_config", providerId: pid, config });
 									}
 									setBatch(null);
 									onClose();
@@ -623,6 +622,7 @@ export function ModelConfigModal({
 
 							<div className="form-section-title">{t("customProviders")}</div>
 							<p className="modal-desc">{t("customDesc")}</p>
+							<p className="modal-desc">{t("reloadModelsHint")}</p>
 							{providers.length === 0 && <div className="dd-loading">{t("noCustomProviders")}</div>}
 							<div className="provider-list">
 								{providers.map((p) => (
@@ -658,6 +658,9 @@ export function ModelConfigModal({
 							</div>
 						</div>
 						<div className="modal-actions">
+							<button type="button" className="btn" onClick={() => appSend({ type: "reload_models_config" })}>
+								<FiRefreshCw /> {t("reloadModelsConfig")}
+							</button>
 							<button type="button" className="btn primary" onClick={() => setEditing(emptyDraft())}>
 								<FiPlus /> {t("addProvider")}
 							</button>

@@ -1,6 +1,10 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { appUrl } from "./base-url";
+import { withToken } from "./auth-token";
+import { pickLocale } from "./pick-locale.js";
 
-export type Locale = "zh" | "en";
+/** Locale code ("zh" / "en" built in; the rest are downloadable packs, see below). */
+export type Locale = string;
 
 const STORAGE_KEY = "pi-web-ui:lang";
 
@@ -8,8 +12,9 @@ const STORAGE_KEY = "pi-web-ui:lang";
 /* zh (default)                                                        */
 /* ------------------------------------------------------------------ */
 
-const zh = {
+export const zh = {
 	/* common */
+	docTitle: "pi-web-ui — pi 编码智能体",
 	cancel: "取消",
 	ok: "确定",
 	save: "保存",
@@ -25,6 +30,14 @@ const zh = {
 	language: "语言",
 	langZh: "中文",
 	langEn: "English",
+	langIt: "Italiano",
+	langJa: "日语",
+	langKo: "韩语",
+	langFr: "法语",
+	langDe: "德语",
+	langEs: "西班牙语",
+	langRu: "俄语",
+	langPt: "葡萄牙语",
 	githubRepo: "GitHub 仓库（xing-shuyin/pi-web-ui）",
 	copy: "复制",
 
@@ -72,6 +85,15 @@ const zh = {
 	queued: "排队",
 	enterPath: "输入路径，Enter 切换",
 	cwdTip: "工作目录：{path}（点击切换）",
+	cwdGoUp: "上级目录",
+	cwdPickCurrent: "选择当前目录",
+	cwdChoose: "选择",
+	cwdEnter: "进入",
+	cwdEmpty: "（空目录）",
+	cwdNewFolder: "新建文件夹",
+	cwdNewName: "文件夹名称",
+	cwdCreate: "创建",
+	cwdCancel: "取消",
 	cacheHit: "缓存命中",
 	cacheHitTip: "缓存读取 {read} · 缓存写入 {write} · 未命中 {miss}（共 {input} 输入 token）",
 	tps: "t/s",
@@ -94,6 +116,7 @@ const zh = {
 	fileTooLarge: "文件过大已跳过（>{size}MB）：{name}",
 	foldersNotSupported: "不支持直接拖入文件夹，请展开后选择文件",
 	placeholderStreaming: "智能体正在工作中…回车插队发送，或点「排队」等回答结束后发送",
+	placeholderStreamingQueued: "智能体正在工作中…回车或点「排队」，回答完全结束后发送（本引擎不支持插队）",
 	placeholderIdle: "给 pi 发送消息 — Enter 发送，/ 查看命令",
 	placeholderConnecting: "正在连接服务器…",
 	stopAgent: "停止智能体",
@@ -116,10 +139,26 @@ const zh = {
 	stopBashTip: "停止正在运行的 bash 命令（对话继续）",
 	supplement: "排队",
 	supplementTip: "加入队列：AI 回答完全结束后才发送（不打断）",
+	steerTip: "插队：立即发送，本回合马上响应（Enter）",
 	queueSteerTag: "插队",
 	queueFollowTag: "排队",
 	queueRemoveTip: "移除此排队消息",
+	queueRecallTip: "撤回并放回输入框（可编辑后重发）",
 	sendTip: "发送（Enter）",
+	quickPhrases: "快捷短语",
+	quickPhrasesDesc: "输入框上方的一排常用短语按钮，点击即发送（会带上当前已选的文件附件，不清空输入框草稿）",
+	quickPhrasesEnabled: "启用快捷短语",
+	quickPhrasesOffHint: "已关闭：输入框上方不再显示快捷短语按钮（已配置的短语保留，可随时重新启用）",
+	quickPhrasesPlaceholder: "输入常用短语…（Enter 添加）",
+	quickPhrasesAdd: "添加",
+	quickPhrasesEmpty: "还没有快捷短语，在下面添加第一条",
+	quickPhrasesTip: "点击发送：{text}",
+	quickPhrasesMoveUp: "上移",
+	quickPhrasesMoveDown: "下移",
+	quickPhrasesDelete: "删除该短语",
+	quickPhrasesEdit: "编辑该短语",
+	quickPhrasesEditPh: "修改短语…（Enter 保存，Esc 取消）",
+	quickPhrasesReset: "恢复默认短语",
 
 	/* slash commands */
 	slashCommands: "命令",
@@ -140,6 +179,7 @@ const zh = {
 	recentProjects: "最近项目",
 	runningConversations: "运行的对话",
 	subagentBadge: "子代理",
+	convErrorBadge: "子代理运行报错：{error}",
 	subagentTitle: "子代理 · {title}",
 	historySessions: "历史对话",
 	openHistory: "历史对话",
@@ -153,8 +193,23 @@ const zh = {
 	deleteProjectConfirm: "确认移出",
 	deleteSession: "删除该对话记录（不可恢复）",
 	deleteSessionConfirm: "确认删除",
+	renameSession: "重命名该对话",
+	renameSessionPlaceholder: "输入新名称…",
+	renameSessionConfirm: "重命名",
 	dismissConversation: "从运行列表移出（历史记录保留）",
 	dismissConversationConfirm: "确认移出",
+	dismissFinishedSubagents: "关闭已结束的子代理（{n} 个）",
+	dismissFinishedSubagentsScoped: "关闭该对话下已结束的子代理（含嵌套，{n} 个）",
+	dismissConversationWithSubagents: "同时关闭已结束的子代理（{n} 个）？请确认其结果已不再需要，再点一次确认",
+	dismissConversationWithSubagentsMixed:
+		"同时关闭已结束的子代理（{n} 个）？运行中的 {m} 个不受影响、父对话暂留；请确认已结束的已不再需要，再点一次确认",
+	dismissStreamingConfirm: "仍在运行，确认强行关闭？（运行将被中止）",
+	dismissFinishedOnly: "仅关已结束（{n}）",
+	dismissForceAll: "强行全关（含子代理 {n}）",
+	forceDismissTitle: "强行关闭本对话及全部 {n} 个子代理（运行中的 {m} 个将被中止）",
+	forceDismissConversation: "强行关闭对话（含全部子代理）",
+	forceDismissConfirm: "确认强行关闭？未结束的运行将被中止，再点一次",
+	noFinishedSubagents: "没有可关闭的已结束子代理",
 	collapseSection: "折叠",
 	expandSection: "展开",
 	emptyChat: "空对话",
@@ -200,8 +255,13 @@ const zh = {
 	updateAllBtn: "全部更新",
 	updatePkgTabTitle: "更新 {name}",
 	updateAllTabTitle: "更新全部组件",
+	restartService: "重启服务",
+	restartingService: "重启中…",
+	restartServiceTip:
+		"重启 pi-web-ui 服务（{name}）：本实例由系统服务托管（launchd/systemd/Windows watchdog），进程退出后会被自动拉起，本页会自动重连；更新完成后用它生效",
 
 	/* right panel */
+	computer: "此电脑",
 	rootDir: "根目录",
 	noFiles: "暂无文件",
 	filesTruncated: "目录过大，列表已截断，仅显示前 2000 项",
@@ -210,12 +270,15 @@ const zh = {
 	referenceTip: "仅引用路径（AI 按需读取）",
 	previewFile: "预览",
 	downloadFile: "下载文件",
+	copyName: "复制名称",
+	copyPath: "复制路径",
 	downloadFailed: "下载失败：{error}",
 	fileNotFoundShort: "文件不存在",
 	pluginMountFailed: "插件 {name} 挂载失败",
 	liveOutputOmitted: "…[前 {n} 字符已省略]…\n",
 	uploadToFolder: "上传文件到此文件夹",
 	uploadToCurrentDir: "上传文件到当前目录",
+	openAsProject: "以项目打开",
 	protocolMismatch: "页面版本与服务器不一致（应用刚更新过），请刷新页面以恢复全部功能。",
 	authLoginOpen: "打开链接并输入代码",
 	authLoginCode: "代码",
@@ -246,6 +309,15 @@ const zh = {
 	fileEditTruncated: "文件过大，预览不完整，无法编辑",
 	showMarkdownSource: "显示 Markdown 原文",
 	showMarkdownPreview: "显示 Markdown 预览",
+	showHtmlSource: "显示 HTML 源码",
+	showHtmlPreview: "显示 HTML 预览",
+	htmlJsOff: "🛡 脚本已禁用（静态预览）",
+	htmlJsOffTip: "当前是纯静态渲染：页面里的 JavaScript 不会执行。只对你信任的文件开启脚本。",
+	htmlJsOn: "⚠ 脚本已启用",
+	htmlJsOnTip:
+		"页面里的 JavaScript 正在运行。它仍碰不到本应用（无同源、无表单、无顶层跳转），但可能产生网络请求或挖矿等行为，仅用于你信任的文件。",
+	htmlEnableJs: "启用脚本",
+	htmlDisableJs: "禁用脚本",
 	fullscreen: "全屏",
 	exitFullscreen: "退出全屏",
 	zoomIn: "放大字号",
@@ -257,6 +329,10 @@ const zh = {
 	modelQuestion: "模型提问",
 	modelQuestionCustom: "补充回答（可选）",
 	modelQuestionSubmit: "提交回答",
+	next: "下一步",
+	previous: "上一步",
+	questionStep: "第 {cur} / {total} 题",
+	optionPreview: "选项预览",
 	noOptions: "（无选项）",
 	inputPlaceholder: "输入内容",
 	questionTimeout: "⏳ 剩余 {s} 秒，超时将自动取消",
@@ -276,9 +352,25 @@ const zh = {
 	/* desktop / OS (PWA) notifications */
 	notifyHeader: "桌面通知",
 	notifyEnable: "启用桌面通知（PWA）",
-	notifyEnableDesc: "会话完成或需要你输入时，即使切到其他应用也会提醒（需授权，仅页面前台无焦点时触发）。",
-	notifyDenied: "通知权限已被拒绝 —— 请在浏览器/系统设置里为本站点开启通知。",
+	notifyEnableDesc:
+		"会话完成或需要你输入时提醒你（需授权；仅当页面不在你眼前时触发：切到其他应用、最小化窗口或后台标签页；Windows 上窗口最小化后系统给的状态信号是错的，因此 2 分钟没操作页面也照常提醒——宁可多提醒一次也不静默）。",
+	notifyDenied:
+		"通知权限已被拒绝 —— 请在浏览器站点设置里为本站点开启通知（Windows 还要在「设置 → 系统 → 通知」里允许浏览器/应用，并关闭专注助手）。",
 	notifyUnsupported: "此浏览器不支持通知。",
+	notifyInsecure:
+		"当前地址不是安全上下文（非 localhost 的 http 访问），浏览器不提供通知接口 —— 请改用 127.0.0.1 或 HTTPS 打开，或将本机地址加入浏览器白名单。",
+	notifyWindowsHint:
+		"Windows 额外一层系统开关：请允许浏览器（或已安装的 pi-web-ui 应用）在「设置 → 系统 → 通知」里推送，并关闭专注助手/勿扰；关窗后进程结束也不会再提醒。",
+	notifyTest: "发送测试通知",
+	notifyTestBody: "能看到这条系统通知，就说明浏览器和 Windows 都放行了。",
+	notifyTestSent: "已发送（通道：{path}）",
+	notifyTestFailed: "发送失败：{error}",
+	notifyTestState: "系统状态：焦点 {focus} · 可见性 {visibility} · 最小化 {minimized} · 空闲 {idle}s",
+	notifyTestHeld:
+		"浏览器已受理（通知中心里现有 {count} 条）：屏幕上没弹横幅的话，是 Windows/Edge 的横幅开关或静默设置把它压住了。",
+	notifyTestDropped: "浏览器没有保留这条通知 → Edge 自己把它丢了（站点通知被静默/阻止，或被系统策略丢弃）。",
+	notifyTestGateSuppressed: "当前判定：会被吞掉（系统认为你正看着这个页面）。",
+	notifyTestGateOpen: "当前判定：会正常提醒（系统认为你没在看）。",
 	notifyDoneTitle: "任务完成",
 	notifyDoneBody: "会话已完成，等待你的输入。",
 	notifyQuestionTitle: "需要你回答",
@@ -341,6 +433,19 @@ const zh = {
 	/* welcome / message list */
 	directory: "目录",
 	waitingResponse: "正在等待模型响应…",
+	retryingApi: "大模型 API 出错，正在自动重试（{attempt}/{max}）：{error}",
+	retryingApiSoon: "大模型 API 出错，正在自动重试：{error}",
+	modelRetryAttempts: "模型报错自动重试次数",
+	modelRetryHint:
+		"大模型 API 调用出错时自动重试的次数。次数用完后本轮停止并标红，可点「重试」手动再试；设为 0 则失败即停。修改即时生效，无需重载。",
+	retryNow: "重试",
+	retryLastTip: "手动重试上次失败的模型请求",
+	compactingContext: "正在压缩上下文，摘要生成中…",
+	compactingReasonManual: "手动触发",
+	compactingReasonThreshold: "上下文达到阈值，自动触发",
+	compactingReasonOverflow: "上下文溢出，自动触发",
+	compactionFrom: "从 {tokens} tokens 压缩",
+	compactionKeptHint: "此前历史已折叠为该摘要，上下文中仅保留最近消息",
 	backToBottom: "回到底部",
 	questionNavTitle: "问题列表",
 	searchPlaceholder: "在对话中搜索…",
@@ -514,6 +619,8 @@ const zh = {
 	running: "执行中…",
 	toolQueued: "排队中",
 	copyArgs: "复制参数",
+	copyMessage: "复制消息",
+	copied: "已复制",
 	errorOutput: "错误输出",
 	output: "输出",
 	waitingOutput: "等待输出…",
@@ -540,7 +647,9 @@ const zh = {
 	termEmptySub: "点击左侧命令运行，或点右侧 + 新建终端",
 	noTerminal: "暂无终端",
 	exited: "（已退出{code}）",
+	exitBanner: "[进程已退出，退出码 {code}]",
 	closeTerminal: "关闭终端",
+	renameTerminal: "重命名终端",
 	rerun: "重新读取 .pi/commands.json",
 	terminalTitle: "终端 {n}",
 	aiBashGroup: "终端接管 bash",
@@ -567,7 +676,9 @@ const zh = {
 	scmPull: "拉取",
 	scmPullTip: "在终端中执行 git pull",
 	scmCommit: "提交",
-	scmCommitTip: '在终端中执行 git add -A && git commit -m "…"（提交全部更改，含未跟踪）',
+	scmCommitTip: '在终端中执行 git commit -m "…"（仅提交已暂存的更改）',
+	scmCommitAll: "全部提交",
+	scmCommitAllTip: '在终端中执行 git add -A && git commit -m "…"（暂存全部更改含未跟踪并提交）',
 	scmCommitPlaceholder: "输入提交信息…",
 	scmChanges: "更改",
 	scmHistory: "提交树",
@@ -585,7 +696,7 @@ const zh = {
 	scmUnstaged: "未暂存",
 	scmStagedUnstaged: "已暂存 + 未暂存",
 	scmUntracked: "未跟踪",
-	scmUntrackedNote: "未跟踪文件：差异不显示，提交时会一并包含",
+	scmUntrackedNote: "未跟踪文件：需先用 + 暂存，或使用“全部提交”才会包含",
 	scmQueryFailed: "Git 查询失败：{error}",
 	scmQueryFailedShort: "查询失败",
 	pluginCommandFallback: "插件命令",
@@ -637,6 +748,8 @@ const zh = {
 	customProviders: "自定义服务商",
 	customDesc: "用于 Ollama / vLLM / 兼容 OpenAI 的代理等，写入 pi 的 models.json，保存后热重载、立即生效。",
 	noCustomProviders: "还没有自定义服务商",
+	reloadModelsConfig: "重新加载配置",
+	reloadModelsHint: "直接改过 models.json（手工或脚本）？点下面的「重新加载配置」从磁盘重读，无需重启服务。",
 	modelsCount: "{n} 个模型",
 	addProvider: "新增服务商",
 	providerId: "服务商 ID",
@@ -695,23 +808,89 @@ const zh = {
 	settingsDesc:
 		"修改立即生效：系统提示词、技能与插件开关会重建当前会话；审查提示词与审查技能只影响后续目标审查（回复进行中则主会话变更自动延迟）。",
 	settingsSystemPrompt: "系统提示词",
+	settingsPromptHistory: "输入历史",
+	settingsPromptHistoryDesc: "用 ↑↓ 在输入框循环历史提问，全局跨对话共享（localStorage）",
+	promptHistoryMax: "最大条数",
+	promptHistoryMaxHint: "超过上限时最旧的自动丢弃，可设 1–500",
+	promptHistoryCharLimit: "限制单条字数",
+	promptHistoryCharLimitHint: "开启后超长输入截断后保存，避免大段粘贴占满存储",
+	promptHistoryCharLimitPlaceholder: "最大字数（100–20000）",
+	promptHistoryClear: "清空历史",
+	promptHistoryClearConfirm: "确认清空？",
+	promptHistoryCleared: "已清空输入历史",
+	promptHistoryCount: "当前 {n} 条",
+	promptHistoryEmpty: "暂无历史记录，上/下键暂无可循环内容",
 	settingsPromptMode: "模式",
 	promptModeAppend: "追加",
 	promptModeReplace: "替换",
 	promptAppendHint: "追加模式：自定义内容拼接到默认系统提示词末尾（推荐，保留默认行为约束）。",
 	promptReplaceHint:
-		"替换模式：完全用自定义内容替换系统提示词（项目上下文与技能段仍会自动附加）。切换后输入框会显示原本的默认提示词，可直接修改；不改动失焦则仍使用默认。",
+		"替换模式：只替换内置模板的「灵魂提示词」（人物设定段，如 “You are an expert coding assistant…”）；工具列表、Guidelines、文档指引、项目上下文、技能段等自动拼装段仍由系统每次重新生成，不会被替换。切换后输入框显示原本的灵魂提示词，可直接修改；留空则使用内置默认。",
 	promptPlaceholder: "输入自定义系统提示词…（失焦后自动应用）",
+	// 组合模板（compose）文案：模板里 {{token}} 展开为对应来源；每来源可单独覆盖。
+	promptComposeHint:
+		"模板里的 {{token}} 在每次对话时展开为对应「来源」的提示词；未覆盖的来源用自动内容（工具列表/项目上下文/技能等永远用最新数据生成）。",
+	promptComposeDesc:
+		"组合模板：{{token}} 自由排序/删改/穿插自己的话；空 = 默认模板。下面每个来源可单独覆盖（留空 = 自动内容），也可逐块恢复默认。",
+	promptTemplateLabel: "组合模板",
+	promptSourcesLabel: "各来源（可单独覆盖）",
+	promptInsertTokens: "插入段落：",
+	promptResetAll: "恢复默认模板并清空所有覆盖",
+	promptResetSource: "恢复默认",
+	promptAutoBadge: "自动",
+	promptOverridePlaceholder: "输入覆盖内容（留空 = 用自动内容）…",
+	promptSourceDefaultEmpty: "（该来源当前无自动内容）",
+	promptReadonlyBadge: "系统自动生成（只读）",
+	promptReadonlyLockedBadge: "自定义覆盖（只读·锁定）",
+	promptReadonlyLockedHint: "该来源由系统自动生成，只读；此覆盖不会被设置面板编辑，服务端仍按原样生效。",
+	promptReadonlyTitle: "系统自动生成的来源，仅只读展示，不可编辑",
+	promptSourceDefaultEditHint: "该来源当前的默认（自动）内容 —— 点击可直接输入覆盖文字",
+	promptSourceExpand: "展开全文",
+	promptSourceCollapse: "收起",
+	promptSourceRefLabel: "默认（自动）内容（可对照 / 复制）",
+	promptSourceSeedButton: "填入默认内容，只改一小部分",
+	promptSourceSeedTip:
+		"把该来源当前的默认内容复制进覆盖框：只想改一小部分时直接改这里。填入后此来源内容固定，不再随每次对话自动重新生成。",
+	promptTok_soul: "灵魂提示词",
+	promptTok_soul_desc: "agent 人物设定（无 SYSTEM.md 时内置默认）",
+	promptTok_tools: "工具列表",
+	promptTok_tools_desc: "Available tools（各工具说明，每次自动生成）",
+	promptTok_guidelines: "行为准则",
+	promptTok_guidelines_desc: "Guidelines：各工具引导 + 通用规则",
+	promptTok_pi_docs: "Pi 文档指引",
+	promptTok_pi_docs_desc: "指向 pi 包文档的提示段",
+	promptTok_append: "追加段",
+	promptTok_append_desc: "APPEND_SYSTEM.md 内容；覆盖 = 自定义追加文字",
+	promptTok_persona: "Windows 约束",
+	promptTok_persona_desc: "Windows persona（仅 win32；超时/PTY/GBK 注意事项）",
+	promptTok_terminal: "终端工具引导",
+	promptTok_terminal_desc: "持久终端使用引导（「终端工具」开时注入）",
+	promptTok_markers: "标记工具引导",
+	promptTok_markers_desc: "内置标记工具使用说明（markers 开时注入）",
+	promptTok_context: "项目上下文",
+	promptTok_context_desc: "<project_context>：AGENTS.md/CLAUDE.md 收集结果",
+	promptTok_skills: "技能段",
+	promptTok_skills_desc: "<available_skills>：可用技能清单",
+	promptTok_cwd: "工作目录行",
+	promptTok_cwd_desc: "Current working directory 行",
 	settingsViewPrompt: "查看当前完整提示词",
 	settingsViewPromptHint:
 		"当前会话实际生效的完整系统提示词（含自定义追加/替换内容、项目上下文、技能说明与工具引导），只读。",
 	settingsViewPromptEmpty: "会话尚未就绪，暂无系统提示词。",
+	settingsViewToolsSchema: "工具 schema",
+	settingsViewToolsSchemaHint:
+		"发给模型的 function-calling 工具定义（name / description / parameters），与系统提示词正文拼成完整初始上下文，只读。",
+	settingsViewToolsSchemaEmpty: "会话尚未就绪，暂无工具 schema。",
 	settingsSkills: "技能",
 	settingsReview: "目标审查",
 	settingsReviewDesc: "为独立的目标审查会话配置额外提示词和技能；不会改变主会话设置。",
 	settingsReviewSkills: "审查可用技能",
 	reviewPromptPlaceholder: "输入审查自定义提示词…（失焦后自动应用）",
 	reviewPromptHint: "这些内容会追加到审查任务中；审查仍会强制要求输出 pass/fail JSON。技能开关仅对审查生效。",
+	goalModeEnabled: "启用目标模式",
+	goalModeEnabledDesc:
+		"目标条 / 目标调研向导 / 审查循环的总开关（默认开）。关闭后目标条隐藏，无法设置目标、启动调研或触发审查。",
+	goalModeOffHint: "目标模式已关闭：目标条已隐藏，已有的目标将不再触发审查。",
 	settingsVisionBridge: "视觉桥",
 	settingsVisionBridgeDesc: "当前模型不支持识图时，把图片交给已配置的视觉模型转写为文字证据，再让模型回答",
 	visionBridgeEnabled: "启用视觉桥",
@@ -722,17 +901,88 @@ const zh = {
 	visionBridgeOffHint: "已关闭：图片将原样发送，纯文本模型可能看不到图片内容",
 	visionBridgeCurrent: "当前转写模型：{model}",
 	visionBridgePromptMode: "转写提示词",
+	settingsMarkers: "标记工具",
+	settingsMarkersDesc:
+		"让 AI 用 [[todo:...]] / [[notify:...]] / [[conv:rename:...]] 内联标记在正文里改状态，无需工具往返。全局关闭则全部停用；分组开关可细粒度控制。",
+	markersEnabled: "启用标记工具（全局）",
+	markersEnabledDesc: "关闭后 AI 不再收到任何标记引导，解析也跳过（所有标记原文原样保留，不执行）。",
+	markersOffHint: "已全局关闭：所有标记停用，AI 不会写标记，也不会触发任务/重命名等副作用。",
+	markerGroupTodo: "任务标记 todo",
+	markerGroupNotify: "提醒标记 notify",
+	markerGroupRename: "重命名标记 conv/rename",
+	markerRenameTip: "[[conv:rename:新标题]] 重命名当前对话（标题 ≤80 字；在回复第一条消息末尾根据情况重命名）",
 	settingsTerminalTools: "终端工具",
 	terminalToolsEnabled: "启用持久终端工具",
 	settingsTerminalToolsDesc:
 		"让 AI 在交互式程序（REPL/vim）、长驻服务、需要持续观察输出或你要求在可见终端操作时，使用内置终端；普通命令仍走一次性 bash 工具",
 	terminalToolsOffHint: "已关闭：AI 无法使用 terminal_* 工具，也不会收到相关使用引导",
-	settingsMessageDisplay: "消息显示",
+	settingsEditTools: "编辑工具",
+	editSoftEnabled: "启用编辑工具 edit_soft",
+	editSoftEnabledDesc:
+		"让 AI 用一个独立、不严格要求缩进的编辑工具：当你的 oldText 与文件缩进/空白不一致（如 JS/JSON）时可避免因缩进差异导致编辑失败。命中后按你给出的 newText 原样写入（缩进即最终缩进）。",
+	editSoftOffHint: "已关闭：AI 无法使用 edit_soft 工具，也不会收到相关使用引导",
+	settingsQuestionnaire: "问卷提问",
+	questionnaireEnabled: "允许模型向我提问（问卷）",
+	questionnaireEnabledDesc:
+		"开启默认值：模型可用 ask_user_question 弹出可回复的问卷/提问对话框（含选项、多选、自定义输入）。关闭后模型将不再弹出问卷，调用也会直接返回已禁用。",
+	questionnaireOffHint: "已关闭：模型不能再向你弹出问卷/提问对话框",
+	browserPageEnabledDesc:
+		"让模型操作浏览器里被授权的页面（page-picker 扩展的 browser_page 工具：读内容 / 点击 / 输入 / 滚动 / 跳转，eval 另有单独开关）。需要先在扩展选项页授权目标页面。",
+	browserPageOffHint: "已关闭：模型不能再点你的页面、也不能在页面里执行脚本",
+	browserControl: "浏览器操作",
+	browserControlTip:
+		"让 AI 操作你在浏览器里授权的页面（读内容 / 点按钮 / 填表单 / 滚动），需要 page-picker 扩展；授权与开关都在扩展设置页里。",
+	browserControlChecking: "正在查询扩展状态…",
+	browserControlOffline:
+		"还没连上浏览器扩展：装好（或启用）page-picker 扩展，在本页点一次扩展图标绑定地址，然后刷新本页。",
+	browserControlEmpty: "扩展已就绪，但还没授权任何页面 —— 点下面的「打开扩展设置页」，在那里授权一个页面。",
+	browserControlDisabled: "「允许 AI 操作页面」总开关是关的 —— 在扩展设置页打开它。",
+	browserControlPages: "已授权的页面",
+	browserControlPageOpen: "开着",
+	browserControlPageClosed: "没打开",
+	browserControlExamples: "可以这样让它干活",
+	browserControlExample1: "「把那个页面上的订单读出来，按金额排序」",
+	browserControlExample2: "「在搜索框输入 张三，点查询，等结果出来告诉我第一条」",
+	browserControlOpenOptions: "打开扩展设置页",
+	browserControlRefresh: "刷新状态",
+	browserControlCite: "引用到对话",
+	browserControlCiteTip: "把 {name} 作为网页引用放进输入框（不自动发送，你补一句话再发）",
+	browserControlCiteNote: "点「引用到对话」会把网页引用放进输入框：模型据此知道操作哪个页面，不必再手打网址。",
+	browserControlCited: "已引用到输入框 —— 补一句话再发",
+	browserControlCiteFailed: "输入框还没准备好，稍后再试",
+	browserControlOpenPanel: "打开面板（状态 / 授权管理）",
+	browserControlSingleTip: "点击把 {name} 引用到对话；右侧 ▾ 打开面板",
+	attachPage: "网页引用：{name}（AI 已获授权操作这个页面）",
+	attachPageShort: "网页",
+	settingsTools: "工具",
+	toolsSectionTerminal: "持久终端",
+	toolsSectionSubagent: "子代理",
+	toolsSectionOther: "其他工具",
+	toolsSubagentDepHint:
+		"逐个开关：关闭 subagent_spawn 后其余（等待/查询/改向/停止）无会话可管，只会返回空列表或“未找到”；delegate_task 走 spawn 通道，spawn 关了它也派不出去。",
+	delegateTaskEnabledDesc:
+		"把定义清楚的任务派给 specialist 子代理模板：六段派单（TASK/EXPECTED OUTCOME/REQUIRED TOOLS/MUST DO/MUST NOT DO/CONTEXT）在服务端校验，缺段或含糊直接报错打回。执行体复用子代理 spawn 通道。",
+	delegateTaskOffHint: "已关闭：AI 无法使用 delegate_task 派单（可用 subagent_spawn 自由派单，不带六段校验）",
+	todoListEnabledDesc: "只读查询当前任务列表，删除项需显式传参；写操作不走工具，直接写内联标记。",
+	todoListOffHint: "已关闭：AI 不能再调查询工具（内联标记的写入不受影响）",
+	toolDescSubagentSpawn: "后台起独立子代理对话（左栏可见），做可独立交付的任务；可并行多个。",
+	toolDescSubagentGetResult: "取单个子代理的结果或当前进度；未完成返回现状和部分输出。",
+	toolDescSubagentSteer: "向运行中的子代理注入消息，改向或补充要求。",
+	toolDescSubagentList: "列出全部子代理的运行态（id/类型/状态/标题）。",
+	toolDescSubagentStop: "停止运行中的子代理（等同中止它那路对话）。",
+	toolDescSubagentWaitAll: "一次等多个子代理全部完成并汇总结果，不用轮询。",
+	toolDescSubagentTemplates: "列出可用的子代理模板（停用的不出现），供 spawn 选用。",
+	settingsMessageDisplay: "对话",
 	thinkingWrap: "完整显示思考",
 	thinkingWrapDesc:
 		"开启：思考内容始终完整展开并自动换行（流式推理过程也实时可见）；关闭：折叠成一行摘要，流式中一行实时显示最新文本",
 	toolsWrap: "完整显示工具",
 	toolsWrapDesc: "开启：工具调用始终完整展开显示参数和输出；关闭：默认折叠，点击展开",
+	wideChat: "宽屏聊天列",
+	wideChatDesc: "开启：中央列铺满宽度（超宽屏有用）；关闭：保持 860px 上限",
+	projectTitle: "标题显示项目名",
+	projectTitleDesc:
+		"开启：浏览器标签页标题为「项目目录名 — pi-web-ui」，切项目即时更新（多标签页开多个项目时好区分）；关闭：固定显示应用名",
 	terminalBashTakeover: "终端接管 bash",
 	terminalBashTakeoverDesc:
 		"此开关决定 bash 是否覆盖为终端版：关 = 原生 SDK bash（纯进程、不开终端）；开 = 跑进可见终端，且 persist 参数在本开关的基础上决定一次性（false，命令跑完进程退出、输出留档）还是持久（true，shell 状态跨调用保留、静默自动转后台并通知 AI）",
@@ -750,6 +1000,22 @@ const zh = {
 	uninstallTitle: "卸载",
 	pluginUpdate: "更新",
 	pluginUpdateHint: "从安装来源重新拉取并覆盖安装（保留 config.json 配置），完成后自动重载插件列表",
+	pluginMarket: "插件市场",
+	updatesManaged: "本实例由部署方管理：更新与插件安装不在此进行",
+	pluginCatalogAdd: "添加插件",
+	pluginCatalogAddHint: "把第三方插件填进可安装列表（owner/repo 或完整 GitHub 地址）",
+	pluginCatalogSource: "来源 owner/repo 或 owner/repo/子目录（必填）",
+	pluginCatalogId: "id（可选，默认取仓库/子目录名）",
+	pluginCatalogName: "名称（可选）",
+	pluginCatalogIcon: "图标 emoji（可选）",
+	pluginCatalogDesc: "简介（可选）",
+	pluginCatalogAddSubmit: "添加到列表",
+	noPluginCatalog: "列表为空 —— 点「添加插件」把第三方插件填进列表",
+	pluginInstalled: "已安装",
+	pluginCatalogCustom: "自定义",
+	pluginInstall: "安装",
+	pluginInstallHint: "从来源直接安装到界面插件（在可见终端执行）",
+	pluginCatalogRemoveHint: "从列表移除这条自定义插件",
 	pluginUninstallHint: "在可见终端执行 pi-web-ui uninstall 卸载此插件（再次点击确认），完成后自动刷新列表",
 	settingsExtensions: "插件",
 	settingsUiPlugins: "界面插件",
@@ -769,9 +1035,9 @@ const zh = {
 	settingsPresets: "预设",
 	settingsSubagentTemplates: "子代理模板",
 	settingsSubagentTemplatesDesc:
-		"配置子代理预设（角色系统提示词 + 技能/扩展白名单）。AI 派生子代理时可选用模板（subagent_spawn 的 template 参数），也可不传按默认运行；停用的模板保留在面板但对 AI 不可见。",
+		"配置子代理预设（角色系统提示词 + 技能/扩展白名单 + 可选模型与思考强度）。AI 派生子代理时可选用模板（subagent_spawn 的 template 参数），也可不传按默认运行；停用的模板保留在面板但对 AI 不可见。",
 	noSubagentTemplates:
-		"还没有子代理模板。AI 派生子代理时可选用模板（角色提示词 + 技能/扩展白名单），也可以不传 template 按默认配置运行。",
+		"还没有子代理模板。AI 派生子代理时可选用模板（角色提示词 + 技能/扩展白名单 + 可选模型与思考强度），也可以不传 template 按默认配置运行。",
 	subagentTemplateNew: "新建模板",
 	subagentTemplateEdit: "编辑",
 	subagentTemplateClosed: "已停用",
@@ -779,11 +1045,23 @@ const zh = {
 	subagentTemplateOffHint: "关闭的模板保留在面板、可随时重新启用，但 AI 工具查询不到、不能选择",
 	subagentTemplateEnable: "启用",
 	subagentTemplateDisable: "停用",
+	subagentDefaultModelLabel: "子代理默认模型",
+	subagentFollowMain: "跟随主对话当前模型",
+	subagentDefaultModelHint:
+		"所有子代理的兜底模型（模板里指定的模型和 subagent_spawn 的 model 参数优先级更高）；不改主对话模型。",
+	subagentNoModels: "暂无可用的模型（需要先配置服务商 API Key）——子代理将跟随主对话模型。",
 	tplNamePlaceholder: "模板名（AI 用 subagent_spawn 的 template 参数引用）…",
 	tplDescriptionPlaceholder: "简介（AI 据此判断适用场景）…",
+	tplDescriptionEnPlaceholder: "英文简介（英文 UI 时 AI 看这个，留空则用中文简介）…",
 	tplPromptModeLabel: "系统提示词模式",
+	tplModelLabel: "模型（空 = 跟随主对话）",
+	tplThinkingLabel: "思考强度",
+	tplThinkingFollowMain: "跟随主对话当前思考强度",
+	tplThinkingHint:
+		"空 = 跟随主对话当前思考强度（与不指定模型时的「跟随主对话」同语义）；模型不支持所选档位时自动收敛到最接近的可用档位。",
 	tplSystemPromptLabel: "系统提示词",
 	tplSystemPromptPlaceholder: "模板角色系统提示词…（append 模式可留空）",
+	tplSystemPromptEnPlaceholder: "英文系统提示词…（英文 UI 时生效，留空则用中文）",
 	tplWhitelistHint: "白名单：勾选 = 子代理只启用这些；全部不勾 = 跟随主会话设置",
 	tplSkillsLabel: "技能白名单",
 	tplExtensionsLabel: "扩展白名单",
@@ -804,6 +1082,40 @@ const zh = {
 	/* app */
 	loadingSession: "正在加载会话…",
 	connectingServer: "正在连接 pi-web-ui 服务器…",
+
+	/* 语言包（下载） */
+	localePacks: "语言包",
+	localeGetMore: "获取更多语言",
+	localeInstalled: "已安装",
+	localeInstall: "下载",
+	localeRemove: "移除",
+	localeDownloading: "下载中…",
+	localeRemoving: "移除中…",
+	localeInstallFailed: "下载失败：{error}",
+	localeListFailed: "获取语言包列表失败：{error}",
+	localeRemoveHint: "移除后随时可重新下载",
+
+	/* 聊天背景图（壁纸，issue #100） */
+	wallpaperTitle: "聊天背景图",
+	wallpaperDesc:
+		"给整个窗口加一张背景图（左右面板、顶栏、底栏也会透出）：主题自带的图会自动生效，在此填地址则优先用你的；用压暗与模糊保证文字清晰。",
+	wallpaperUrlPh: "图片地址（https://…，留空关闭）",
+	wallpaperDim: "压暗",
+	wallpaperBlur: "模糊",
+	wallpaperClear: "清除",
+	wallpaperUpload: "上传图片",
+	wallpaperUploadFailed: "图片读取失败或过大，请换一张试试",
+	skillFullTextLabel: "技能全文注入",
+	skillFullTextDesc: "把技能文件正文直接展开进系统提示词（单文件 8KB、总量 32KB 封顶），否则只列名录由模型按需读取",
+	skillFullTextShort: "全文",
+	/* 派单卡片（delegate_task 专用渲染） */
+	delegateOpenSubagent: "查看子代理",
+	delegateSecTask: "任务",
+	delegateSecExpected: "期望产出",
+	delegateSecTools: "可用工具",
+	delegateSecMustDo: "必须做",
+	delegateSecMustNotDo: "禁止做",
+	delegateSecContext: "上下文",
 } as const;
 
 /* ------------------------------------------------------------------ */
@@ -812,6 +1124,7 @@ const zh = {
 
 const en: Record<keyof typeof zh, string> = {
 	/* common */
+	docTitle: "pi-web-ui — pi coding agent",
 	cancel: "Cancel",
 	ok: "OK",
 	save: "Save",
@@ -827,6 +1140,14 @@ const en: Record<keyof typeof zh, string> = {
 	language: "Language",
 	langZh: "中文",
 	langEn: "English",
+	langIt: "Italiano",
+	langJa: "日本語",
+	langKo: "한국어",
+	langFr: "Français",
+	langDe: "Deutsch",
+	langEs: "Español",
+	langRu: "Русский",
+	langPt: "Português",
 	githubRepo: "GitHub repository (xing-shuyin/pi-web-ui)",
 	copy: "Copy",
 
@@ -874,6 +1195,15 @@ const en: Record<keyof typeof zh, string> = {
 	queued: "queued",
 	enterPath: "Type a path, Enter to switch",
 	cwdTip: "Working directory: {path} (click to switch)",
+	cwdGoUp: "Up one level",
+	cwdPickCurrent: "Select this folder",
+	cwdChoose: "Select",
+	cwdEnter: "Enter",
+	cwdEmpty: "(empty)",
+	cwdNewFolder: "New folder",
+	cwdNewName: "Folder name",
+	cwdCreate: "Create",
+	cwdCancel: "Cancel",
 	cacheHit: "Cache hit",
 	cacheHitTip: "read {read} · write {write} · miss {miss} (of {input} input tokens)",
 	tps: "t/s",
@@ -897,6 +1227,8 @@ const en: Record<keyof typeof zh, string> = {
 	fileTooLarge: "File too large, skipped (> {size}MB): {name}",
 	foldersNotSupported: "Folders can't be dropped directly — expand and pick files instead",
 	placeholderStreaming: "The agent is working… press Enter to steer, or click Queue to send after the reply finishes",
+	placeholderStreamingQueued:
+		"The agent is working… press Enter or click Queue — delivered after the reply finishes (this engine cannot steer)",
 	placeholderIdle: "Message pi — Enter to send, / for commands",
 	placeholderConnecting: "Connecting to server…",
 	stopAgent: "Stop agent",
@@ -920,10 +1252,28 @@ const en: Record<keyof typeof zh, string> = {
 	stopBashTip: "Stop the running bash command (conversation continues)",
 	supplement: "Queue",
 	supplementTip: "Add to queue: sent only after the whole run finishes (no interruption)",
+	steerTip: "Steer: send right away — the current turn responds immediately (Enter)",
 	queueSteerTag: "Steer",
 	queueFollowTag: "Queued",
 	queueRemoveTip: "Remove this queued message",
+	queueRecallTip: "Recall into the input box for editing",
 	sendTip: "Send (Enter)",
+	quickPhrases: "Quick phrases",
+	quickPhrasesDesc:
+		"A row of frequently-used phrase buttons above the input box — click to send (current file attachments are included, the input draft is kept)",
+	quickPhrasesEnabled: "Enable quick phrases",
+	quickPhrasesOffHint:
+		"Off: the phrase buttons above the input box are hidden (saved phrases are kept and can be re-enabled anytime)",
+	quickPhrasesPlaceholder: "Type a frequently-used phrase… (Enter to add)",
+	quickPhrasesAdd: "Add",
+	quickPhrasesEmpty: "No quick phrases yet — add your first one below",
+	quickPhrasesTip: "Click to send: {text}",
+	quickPhrasesMoveUp: "Move up",
+	quickPhrasesMoveDown: "Move down",
+	quickPhrasesDelete: "Delete this phrase",
+	quickPhrasesEdit: "Edit this phrase",
+	quickPhrasesEditPh: "Edit phrase… (Enter to save, Esc to cancel)",
+	quickPhrasesReset: "Reset to defaults",
 
 	/* slash commands */
 	slashCommands: "Commands",
@@ -944,6 +1294,7 @@ const en: Record<keyof typeof zh, string> = {
 	recentProjects: "Recent projects",
 	runningConversations: "Running chats",
 	subagentBadge: "Subagent",
+	convErrorBadge: "Subagent failed: {error}",
 	subagentTitle: "Subagent · {title}",
 	historySessions: "History",
 	openHistory: "History",
@@ -957,8 +1308,24 @@ const en: Record<keyof typeof zh, string> = {
 	deleteProjectConfirm: "Confirm remove",
 	deleteSession: "Delete this chat transcript permanently",
 	deleteSessionConfirm: "Confirm delete",
+	renameSession: "Rename this chat",
+	renameSessionPlaceholder: "Type a new name…",
+	renameSessionConfirm: "Rename",
 	dismissConversation: "Dismiss from running (keep in history)",
 	dismissConversationConfirm: "Confirm dismiss",
+	dismissFinishedSubagents: "Dismiss finished subagents ({n})",
+	dismissFinishedSubagentsScoped: "Dismiss finished subagents under this chat, incl. nested ({n})",
+	dismissConversationWithSubagents:
+		"Also dismiss finished subagents ({n})? Make sure their results are no longer needed — click again to confirm",
+	dismissConversationWithSubagentsMixed:
+		"Also dismiss finished subagents ({n})? {m} running one(s) stay, parent stays; make sure the finished ones are no longer needed — click again to confirm",
+	dismissStreamingConfirm: "Still running — confirm force-dismiss? (The run will be aborted)",
+	dismissFinishedOnly: "Dismiss finished only ({n})",
+	dismissForceAll: "Force-dismiss all (incl. {n} subagent(s))",
+	forceDismissTitle: "Force-dismiss this conversation and all {n} subagent(s) ({m} running will be aborted)",
+	forceDismissConversation: "Force-dismiss conversation (incl. all subagents)",
+	forceDismissConfirm: "Confirm force-dismiss? Unfinished runs will be aborted — click again",
+	noFinishedSubagents: "No finished subagents to dismiss",
 	collapseSection: "Collapse",
 	expandSection: "Expand",
 	emptyChat: "Empty chat",
@@ -1005,8 +1372,13 @@ const en: Record<keyof typeof zh, string> = {
 	updateAllBtn: "Update all",
 	updatePkgTabTitle: "Update {name}",
 	updateAllTabTitle: "Update all components",
+	restartService: "Restart service",
+	restartingService: "Restarting…",
+	restartServiceTip:
+		"Restart the pi-web-ui service ({name}): this instance is supervised (launchd/systemd/Windows watchdog), so it comes back automatically and the page reconnects — run it after an update",
 
 	/* right panel */
+	computer: "This PC",
 	rootDir: "Root",
 	noFiles: "No files",
 	filesTruncated: "Directory too large — list truncated (first 2000 shown)",
@@ -1015,12 +1387,15 @@ const en: Record<keyof typeof zh, string> = {
 	referenceTip: "Reference path only (AI reads on demand)",
 	previewFile: "Preview",
 	downloadFile: "Download file",
+	copyName: "Copy name",
+	copyPath: "Copy path",
 	downloadFailed: "Download failed: {error}",
 	fileNotFoundShort: "File not found",
 	pluginMountFailed: "Plugin {name} failed to mount",
 	liveOutputOmitted: "…[{n} chars omitted above]…\n",
 	uploadToFolder: "Upload files to this folder",
 	uploadToCurrentDir: "Upload files to current directory",
+	openAsProject: "Open as project",
 	protocolMismatch:
 		"Page version differs from the server (the app was just updated). Refresh the page to restore full functionality.",
 	authLoginOpen: "Open the link and enter the code",
@@ -1052,6 +1427,15 @@ const en: Record<keyof typeof zh, string> = {
 	fileEditTruncated: "The preview is incomplete, so this file can't be edited",
 	showMarkdownSource: "Show Markdown source",
 	showMarkdownPreview: "Show Markdown preview",
+	showHtmlSource: "Show HTML source",
+	showHtmlPreview: "Show HTML preview",
+	htmlJsOff: "🛡 Scripts disabled (static preview)",
+	htmlJsOffTip: "Pure static render: JavaScript in the page will not run. Only enable scripts for files you trust.",
+	htmlJsOn: "⚠ Scripts enabled",
+	htmlJsOnTip:
+		"JavaScript in the page is running. It still cannot reach this app (no same-origin, no forms, no top navigation), but it may make network requests or mine crypto — only for files you trust.",
+	htmlEnableJs: "Enable scripts",
+	htmlDisableJs: "Disable scripts",
 	fullscreen: "Fullscreen",
 	exitFullscreen: "Exit fullscreen",
 	zoomIn: "Increase font size",
@@ -1063,6 +1447,10 @@ const en: Record<keyof typeof zh, string> = {
 	modelQuestion: "Model question",
 	modelQuestionCustom: "Custom answer (optional)",
 	modelQuestionSubmit: "Submit answer",
+	next: "Next",
+	previous: "Previous",
+	questionStep: "Q {cur} / {total}",
+	optionPreview: "Option preview",
 	questionTimeout: "⏳ {s}s left — auto-cancels on timeout",
 	questionTimeoutExpired: "Question timed out, resuming conversation…",
 	modelNoVision: "Current model {name} doesn't support images — switch to DeepSeek V4 Flash Vision (exp)",
@@ -1085,10 +1473,25 @@ const en: Record<keyof typeof zh, string> = {
 	notifyHeader: "Desktop notifications",
 	notifyEnable: "Enable desktop notifications",
 	notifyEnableDesc:
-		"Ping you when a session finishes or needs your input, even while you're in another app. Requires permission; only fires when this page is not focused.",
+		"Ping you when a session finishes or needs your input. Requires permission; fires only while the page is out of sight (another app, a minimised window or a background tab). On Windows it also fires once you have been idle on the page for two minutes — the platform's presence signals are wrong there, and a redundant toast beats a silent one.",
 	notifyDenied:
-		"Notification permission was blocked — enable notifications for this site in your browser / system settings.",
+		"Notification permission was blocked — allow notifications for this site in browser settings (on Windows also allow the browser/app under Settings → System → Notifications and turn Focus assist off).",
 	notifyUnsupported: "Notifications are not supported by this browser.",
+	notifyInsecure:
+		"This address is not a secure context (plain http on a non-localhost host), so the browser withholds the notification API — open the app via 127.0.0.1 or HTTPS.",
+	notifyWindowsHint:
+		"Windows adds an OS-level gate: allow the browser (or the installed pi-web-ui app) under Settings → System → Notifications and turn off Focus assist, otherwise toasts stay silent; closing the window also ends the process, so nothing can be delivered after that.",
+	notifyTest: "Send test notification",
+	notifyTestBody:
+		"If you can see this OS notification, both the browser and Windows are letting notifications through.",
+	notifyTestSent: "Sent (path: {path})",
+	notifyTestFailed: "Delivery failed: {error}",
+	notifyTestState: "Platform state: focus {focus} · visibility {visibility} · minimised {minimized} · idle {idle}s",
+	notifyTestHeld:
+		"The browser accepted it ({count} in your notification centre): if no banner popped up, Windows/Edge banner or quiet-notification settings are suppressing it.",
+	notifyTestDropped: "The browser did not keep this notification → Edge dropped it (site notifications muted/blocked).",
+	notifyTestGateSuppressed: "Current decision: would be swallowed (the platform thinks you are watching this page).",
+	notifyTestGateOpen: "Current decision: would be delivered (the platform thinks you are away).",
 	notifyDoneTitle: "Task finished",
 	notifyDoneBody: "The session finished and is ready for your input.",
 	notifyQuestionTitle: "Needs your input",
@@ -1151,6 +1554,19 @@ const en: Record<keyof typeof zh, string> = {
 	/* welcome / message list */
 	directory: "Directory",
 	waitingResponse: "Waiting for model response…",
+	retryingApi: "Model API error, auto-retrying ({attempt}/{max}): {error}",
+	retryingApiSoon: "Model API error, auto-retrying: {error}",
+	modelRetryAttempts: "Auto-retry attempts on model errors",
+	modelRetryHint:
+		"How many times a failed model API call is retried automatically. When the budget runs out the turn stops with a red error and you can retry manually; 0 stops at the first failure. Applies immediately, no reload needed.",
+	retryNow: "Retry",
+	retryLastTip: "Manually retry the last failed model request",
+	compactingContext: "Compacting context, generating summary…",
+	compactingReasonManual: "Triggered manually",
+	compactingReasonThreshold: "Auto-triggered by context threshold",
+	compactingReasonOverflow: "Auto-triggered by context overflow",
+	compactionFrom: "Compacted from {tokens} tokens",
+	compactionKeptHint: "Earlier history is folded into this summary; only recent messages stay in context",
 	backToBottom: "Back to bottom",
 	questionNavTitle: "Questions",
 	searchPlaceholder: "Search in conversation…",
@@ -1325,6 +1741,8 @@ const en: Record<keyof typeof zh, string> = {
 	running: "Running…",
 	toolQueued: "Queued",
 	copyArgs: "Copy args",
+	copyMessage: "Copy message",
+	copied: "Copied",
 	errorOutput: "Error output",
 	output: "Output",
 	waitingOutput: "Waiting for output…",
@@ -1351,7 +1769,9 @@ const en: Record<keyof typeof zh, string> = {
 	termEmptySub: "Click a command on the left to run it, or + on the right for a new terminal",
 	noTerminal: "No terminals",
 	exited: "(exited{code})",
+	exitBanner: "[Process exited with code {code}]",
 	closeTerminal: "Close terminal",
+	renameTerminal: "Rename terminal",
 	rerun: "Reload .pi/commands.json",
 	terminalTitle: "Terminal {n}",
 	aiBashGroup: "Terminal-backed bash",
@@ -1378,7 +1798,10 @@ const en: Record<keyof typeof zh, string> = {
 	scmPull: "Pull",
 	scmPullTip: "Runs git pull in the terminal",
 	scmCommit: "Commit",
-	scmCommitTip: 'Runs git add -A && git commit -m "…" in the terminal (commits all changes incl. untracked)',
+	scmCommitTip: 'Runs git commit -m "…" in the terminal (commits staged changes only)',
+	scmCommitAll: "Commit All",
+	scmCommitAllTip:
+		'Runs git add -A && git commit -m "…" in the terminal (stages all changes incl. untracked and commits)',
 	scmCommitPlaceholder: "Type a commit message…",
 	scmChanges: "Changes",
 	scmHistory: "Commit tree",
@@ -1396,7 +1819,7 @@ const en: Record<keyof typeof zh, string> = {
 	scmUnstaged: "Unstaged",
 	scmStagedUnstaged: "Staged + unstaged",
 	scmUntracked: "Untracked",
-	scmUntrackedNote: "Untracked file — not shown in diff, included on commit",
+	scmUntrackedNote: "Untracked file — stage it with + to include (or use Commit All)",
 	scmQueryFailed: "Git query failed: {error}",
 	scmQueryFailedShort: "Query failed",
 	pluginCommandFallback: "Plugin command",
@@ -1450,6 +1873,9 @@ const en: Record<keyof typeof zh, string> = {
 	customDesc:
 		"For Ollama / vLLM / OpenAI-compatible proxies, etc. Written to pi's models.json — hot-reloaded immediately.",
 	noCustomProviders: "No custom providers yet",
+	reloadModelsConfig: "Reload config",
+	reloadModelsHint:
+		"Edited models.json by hand or with a script? Hit \u201cReload config\u201d below to re-read it from disk \u2014 no restart needed.",
 	modelsCount: "{n} models",
 	addProvider: "Add provider",
 	providerId: "Provider ID",
@@ -1507,18 +1933,81 @@ const en: Record<keyof typeof zh, string> = {
 	settingsDesc:
 		"Changes apply immediately: system prompt, skill and extension toggles rebuild the current session; review instructions and review skills affect later goal reviews (main-session changes are deferred while streaming).",
 	settingsSystemPrompt: "System prompt",
+	settingsPromptHistory: "Input history",
+	settingsPromptHistoryDesc:
+		"Cycle previous prompts with ↑/↓ in the input — global across conversations (localStorage)",
+	promptHistoryMax: "Max entries",
+	promptHistoryMaxHint: "Oldest entries are dropped when exceeded (1–500)",
+	promptHistoryCharLimit: "Limit characters per entry",
+	promptHistoryCharLimitHint: "When enabled, overlong prompts are truncated before saving",
+	promptHistoryCharLimitPlaceholder: "Max chars (100–20000)",
+	promptHistoryClear: "Clear history",
+	promptHistoryClearConfirm: "Confirm clear?",
+	promptHistoryCleared: "Input history cleared",
+	promptHistoryCount: "{n} entries",
+	promptHistoryEmpty: "No history yet — ↑/↓ has nothing to cycle",
 	settingsPromptMode: "Mode",
 	promptModeAppend: "Append",
 	promptModeReplace: "Replace",
 	promptAppendHint:
 		"Append mode: your text is appended to the end of the default system prompt (recommended — keeps the default behavior constraints).",
 	promptReplaceHint:
-		"Replace mode: your text fully replaces the system prompt (project context and skills are still appended automatically). After switching, the editor shows the built-in default prompt ready to edit; blurring without changes keeps the default.",
+		'Replace mode: only the built-in template\'s persona (soul) paragraph is replaced (e.g. "You are an expert coding assistant…"). The tools list, guidelines, docs pointers, project context and skills are auto-assembled on every run and are never replaced. After switching, the editor shows the built-in soul paragraph; leaving it empty keeps the built-in default.',
 	promptPlaceholder: "Type a custom system prompt… (applied on blur)",
+	promptComposeHint:
+		"Each {{token}} in the template expands to that source's prompt on every run; non-overridden sources use auto content (tools list / project context / skills are always regenerated from the latest data).",
+	promptComposeDesc:
+		"Compose: reorder / drop / annotate {{token}} blocks freely; empty = the default template. Each source below can be overridden individually (leave empty = auto content) and reset back to default.",
+	promptTemplateLabel: "Compose template",
+	promptSourcesLabel: "Sources (override individually)",
+	promptInsertTokens: "Insert block: ",
+	promptResetAll: "Restore default template and clear all overrides",
+	promptResetSource: "Restore default",
+	promptAutoBadge: "auto",
+	promptOverridePlaceholder: "Override text (leave empty = auto content)…",
+	promptSourceDefaultEmpty: "(no auto content for this source right now)",
+	promptReadonlyBadge: "System-generated (read-only)",
+	promptReadonlyLockedBadge: "Custom override (read-only/locked)",
+	promptReadonlyLockedHint:
+		"This source is system-generated and read-only; the override won't be edited here, but the server still applies it as-is.",
+	promptReadonlyTitle: "System-generated source — read-only display, not editable",
+	promptSourceDefaultEditHint: "This source's current default (auto) content — click to type an override",
+	promptSourceExpand: "Show more",
+	promptSourceCollapse: "Show less",
+	promptSourceRefLabel: "Default (auto) content — for reference / copying",
+	promptSourceSeedButton: "Load default text to tweak",
+	promptSourceSeedTip:
+		"Copies this source's current default text into the override box so you can tweak just a part. Once filled, this source stays fixed and is no longer auto-regenerated each run.",
+	promptTok_soul: "Soul / persona",
+	promptTok_soul_desc: "the agent persona (built-in default unless a SYSTEM.md exists)",
+	promptTok_tools: "Tools list",
+	promptTok_tools_desc: "Available tools with snippets, regenerated each run",
+	promptTok_guidelines: "Guidelines",
+	promptTok_guidelines_desc: "per-tool guidance + generic rules",
+	promptTok_pi_docs: "Pi docs pointer",
+	promptTok_pi_docs_desc: "the block pointing at the pi package docs",
+	promptTok_append: "Append block",
+	promptTok_append_desc: "APPEND_SYSTEM.md content; override = custom appended text",
+	promptTok_persona: "Windows persona",
+	promptTok_persona_desc: "win32-only safety rules (timeout / PTY / GBK)",
+	promptTok_terminal: "Terminal guidance",
+	promptTok_terminal_desc: "persistent-terminal usage guide (injected when terminal tools are on)",
+	promptTok_markers: "Markers guidance",
+	promptTok_markers_desc: "built-in marker tools usage (injected when markers are on)",
+	promptTok_context: "Project context",
+	promptTok_context_desc: "<project_context>: AGENTS.md / CLAUDE.md collection",
+	promptTok_skills: "Skills",
+	promptTok_skills_desc: "<available_skills> list of usable skills",
+	promptTok_cwd: "Working dir line",
+	promptTok_cwd_desc: "the Current working directory line",
 	settingsViewPrompt: "View the current full prompt",
 	settingsViewPromptHint:
 		"The full system prompt actually in effect for this conversation (custom append/replace text, project context, skills and tool guidance). Read-only.",
 	settingsViewPromptEmpty: "Session not ready yet — no system prompt available.",
+	settingsViewToolsSchema: "Tools schema",
+	settingsViewToolsSchemaHint:
+		"The function-calling tool definitions sent to the model (name / description / parameters), combining with the system prompt text to form the full initial context. Read-only.",
+	settingsViewToolsSchemaEmpty: "Session not ready yet — no tools schema available.",
 	settingsSkills: "Skills",
 	settingsReview: "Goal review",
 	settingsReviewDesc:
@@ -1527,6 +2016,10 @@ const en: Record<keyof typeof zh, string> = {
 	reviewPromptPlaceholder: "Type custom review instructions… (applied on blur)",
 	reviewPromptHint:
 		"These instructions are added to the review task; pass/fail JSON output is still enforced. Skill toggles apply only to review.",
+	goalModeEnabled: "Enable goal mode",
+	goalModeEnabledDesc:
+		"Master switch for the goal bar, the goal wizard and the review loop (on by default). When off, the goal bar is hidden and you cannot set a goal, run the wizard, or trigger reviews.",
+	goalModeOffHint: "Goal mode is off: the goal bar is hidden and existing goals no longer trigger reviews.",
 	settingsVisionBridge: "Vision bridge",
 	settingsVisionBridgeDesc:
 		"When the current model can't see images, send them to a configured vision model and transcribe into text evidence first",
@@ -1538,18 +2031,96 @@ const en: Record<keyof typeof zh, string> = {
 	visionBridgeOffHint: "Disabled: images are sent as-is, a text-only model may not see them",
 	visionBridgeCurrent: "Current transcription model: {model}",
 	visionBridgePromptMode: "Transcription prompt",
+	settingsMarkers: "Markers",
+	settingsMarkersDesc:
+		"Let the AI write [[todo:...]] / [[notify:...]] / [[conv:rename:...]] inline markers in replies to update state without a tool round-trip. Global off disables all; per-marker toggles give fine control.",
+	markersEnabled: "Markers enabled (global)",
+	markersEnabledDesc: "Off = no marker guidance injected and no parsing; markers stay as plain text.",
+	markersOffHint: "Globally off: all markers disabled — the AI won't write markers and no side effects fire.",
+	markerGroupTodo: "todo — tasks",
+	markerGroupNotify: "notify — non-blocking hints",
+	markerGroupRename: "conv/rename — rename chat",
+	markerRenameTip:
+		"[[conv:rename:Title]] renames the current conversation (≤80 chars; rename at the end of the first reply)",
 	settingsTerminalTools: "Terminal tools",
 	terminalToolsEnabled: "Enable persistent terminal tools",
 	settingsTerminalToolsDesc:
 		"Let the AI use the built-in terminal for interactive programs (REPLs/vim), long-running servers, continuous output watching, or when you ask it to work in the visible terminal; ordinary commands still go through the one-shot bash tool",
 	terminalToolsOffHint: "Disabled: the AI has no terminal_* tools and receives no usage guidance",
-	settingsMessageDisplay: "Message display",
+	settingsEditTools: "Edit tools",
+	editSoftEnabled: "Enable edit_soft tool",
+	editSoftEnabledDesc:
+		"Let the AI use a separate indentation-insensitive edit tool: avoids edit failures when your oldText spacing differs from the file (e.g. JS/JSON). On a match, newText is written verbatim as you provide it (its indentation is final).",
+	editSoftOffHint: "Disabled: the AI has no edit_soft tool and receives no usage guidance",
+	settingsQuestionnaire: "Questionnaire",
+	questionnaireEnabled: "Allow the model to ask me questions",
+	questionnaireEnabledDesc:
+		"On by default: the model may use ask_user_question to pop up an answerable question dialog (options, multi-select, custom input). Off: the model no longer pops up questionnaires; a call also returns disabled immediately.",
+	questionnaireOffHint: "Disabled: the model can no longer pop up question dialogs",
+	browserPageEnabledDesc:
+		"Let the model act on pages you granted in the page-picker extension (browser_page tool: read / click / type / scroll / goto; eval has its own switch). Grant the target page in the extension options first.",
+	browserPageOffHint: "Disabled: the model can no longer click your pages or run scripts in them",
+	browserControl: "Browser control",
+	browserControlTip:
+		"Let the AI act on pages you grant in your browser (read / click / type / scroll). Needs the page-picker extension — granting and the switches live in its options page.",
+	browserControlChecking: "Checking the extension status…",
+	browserControlOffline:
+		"No browser extension yet: install (or enable) page-picker, click its icon on this page once to bind the address, then reload this page.",
+	browserControlEmpty:
+		"The extension is ready, but no page is granted yet — open its options page below and grant one.",
+	browserControlDisabled: "The “allow AI to control pages” master switch is off — turn it on in the extension options.",
+	browserControlPages: "Granted pages",
+	browserControlPageOpen: "open",
+	browserControlPageClosed: "not open",
+	browserControlExamples: "You can ask for things like",
+	browserControlExample1: '"Read the orders on that page and sort them by amount"',
+	browserControlExample2: '"Type 张三 in the search box, click search, and tell me the first result"',
+	browserControlOpenOptions: "Open extension options",
+	browserControlRefresh: "Refresh status",
+	browserControlCite: "Mention in chat",
+	browserControlCiteTip: "Add {name} to the input as a page reference (you still write the instruction before sending)",
+	browserControlCiteNote:
+		"“Mention in chat” puts a page reference into the input — the model then knows which page to act on, no typing URLs.",
+	browserControlCited: "Added to the input — write a line and send",
+	browserControlCiteFailed: "The input is not ready yet, try again in a moment",
+	browserControlOpenPanel: "Open panel (status / grants)",
+	browserControlSingleTip: "Click to mention {name} in the chat; the ▾ on the right opens the panel",
+	attachPage: "Page reference: {name} (the AI is granted access to this page)",
+	attachPageShort: "page",
+	settingsTools: "Tools",
+	toolsSectionTerminal: "Persistent terminal",
+	toolsSectionSubagent: "Subagents",
+	toolsSectionOther: "Other tools",
+	toolsSubagentDepHint:
+		"Toggled individually: with subagent_spawn off, the rest (wait/get/steer/stop) have no sessions to manage and only return empty lists or “not found”; delegate_task rides the spawn channel, so it cannot dispatch with spawn off.",
+	delegateTaskEnabledDesc:
+		"Delegate a well-defined task to a specialist subagent template: the six-section brief (TASK/EXPECTED OUTCOME/REQUIRED TOOLS/MUST DO/MUST NOT DO/CONTEXT) is validated server-side; missing or vague sections are rejected. Runs on the subagent spawn channel.",
+	delegateTaskOffHint:
+		"Disabled: the AI cannot delegate via delegate_task (free-form delegation via subagent_spawn still works, without six-section validation)",
+	todoListEnabledDesc:
+		"Read-only query of the current task list (deleted items need an explicit flag); writes never go through tools — use inline markers.",
+	todoListOffHint: "Disabled: the AI can no longer call the query tool (inline-marker writes are unaffected)",
+	toolDescSubagentSpawn:
+		"Spawn an independent background subagent conversation (visible on the left) for a self-contained task; several may run in parallel.",
+	toolDescSubagentGetResult:
+		"Fetch one subagent's result or current progress; unfinished ones return status plus partial output.",
+	toolDescSubagentSteer: "Inject a message into a running subagent to redirect or supplement its work.",
+	toolDescSubagentList: "List all subagents with live status (id/type/state/title).",
+	toolDescSubagentStop: "Stop a running subagent (same as aborting its conversation).",
+	toolDescSubagentWaitAll: "Wait for multiple subagents at once and collect results — no polling.",
+	toolDescSubagentTemplates: "List available subagent templates (disabled ones hidden) for spawn to use.",
+	settingsMessageDisplay: "Conversation",
 	thinkingWrap: "Show full thinking",
 	thinkingWrapDesc:
 		"On: thinking always expands fully and wraps (live reasoning visible while streaming); Off: collapses to a one-line summary with the latest text shown live while streaming",
 	toolsWrap: "Show full tools",
 	toolsWrapDesc:
 		"On: tool calls always expand fully showing arguments and output; Off: collapsed by default, click to expand",
+	wideChat: "Wide chat column",
+	wideChatDesc: "On: the center column fills the width (useful on ultrawide monitors); Off: keep the 860px cap",
+	projectTitle: "Show project name in title",
+	projectTitleDesc:
+		"On: the browser tab title becomes “<project folder> — pi-web-ui” and updates when you switch projects (handy with several tabs open); Off: always show the app name",
 	terminalBashTakeover: "Terminal-backed bash",
 	terminalBashTakeoverDesc:
 		"This switch decides whether bash is overridden to a terminal version: OFF = native SDK bash (process spawn, no terminal); ON = runs in a visible terminal, where the persist parameter decides (on top of the switch) one-shot (false — process exits when the command finishes, output retained) vs persistent (true — shell state retained across calls, silent commands move to the background and notify the AI)",
@@ -1569,6 +2140,22 @@ const en: Record<keyof typeof zh, string> = {
 	pluginUpdate: "Update",
 	pluginUpdateHint:
 		"Re-installs from the recorded source (--force, keeps config.json), then refreshes the plugin list automatically",
+	pluginMarket: "Plugin marketplace",
+	updatesManaged: "Managed instance: updates and plugin installs are handled by whoever deploys it",
+	pluginCatalogAdd: "Add plugin",
+	pluginCatalogAddHint: "Drop a third-party plugin into the installable list (owner/repo or full GitHub URL)",
+	pluginCatalogSource: "Source owner/repo or owner/repo/subdir (required)",
+	pluginCatalogId: "id (optional, defaults to repo/subdir name)",
+	pluginCatalogName: "Name (optional)",
+	pluginCatalogIcon: "Icon emoji (optional)",
+	pluginCatalogDesc: "Description (optional)",
+	pluginCatalogAddSubmit: "Add to list",
+	noPluginCatalog: 'List is empty — click "Add plugin" to drop a third-party plugin in',
+	pluginInstalled: "Installed",
+	pluginCatalogCustom: "custom",
+	pluginInstall: "Install",
+	pluginInstallHint: "Install straight from the source into UI plugins (runs in a visible terminal)",
+	pluginCatalogRemoveHint: "Remove this custom plugin from the list",
 	pluginUninstallHint:
 		"Runs pi-web-ui uninstall in a visible terminal (click again to confirm), then refreshes the list automatically",
 	settingsExtensions: "Extensions",
@@ -1589,22 +2176,36 @@ const en: Record<keyof typeof zh, string> = {
 	settingsPresets: "Presets",
 	settingsSubagentTemplates: "Subagent templates",
 	settingsSubagentTemplatesDesc:
-		"Presets for spawned subagents (role system prompt + skills/extensions whitelist). AI may pick a template (subagent_spawn template param) or spawn without one; disabled templates stay in the panel but are invisible to AI tools.",
+		"Presets for spawned subagents (role system prompt + skills/extensions whitelist + optional model and thinking level). AI may pick a template (subagent_spawn template param) or spawn without one; disabled templates stay in the panel but are invisible to AI tools.",
 	noSubagentTemplates:
-		"No subagent templates yet. AI can pick a template when spawning a subagent (role prompt + skills/extensions whitelist), or spawn without a template param for default config.",
+		"No subagent templates yet. AI can pick a template when spawning a subagent (role prompt + skills/extensions whitelist + optional model and thinking level), or spawn without a template param for default config.",
 	subagentTemplateNew: "New template",
 	subagentTemplateEdit: "Edit",
 	subagentTemplateClosed: "Disabled",
 	tplDefaultBadge: "Built-in",
+	subagentDefaultModelLabel: "Default subagent model",
+	subagentFollowMain: "Follow the main conversation's current model",
+	subagentDefaultModelHint:
+		"Fallback model for all subagents (a template's own model and the subagent_spawn model param take priority); does not change the main conversation's model.",
+	subagentNoModels:
+		"No usable models yet (configure a provider API key first) — subagents will follow the main conversation's model.",
 	subagentTemplateOffHint:
 		"Disabled templates stay in the panel and can be re-enabled, but AI tools can't see or pick them",
 	subagentTemplateEnable: "Enable",
 	subagentTemplateDisable: "Disable",
 	tplNamePlaceholder: "Template name (referenced by AI via subagent_spawn's template param)…",
 	tplDescriptionPlaceholder: "Description (AI uses it to judge when to pick this template)…",
+	tplDescriptionEnPlaceholder:
+		"English description (shown to AI under English UI; falls back to the description above)…",
 	tplPromptModeLabel: "System prompt mode",
+	tplModelLabel: "Model (empty = follow main conversation)",
+	tplThinkingLabel: "Thinking level",
+	tplThinkingFollowMain: "Follow the main conversation's current thinking level",
+	tplThinkingHint:
+		"Empty = follow the main conversation's current thinking level (same idea as the model fallback); unsupported levels are clamped to the nearest one the model supports.",
 	tplSystemPromptLabel: "System prompt",
 	tplSystemPromptPlaceholder: "Template role system prompt… (may be empty in append mode)",
+	tplSystemPromptEnPlaceholder: "English system prompt… (used under English UI; falls back to the prompt above)",
 	tplWhitelistHint:
 		"Whitelist: checked = the subagent only gets these; none checked = follow the main session settings",
 	tplSkillsLabel: "Skills whitelist",
@@ -1626,6 +2227,41 @@ const en: Record<keyof typeof zh, string> = {
 	/* app */
 	loadingSession: "Loading session…",
 	connectingServer: "Connecting to pi-web-ui server…",
+
+	/* language packs (downloadable) */
+	localePacks: "Language packs",
+	localeGetMore: "Get more languages",
+	localeInstalled: "Installed",
+	localeInstall: "Download",
+	localeRemove: "Remove",
+	localeDownloading: "Downloading…",
+	localeRemoving: "Removing…",
+	localeInstallFailed: "Download failed: {error}",
+	localeListFailed: "Couldn't load language packs: {error}",
+	localeRemoveHint: "You can re-download it anytime",
+
+	/* Chat wallpaper (issue #100) */
+	wallpaperTitle: "Chat wallpaper",
+	wallpaperDesc:
+		"Show a full-window background image (side panels, top and bottom bars included): a theme-provided image applies automatically, a URL here takes precedence; use dim and blur to keep text readable.",
+	wallpaperUrlPh: "Image URL (https://…, empty = off)",
+	wallpaperDim: "Dim",
+	wallpaperBlur: "Blur",
+	wallpaperClear: "Clear",
+	wallpaperUpload: "Upload image",
+	wallpaperUploadFailed: "Couldn't read the image (or it's too big) — try another one",
+	skillFullTextLabel: "Inject full skill text",
+	skillFullTextDesc:
+		"Expand skill file contents inline into the system prompt (8KB per file, 32KB total cap); otherwise only a catalog is listed and the model reads files on demand",
+	skillFullTextShort: "Full",
+	/* Delegate card (delegate_task dedicated rendering) */
+	delegateOpenSubagent: "Open subagent",
+	delegateSecTask: "Task",
+	delegateSecExpected: "Expected outcome",
+	delegateSecTools: "Required tools",
+	delegateSecMustDo: "Must do",
+	delegateSecMustNotDo: "Must not do",
+	delegateSecContext: "Context",
 };
 
 /* ------------------------------------------------------------------ */
@@ -1634,26 +2270,110 @@ const en: Record<keyof typeof zh, string> = {
 
 export type Translate = (key: keyof typeof zh, vars?: Record<string, string | number>) => string;
 
+/* ------------------------------------------------------------------ */
+/* language packs — downloadable, never bundled                          */
+/* ------------------------------------------------------------------ */
+
+/** A language pack: translated strings keyed like `zh`, plus display metadata. */
+export interface LocalePack {
+	code: string;
+	/** Shown verbatim in the switcher (never translated). */
+	nativeName: string;
+	strings: Record<string, string>;
+}
+
+export interface LocalePackStatus {
+	code: string;
+	nativeName: string;
+	installed: boolean;
+	version: string | null;
+}
+
+/** Core locales ship with the bundle (always available, synchronous). */
+export const CORE_LOCALES: { code: string; nativeName: string }[] = [
+	{ code: "zh", nativeName: "中文" },
+	{ code: "en", nativeName: "English" },
+];
+
+/** Module-level registry for downloaded packs (populated async at boot). */
+const PACK_REGISTRY: Record<string, LocalePack> = {};
+
+/**
+ * Register a language pack (downloaded via /api/locales, or third-party).
+ * zh/en are built in and rejected here. Returns true when accepted.
+ */
+export function registerLocale(pack: LocalePack): boolean {
+	if (!pack || typeof pack.code !== "string" || !pack.code) return false;
+	if (pack.code === "zh" || pack.code === "en") return false;
+	if (!pack.strings || typeof pack.strings !== "object") return false;
+	PACK_REGISTRY[pack.code] = pack;
+	return true;
+}
+
+/** Drop a pack from the registry (after DELETE /api/locales/:code). */
+export function unregisterLocale(code: string): void {
+	delete PACK_REGISTRY[code];
+}
+
+/** Short chip label for the topbar (native for zh, uppercase code otherwise). */
+export function localeShort(code: string): string {
+	return code === "zh" ? "中文" : code.toUpperCase();
+}
+
+/** html lang attribute for a locale code. */
+function htmlLang(code: string): string {
+	if (code === "zh") return "zh-CN";
+	if (code === "pt") return "pt-BR";
+	return code;
+}
+
+async function fetchPackJson<T>(url: string): Promise<T> {
+	const res = await fetch(withToken(appUrl(url)));
+	if (!res.ok) throw new Error(`HTTP ${res.status} for ${url}`);
+	return (await res.json()) as T;
+}
+
 interface I18nContextValue {
 	locale: Locale;
 	setLocale: (locale: Locale) => void;
 	t: Translate;
+	/** Core + registered downloadable packs (native names, never translated). */
+	packs: { code: string; nativeName: string }[];
+	/** Re-read installed packs from the server (after install/remove).
+	 *  Returns the instance default (PI_WEB_LOCALE) when the server names one. */
+	reloadPacks: () => Promise<string | null>;
 }
 
 const I18nContext = createContext<I18nContextValue | null>(null);
 
-function loadLocale(): Locale {
+/** What the previous visit stored, if anything. */
+function savedLocale(): string | null {
 	try {
-		const saved = localStorage.getItem(STORAGE_KEY);
-		if (saved === "zh" || saved === "en") return saved;
+		// zh/en always exist; other codes are validated once packs finish loading.
+		return localStorage.getItem(STORAGE_KEY);
 	} catch {
-		// localStorage unavailable — fall through to the default.
+		return null; // localStorage unavailable
 	}
-	return "en"; // default: English
+}
+
+/**
+ * The language to start with.
+ *
+ * This used to be "zh" flat, so a first visit spoke Chinese whatever the
+ * browser asked for — and the eight translation packs in this repository were
+ * never chosen by anything. Now the browser decides; the instance default
+ * (PI_WEB_LOCALE) arrives with the pack list a moment later and only applies
+ * if the browser named nothing we speak. See web/src/pick-locale.ts.
+ */
+function loadLocale(): Locale {
+	return pickLocale(savedLocale(), typeof navigator !== "undefined" ? navigator.languages : [], null);
 }
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
 	const [locale, setLocaleState] = useState<Locale>(loadLocale);
+	const [packsTick, setPacksTick] = useState(0);
+	const localeRef = useRef(locale);
+	localeRef.current = locale;
 
 	const setLocale = useCallback((l: Locale) => {
 		setLocaleState(l);
@@ -1662,12 +2382,87 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 		} catch {
 			// ignore storage errors
 		}
+		// Tell the socket layer (use-chat.ts) to report the new UI language
+		// to the server — tool return values / AI prompts follow it (issue #91).
+		try {
+			window.dispatchEvent(new CustomEvent<string>("pi-web-ui:locale", { detail: l }));
+		} catch {
+			// non-DOM environment — hello carries the code on next connect
+		}
 	}, []);
+
+	const reloadPacks = useCallback(async (): Promise<string | null> => {
+		let list: LocalePackStatus[];
+		let serverDefault: string | null = null;
+		try {
+			const data = await fetchPackJson<{ packs: LocalePackStatus[]; defaultLocale?: string | null }>("/api/locales");
+			list = data.packs ?? [];
+			serverDefault = data.defaultLocale ?? null;
+		} catch {
+			return null; // server unreachable / old version — core locales keep working
+		}
+		await Promise.all(
+			list
+				.filter((p) => p.installed)
+				.map(async (p) => {
+					try {
+						const pack = await fetchPackJson<LocalePack>(`/api/locales/${p.code}`);
+						registerLocale({
+							code: pack.code || p.code,
+							nativeName: pack.nativeName || p.nativeName,
+							strings: pack.strings,
+						});
+					} catch {
+						// One pack failed — the rest still load; missing keys fall back to English.
+					}
+				}),
+		);
+		setPacksTick((n) => n + 1);
+		return serverDefault;
+	}, []);
+
+	// Boot: load installed packs, apply the instance default when the browser
+	// named nothing we speak, then drop a saved locale whose pack is gone.
+	useEffect(() => {
+		void reloadPacks().then((serverDefault) => {
+			// Nobody has ever chosen here (blank storage counts as nobody): the server
+			// may name the language this instance should speak when the browser
+			// asks for one we do not have.
+			if (!savedLocale()?.trim()) {
+				const chosen = pickLocale(null, typeof navigator !== "undefined" ? navigator.languages : [], serverDefault);
+				if (chosen !== localeRef.current) {
+					localeRef.current = chosen;
+					setLocaleState(chosen);
+				}
+			}
+			const cur = localeRef.current;
+			if (cur !== "zh" && cur !== "en" && !PACK_REGISTRY[cur]) {
+				// The pack is not installed on this server. Fall back the same way a
+				// first visit does — not to a fixed language.
+				const fallback = pickLocale(null, typeof navigator !== "undefined" ? navigator.languages : [], serverDefault, [
+					"zh",
+					"en",
+				]);
+				localeRef.current = fallback;
+				setLocaleState(fallback);
+				try {
+					localStorage.setItem(STORAGE_KEY, fallback);
+				} catch {
+					// ignore storage errors
+				}
+			}
+		});
+	}, [reloadPacks]);
+
+	const packs = useMemo(() => {
+		void packsTick;
+		return [...CORE_LOCALES, ...Object.values(PACK_REGISTRY).map((p) => ({ code: p.code, nativeName: p.nativeName }))];
+	}, [packsTick]);
 
 	const t = useCallback<Translate>(
 		(key, vars) => {
-			let str: string = en[key];
-			if (locale === "zh") str = zh[key];
+			// Pack strings are best-effort: missing keys fall back to English.
+			let str: string = PACK_REGISTRY[locale]?.strings[key] ?? (locale === "zh" ? zh[key] : en[key]);
 			if (vars) {
 				for (const [k, v] of Object.entries(vars)) {
 					str = str.replaceAll(`{${k}}`, String(v));
@@ -1675,14 +2470,18 @@ export function LanguageProvider({ children }: { children: ReactNode }) {
 			}
 			return str;
 		},
-		[locale],
+		[locale, packsTick],
 	);
 
 	useEffect(() => {
-		document.documentElement.lang = locale === "zh" ? "zh-CN" : "en";
+		document.documentElement.lang = htmlLang(locale);
+		// 标题由 App 统一维护（项目名优先，见 App.tsx 的 document.title effect）。
 	}, [locale]);
 
-	const value = useMemo(() => ({ locale, setLocale, t }), [locale, setLocale, t]);
+	const value = useMemo(
+		() => ({ locale, setLocale, t, packs, reloadPacks }),
+		[locale, setLocale, t, packs, reloadPacks],
+	);
 
 	return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 }

@@ -18,6 +18,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { PluginAgentTool } from "./plugins.js";
+import { bilingual } from "./i18n.js";
 
 /** JSON-RPC 2.0 over stdio：每行一条 JSON。 */
 export interface McpServerSpec {
@@ -37,6 +38,18 @@ interface RpcIncoming {
 	error?: { code: number; message: string; data?: unknown };
 }
 
+/** MCP 服务器返回的内容块（规范子集：text / image / resource / audio…）。 */
+interface McpContentBlock {
+	type?: string;
+	text?: string;
+	data?: string;
+	mimeType?: string;
+	resource?: { uri?: string; mimeType?: string; text?: string; blob?: string } | string;
+}
+
+/** 桥透传给会话的内容块：text 原样；image 字段与 SDK 的 ImageContent（type/data/mimeType）一致。 */
+type McpToolResultBlock = { type: "text"; text: string } | { type: "image"; data: string; mimeType: string };
+
 const PROTOCOL_VERSION = "2025-03-26"; // 广泛支持的工具版本
 
 let rpcSeq = 0;
@@ -44,6 +57,8 @@ let rpcSeq = 0;
 /**
  * 单个 MCP 服务器的客户端：管理子进程、请求/响应按 id 关联、握手与工具调用。
  * 线程模型：无需并发控制（MCP 允许乱序 + 我们按请求 id 匹配响应）。
+ * 自愈：子进程意外退出（崩溃/被杀）后不永久失效 —— 下一次工具调用会惰性重启并
+ * 重新握手、重新拉取工具列表；显式 close() 之后才永久停用。
  */
 export class McpClient {
 	private child: ChildProcess | null = null;
@@ -58,6 +73,10 @@ export class McpClient {
 	/** 已握手的工具列表（tools/list 结果缓存）。 */
 	private tools: McpToolDefinition[] = [];
 	private shuttingDown = false;
+	/** 进行中的启动/重启（并发调用共享同一次重连）。 */
+	private starting: Promise<void> | null = null;
+	/** 已启动次数（含自愈重启；诊断/测试用）。 */
+	private startedCount = 0;
 
 	constructor(
 		name: string,
@@ -68,11 +87,12 @@ export class McpClient {
 		this.log = log ?? (() => {});
 	}
 
-	/** 启动子进程 + 握手 + 拉取工具列表。 */
-	async start(_timeoutMs = 8000): Promise<void> {
+	/** 启动子进程 + 握手 + 拉取工具列表。可安全重入：子进程退出后再次调用即全新启动。 */
+	async start(timeoutMs = 8000): Promise<void> {
 		if (this.child) return;
 		const { command, args = [], cwd, env } = this.spec;
 		this.log(`[mcp:${this.name}] starting: ${command} ${args.join(" ")}`);
+		this.buffer = "";
 		const child = spawn(command, args, {
 			cwd: cwd ?? undefined,
 			env: { ...process.env, ...env },
@@ -80,32 +100,85 @@ export class McpClient {
 			windowsHide: true,
 		});
 		this.child = child;
+		// 进程退出后向 stdin 写请求会触发 EPIPE —— 静默忽略（send 也会判 child 存活）。
+		child.stdin?.on("error", () => {});
 		child.stderr.on("data", (d) => this.log(`[mcp:${this.name}] stderr:`, d.toString().trimEnd()));
 		child.on("error", (err) => this.rejectAll(new Error(`[mcp:${this.name}] spawn error: ${err.message}`)));
 		child.on("exit", (code, sig) => {
 			this.child = null;
-			if (!this.shuttingDown) this.rejectAll(new Error(`[mcp:${this.name}] 进程退出 (${sig ?? code})`));
+			this.buffer = "";
+			if (!this.shuttingDown) {
+				this.log(`[mcp:${this.name}] 进程退出 (${sig ?? code})，下次调用将自动重启`);
+				this.rejectAll(new Error(`[mcp:${this.name}] 进程退出 (${sig ?? code})`));
+			}
 		});
 		child.stdout.setEncoding("utf8");
 		child.stdout.on("data", (chunk: string) => this.onData(chunk));
+		this.startedCount++;
 
-		// 握手
-		const handshake = await this.request("initialize", {
-			protocolVersion: this.spec.protocolVersion ?? PROTOCOL_VERSION,
-			capabilities: {},
-			clientInfo: { name: "pi-web-ui", version: "0.41.0" },
+		try {
+			// 握手
+			const handshake = await this.request(
+				"initialize",
+				{
+					protocolVersion: this.spec.protocolVersion ?? PROTOCOL_VERSION,
+					capabilities: {},
+					clientInfo: { name: "pi-web-ui", version: "0.41.0" },
+				},
+				timeoutMs,
+			);
+			const version =
+				(handshake as { protocolVersion?: string })?.protocolVersion ?? this.spec.protocolVersion ?? PROTOCOL_VERSION;
+			// 通知 initialized（无 id 的 notification）
+			this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
+			// 仍以协商协议版本调用 tools（多数服务器对新版本容忍，这里用协商结果）
+			void version;
+			const listed = ((await this.request("tools/list", {}, timeoutMs)) ?? {}) as {
+				tools?: McpToolDefinition[];
+			};
+			this.tools = Array.isArray(listed.tools) ? listed.tools : [];
+			this.log(`[mcp:${this.name}] ready, ${this.tools.length} tools`);
+			// 若重启过程中被显式 close()，趁机回收刚启动的子进程，不留孤儿。
+			if (this.shuttingDown) {
+				try {
+					child.kill();
+				} catch {
+					/* 已退出 */
+				}
+				if (this.child === child) this.child = null;
+			}
+		} catch (err) {
+			// 启动/握手失败：回收本次子进程，避免泄漏；调用方可安全重试（自愈会再试）。
+			try {
+				child.kill();
+			} catch {
+				/* 已退出 */
+			}
+			if (this.child === child) this.child = null;
+			throw err;
+		}
+	}
+
+	/** 已启动次数（含自愈重启；诊断/测试用）。 */
+	get startCount(): number {
+		return this.startedCount;
+	}
+
+	/**
+	 * 保活：子进程还活着就直接返回；已意外退出则惰性重启（并发调用共享同一次重连）。
+	 * 显式 close() 后抛错，绝不复活。
+	 */
+	private async ensureStarted(timeoutMs: number): Promise<void> {
+		if (this.shuttingDown) throw new Error(`[mcp:${this.name}] 客户端已关闭，不会重启`);
+		// 先认「进行中的重连」再认 child：start() 是同步把 child 落位的，握手却还没完 ——
+		// 此时若按 child 判存活就直接返回，并发的第二个调用会抢在 initialize 应答前发出
+		// tools/call（严格实现会回「未初始化」）。共享同一个 promise 才能真正串行化。
+		if (this.starting) return this.starting;
+		if (this.child) return;
+		this.starting = this.start(timeoutMs).finally(() => {
+			this.starting = null;
 		});
-		const version =
-			(handshake as { protocolVersion?: string })?.protocolVersion ?? this.spec.protocolVersion ?? PROTOCOL_VERSION;
-		// 通知 initialized（无 id 的 notification）
-		this.send({ jsonrpc: "2.0", method: "notifications/initialized" });
-		// 仍以协商协议版本调用 tools（多数服务器对新版本容忍，这里用协商结果）
-		void version;
-		const listed = ((await this.request("tools/list", {})) ?? {}) as {
-			tools?: McpToolDefinition[];
-		};
-		this.tools = Array.isArray(listed.tools) ? listed.tools : [];
-		this.log(`[mcp:${this.name}] ready, ${this.tools.length} tools`);
+		await this.starting;
 	}
 
 	/** 已发现工具。 */
@@ -113,10 +186,21 @@ export class McpClient {
 		return this.tools.map((t) => ({ ...t }));
 	}
 
-	/** 调用一个工具，返回结果文本（多 content 拼接为 JSON 字符串保真）。 */
+	/**
+	 * 调用一个工具，返回其结果。
+	 * 纯文本块拼接成字符串（老形状，向后兼容）；出现非文本块（image/resource/audio 等）时按序透传或退化提示，不再静默丢弃。
+	 */
 	async call(name: string, args: Record<string, unknown>, timeoutMs = 60000): Promise<unknown> {
+		if (this.shuttingDown) throw new Error(`[mcp:${this.name}] 客户端已关闭，不会重启`);
+		try {
+			// 自愈：子进程已退出（非主动关闭）→ 先惰性重启再发；重启失败给出明确错误而不是挂 60s 超时。
+			await this.ensureStarted(8000);
+		} catch (err) {
+			const detail = err instanceof Error ? err.message : String(err);
+			throw new Error(`[mcp:${this.name}] 服务器进程已退出且自动重启失败：${detail}`);
+		}
 		const res = (await this.request("tools/call", { name, arguments: args }, timeoutMs)) as {
-			content?: Array<{ type?: string; text?: string }>;
+			content?: McpContentBlock[];
 			isError?: boolean;
 			structuredContent?: unknown;
 		};
@@ -128,13 +212,48 @@ export class McpClient {
 					.trim() || "MCP 工具错误";
 			throw new Error(msg);
 		}
-		// 结构化结果优先，其次文本内容。
+		// 结构化结果优先，其次内容块。
 		if (res?.structuredContent !== undefined) return res.structuredContent;
-		const text = (res.content ?? [])
-			.map((c) => c.text ?? "")
-			.filter((x) => x)
-			.join("\n");
-		return { content: text, isError: !!res.isError };
+		const blocks: McpToolResultBlock[] = [];
+		let hasNonText = false;
+		for (const c of res.content ?? []) {
+			if (c.type === "image" && typeof c.data === "string" && c.data) {
+				// MCP image 块字段（type/data/mimeType）与 SDK 的 ImageContent 完全一致，原样透传；
+				// 超大图由 SDK 的 normalizeToolResultImages 统一缩放（afterToolCall 钩子，默认 autoResize）。
+				blocks.push({ type: "image", data: c.data, mimeType: c.mimeType?.trim() || "image/png" });
+				hasNonText = true;
+				continue;
+			}
+			if (c.type && c.type !== "text") {
+				const r = typeof c.resource === "object" && c.resource !== null ? c.resource : {};
+				// MCP 的 EmbeddedResource 有两种承载：TextResourceContents（resource.text）与
+				// BlobResourceContents（resource.blob）。文本型带真实正文（filesystem 类 MCP 的
+				// read_text_file 就走这条），当文本透传 —— 退化成「已跳过」等于把文件内容吞掉。
+				if (typeof r.text === "string" && r.text) {
+					blocks.push({ type: "text", text: r.text });
+					continue;
+				}
+				// resource(blob)/audio 等块在 SDK 内容联合里没有载体（只有 text|image|thinking|toolCall），
+				// 退化为文本提示，让模型至少知道工具返回了什么，而不是看到一个空串。
+				const mime = (c.mimeType ?? r.mimeType ?? "").trim();
+				const blob = typeof r.blob === "string" && r.blob ? r.blob : c.data;
+				const size =
+					typeof blob === "string" && blob ? `，约 ${Math.max(1, Math.round((blob.length * 3) / 4))} 字节` : "";
+				blocks.push({
+					type: "text",
+					text: `[MCP 工具返回了非文本内容块（${mime || c.type || "未知类型"}${size}），当前会话无法内联，已跳过。]`,
+				});
+				hasNonText = true;
+				continue;
+			}
+			const text = c.text ?? "";
+			if (text) blocks.push({ type: "text", text });
+		}
+		if (!hasNonText) {
+			// 纯文本结果保持旧形状（拼接字符串），不破坏既有调用方。
+			return { content: blocks.map((b) => (b.type === "text" ? b.text : "")).join("\n"), isError: !!res.isError };
+		}
+		return { content: blocks, isError: !!res.isError };
 	}
 
 	/** 关闭：kill 子进程，拒绝所有在途请求。 */
@@ -255,7 +374,12 @@ function adaptMcpTool(serverName: string, mcpTool: McpToolDefinition, client: Mc
 	return {
 		name,
 		label: `${serverName} · ${mcpTool.name}`,
-		description: mcpTool.description ?? `从 MCP 服务器「${serverName}」提供的工具 ${mcpTool.name}`,
+		description:
+			mcpTool.description ??
+			bilingual(
+				`Tool ${mcpTool.name} provided by MCP server "${serverName}"`,
+				`从 MCP 服务器「${serverName}」提供的工具 ${mcpTool.name}`,
+			),
 		parameters: mcpTool.inputSchema ?? {},
 		execute: async (_toolCallId: string, params: Record<string, unknown>, _signal?: AbortSignal) => {
 			return client.call(mcpTool.name, params ?? {});

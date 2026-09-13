@@ -40615,6 +40615,72 @@ var b64 = {
   bytes: (b64s) => Uint8Array.from(atob(b64s), (c) => c.charCodeAt(0))
 };
 var shQuote = (s15) => `'${String(s15 ?? "").replace(/'/g, "'\\''")}'`;
+var THEME_CHANGE_EVENT = "pi-web-ui:theme-change";
+function isLightTheme() {
+  try {
+    return getComputedStyle(document.documentElement).getPropertyValue("color-scheme").trim().startsWith("light");
+  } catch {
+    return false;
+  }
+}
+function buildTermTheme() {
+  let cs2 = null;
+  try {
+    cs2 = getComputedStyle(document.documentElement);
+  } catch {
+    cs2 = null;
+  }
+  const v2 = (name2, fallback) => {
+    try {
+      const val = cs2?.getPropertyValue(name2).trim();
+      return val || fallback;
+    } catch {
+      return fallback;
+    }
+  };
+  return {
+    background: v2("--term-bg", "#0b0d12"),
+    foreground: v2("--term-fg", "#e6e8ef"),
+    cursor: v2("--term-cursor", "#8b5cf6"),
+    cursorAccent: v2("--term-cursor-accent", "#0b0d12"),
+    selectionBackground: v2("--term-selection", "rgba(139, 92, 246, 0.35)"),
+    black: v2("--term-black", "#1a1d26"),
+    red: v2("--term-red", "#f87171"),
+    green: v2("--term-green", "#34d399"),
+    yellow: v2("--term-yellow", "#fbbf24"),
+    blue: v2("--term-blue", "#60a5fa"),
+    magenta: v2("--term-magenta", "#c084fc"),
+    cyan: v2("--term-cyan", "#22d3ee"),
+    white: v2("--term-white", "#e6e8ef"),
+    brightBlack: v2("--term-bright-black", "#6b7284"),
+    brightRed: v2("--term-bright-red", "#f87171"),
+    brightGreen: v2("--term-bright-green", "#34d399"),
+    brightYellow: v2("--term-bright-yellow", "#fbbf24"),
+    brightBlue: v2("--term-bright-blue", "#60a5fa"),
+    brightMagenta: v2("--term-bright-magenta", "#c084fc"),
+    brightCyan: v2("--term-bright-cyan", "#22d3ee"),
+    brightWhite: v2("--term-bright-white", "#ffffff")
+  };
+}
+var cmLight = EditorView.theme(
+  {
+    "&": { backgroundColor: "var(--bg, #ffffff)", color: "var(--text, #1f2328)" },
+    ".cm-content": { caretColor: "var(--accent, #0969da)" },
+    ".cm-cursor, .cm-dropCursor": { borderLeftColor: "var(--accent, #0969da)" },
+    ".cm-activeLine": { backgroundColor: "color-mix(in srgb, var(--accent, #0969da) 8%, transparent)" },
+    ".cm-activeLineGutter": { backgroundColor: "transparent" },
+    ".cm-gutters": {
+      backgroundColor: "var(--bg, #ffffff)",
+      color: "var(--text-faint, #818b98)",
+      borderRight: "1px solid var(--border, #d0d7de)"
+    },
+    ".cm-selectionMatch": { backgroundColor: "color-mix(in srgb, var(--accent, #0969da) 18%, transparent)" },
+    "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground": {
+      backgroundColor: "color-mix(in srgb, var(--accent, #0969da) 22%, transparent)"
+    }
+  },
+  { dark: false }
+);
 var LANGS = [
   [/\.(jsx?|mjs|cjs)$/, () => javascript()],
   [/\.tsx?$/, () => javascript({ typescript: true })],
@@ -40692,10 +40758,10 @@ var client_default = {
 	<style>
 		.vsc { position: relative; display: flex; height: 100%; min-height: 480px;
 			overflow: hidden;
-			background: var(--bg-elev0, #101016); color: var(--text, #e6e6ef); font-size: 13px; }
+			background: var(--bg, #101016); color: var(--text, #e6e6ef); font-size: 13px; }
 		/* ---- 左侧多根文件树 ---- */
 		.vsc-side { width: 240px; min-width: 160px; flex-shrink: 0; display: flex; flex-direction: column;
-			border-right: 1px solid var(--border, #333); background: var(--bg-elev1, #16161d); }
+			border-right: 1px solid var(--border, #333); background: var(--bg-elev, #16161d); }
 		.vsc-side-head { display: flex; align-items: center; gap: 4px; padding: 8px 10px 6px;
 			font-size: 11px; letter-spacing: .08em; text-transform: uppercase; opacity: .85; }
 		.vsc-side-head b { flex: 1; font-weight: 600; }
@@ -40703,7 +40769,7 @@ var client_default = {
 		.vsc-side-head button:hover { background: var(--bg-elev2, #20202b); }
 		/* ---- 侧栏双 tab：文件 / SSH ---- */
 		.vsc-stabs { display: flex; gap: 4px; padding: 6px 8px;
-			border-bottom: 1px solid var(--border, #333); background: var(--bg-elev1, #16161d); }
+			border-bottom: 1px solid var(--border, #333); background: var(--bg-elev, #16161d); }
 		.vsc-stabs .stab { all: unset; cursor: pointer; padding: 3px 12px; border-radius: 6px; font-size: 12.5px; opacity: .65; }
 		.vsc-stabs .stab.active { background: color-mix(in srgb, var(--accent, #7c5cff) 25%, transparent);
 			opacity: 1; font-weight: 600; }
@@ -40749,11 +40815,11 @@ var client_default = {
 		/* ---- 右侧主区 ---- */
 		.vsc-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
 		.vsc-tabs { display: flex; overflow-x: auto; border-bottom: 1px solid var(--border, #333);
-			background: var(--bg-elev1, #16161d); scrollbar-width: thin; }
+			background: var(--bg-elev, #16161d); scrollbar-width: thin; }
 		.vsc-tab { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px 6px 12px;
 			cursor: pointer; border-right: 1px solid var(--border, #333); white-space: nowrap;
 			color: var(--text-dim, #9a9ab0); max-width: 200px; }
-		.vsc-tab.active { background: var(--bg-elev0, #101016); color: var(--text, #e6e6ef);
+		.vsc-tab.active { background: var(--bg, #101016); color: var(--text, #e6e6ef);
 			box-shadow: inset 0 2px 0 var(--accent, #7c5cff); }
 		.vsc-tab .tn { overflow: hidden; text-overflow: ellipsis; }
 		.vsc-tab .dot { color: var(--amber, #fbbf24); }
@@ -40767,12 +40833,12 @@ var client_default = {
 		.vsc-editor .cm-scroller { font-family: ui-monospace, Consolas, "Cascadia Mono", monospace; }
 		/* ---- 底部终端面板 ---- */
 		.vsc-termdrag { height: 4px; cursor: row-resize; flex-shrink: 0;
-			background: var(--bg-elev1, #16161d); border-top: 1px solid var(--border, #333); }
+			background: var(--bg-elev, #16161d); border-top: 1px solid var(--border, #333); }
 		.vsc-termdrag:hover { background: color-mix(in srgb, var(--accent, #7c5cff) 35%, transparent); }
 		.vsc-termpanel { height: 240px; min-height: 80px; display: flex; flex-direction: column;
 			flex-shrink: 0; background: var(--term-bg, #101016); }
 		.vsc-termbar { display: flex; align-items: center; gap: 4px; padding: 3px 8px;
-			border-bottom: 1px solid var(--border, #333); background: var(--bg-elev1, #16161d);
+			border-bottom: 1px solid var(--border, #333); background: var(--bg-elev, #16161d);
 			font-size: 11.5px; user-select: none; }
 		.vsc-termbar .tt { opacity: .6; text-transform: uppercase; letter-spacing: .06em; font-size: 10.5px; margin-right: 4px; }
 		.vsc-termbar .grow { flex: 1; }
@@ -40789,7 +40855,7 @@ var client_default = {
 		.vsc-term .xterm { height: 100%; }
 		/* ---- 状态栏 ---- */
 		.vsc-status { display: flex; align-items: center; gap: 14px; padding: 4px 12px;
-			border-top: 1px solid var(--border, #333); background: var(--bg-elev1, #16161d);
+			border-top: 1px solid var(--border, #333); background: var(--bg-elev, #16161d);
 			font-size: 11.5px; color: var(--text-dim, #9a9ab0); }
 		.vsc-status .grow { flex: 1; }
 		.vsc-status .dirty { color: var(--amber, #fbbf24); }
@@ -40826,7 +40892,7 @@ var client_default = {
 			border: 1px solid var(--border, #444); border-radius: 12px; padding: 16px 18px; }
 		.vsc-modal h3 { margin: 0 0 10px; }
 		.vsc-modal label { display: block; font-size: 11.5px; opacity: .7; margin: 9px 0 3px; }
-		.vsc-modal input, .vsc-modal textarea { width: 100%; box-sizing: border-box; background: var(--bg-elev0, #101016);
+		.vsc-modal input, .vsc-modal textarea { width: 100%; box-sizing: border-box; background: var(--bg, #101016);
 			color: inherit; border: 1px solid var(--border, #444); border-radius: 6px; padding: 6px 9px; font: inherit; }
 		.vsc-modal textarea { font: 12px ui-monospace, monospace; resize: vertical; }
 		.vsc-modal .grid2 { display: grid; grid-template-columns: 1fr 100px; gap: 8px; }
@@ -40836,6 +40902,47 @@ var client_default = {
 			border: 1px solid var(--border, #444); }
 		.vsc-modal .btns button.primary { background: var(--accent, #7c5cff); border-color: transparent; color: #fff; }
 		.vsc-modal .btns button:hover { filter: brightness(1.15); }
+		/* ---- 手机窄屏适配（≤640px）：桌面端零变化 ---- */
+		.vsc-mobilebar { display: none; }
+		.vsc-backdrop { display: none; }
+		@media (max-width: 640px) {
+			/* 主区顶栏：窄屏工具条（☰ + 标题），桌面端隐藏 */
+			.vsc-mobilebar { display: flex; align-items: center; gap: 8px; padding: 4px 8px;
+				border-bottom: 1px solid var(--border, #333); background: var(--bg-elev, #16161d); }
+			.vsc-mobilebar .vsc-burger { all: unset; cursor: pointer; font-size: 18px;
+				padding: 6px 10px; border-radius: 6px; line-height: 1; }
+			.vsc-mobilebar .vsc-burger:hover { background: var(--bg-elev2, #20202b); }
+			.vsc-mobilebar .vsc-mtitle { flex: 1; overflow: hidden; text-overflow: ellipsis;
+				white-space: nowrap; font-size: 12px; opacity: .7; }
+			/* 侧栏变左侧覆盖式抽屉 */
+			.vsc-side { position: absolute; left: 0; top: 0; bottom: 0; z-index: 35;
+				width: min(280px, 82vw); max-width: 82vw;
+				transform: translateX(-105%); transition: transform .22s ease; }
+			.vsc.drawer-open .vsc-side { transform: none;
+				box-shadow: 8px 0 28px rgba(0,0,0,.5); }
+			.vsc.drawer-open .vsc-backdrop { display: block; position: absolute; inset: 0; z-index: 30;
+				background: rgba(0,0,0,.45); }
+			/* 底部终端面板：占全宽、高度可控，不挤没编辑器 */
+			.vsc-termpanel { width: 100%; max-height: 45dvh; }
+			.vsc-termbar { min-height: 40px; }
+			/* tabs 横滑 + 触摸目标放大 */
+			.vsc-tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+			.vsc-tab { padding: 8px 8px 8px 12px; }
+			.vsc-tab .x { padding: 6px 8px; font-size: 13px; }
+			.vsc-hrow .ops button { padding: 6px 8px; font-size: 12px; }
+			.vsc-side-head button, .vsc-sect button, .vsc-termbar button { padding: 5px 9px; }
+			/* iOS 聚焦缩放：表单字号提到 16px（CodeMirror 编辑区不动） */
+			.vsc-quickopen input, .vsc-modal input, .vsc-modal select, .vsc-modal textarea { font-size: 16px; }
+			.vsc-modal .grid2 { grid-template-columns: 1fr; }
+			.vsc-modal { width: min(430px, 94%); }
+			.vsc-quickopen { width: min(520px, 94%); }
+			.vsc-status { gap: 8px; overflow-x: auto; white-space: nowrap; }
+			.vsc-status .vsc-path { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; }
+		}
+		/* 触屏无 hover：行操作按钮常显 */
+		@media (hover: none) {
+			.vsc-hrow .ops { display: flex; }
+		}
 	</style>
 	<div class="vsc-side">
 		<div class="vsc-stabs">
@@ -40868,7 +40975,12 @@ var client_default = {
 			<div class="vsc-sshtree"></div>
 		</div>
 	</div>
+	<div class="vsc-backdrop"></div>
 	<div class="vsc-main">
+		<div class="vsc-mobilebar">
+			<button class="vsc-burger" title="文件树">☰</button>
+			<span class="vsc-mtitle">文件</span>
+		</div>
 		<div class="vsc-tabs"></div>
 		<div class="vsc-edwrap">
 			<div class="vsc-empty">从左侧打开一个文件开始编辑<br><small>Ctrl+P 快速打开 · Ctrl+S 保存 · 左侧 ＋ 添加 SSH 主机</small></div>
@@ -40963,6 +41075,13 @@ var client_default = {
     const panelEl = root.querySelector(".vsc-termpanel");
     const termTabsEl = root.querySelector(".vsc-termbar .tts");
     const termAreaEl = root.querySelector(".vsc-termarea");
+    const burger = root.querySelector(".vsc-burger");
+    const backdrop = root.querySelector(".vsc-backdrop");
+    function closeDrawer() {
+      root.classList.remove("drawer-open");
+    }
+    if (burger) burger.addEventListener("click", () => root.classList.toggle("drawer-open"));
+    if (backdrop) backdrop.addEventListener("click", closeDrawer);
     const pending = /* @__PURE__ */ new Map();
     function request(payload) {
       const reqId = `r${++reqSeq}`;
@@ -41023,6 +41142,7 @@ var client_default = {
       renderHosts();
     }
     const langComp = new Compartment();
+    const themeComp = new Compartment();
     function makeExtensions() {
       return [
         lineNumbers(),
@@ -41065,7 +41185,7 @@ var client_default = {
           ]))
         ]),
         langComp.of(langFor(parseTk(activeTk ?? "local:")?.path ?? "") ?? []),
-        oneDark,
+        themeComp.of(isLightTheme() ? cmLight : oneDark),
         EditorView.updateListener.of((u) => {
           if (u.docChanged || u.selectionSet) updateStatus(u.state);
           if (u.docChanged) {
@@ -41376,6 +41496,7 @@ var client_default = {
       }
     }
     async function openFile(scope, p) {
+      closeDrawer();
       const k = tkey(scope, p);
       if (!tabs.has(k)) {
         const r = await req(scope, { action: "read", path: p });
@@ -42003,6 +42124,20 @@ var client_default = {
       if (terms.size) showTermPanel();
       else hideTermPanel();
     }
+    function onThemeChange() {
+      try {
+        view.dispatch({ effects: themeComp.reconfigure(isLightTheme() ? cmLight : oneDark) });
+      } catch {
+      }
+      const th = buildTermTheme();
+      for (const [, t2] of terms.entries()) {
+        try {
+          t2.term.options.theme = th;
+        } catch {
+        }
+      }
+    }
+    window.addEventListener(THEME_CHANGE_EVENT, onThemeChange);
     async function newTerm(connId, startCwd) {
       connId = connId ?? pickConnId();
       if (!connId || !conns.has(connId)) {
@@ -42031,12 +42166,7 @@ var client_default = {
         fontFamily: 'ui-monospace, Consolas, "Cascadia Mono", monospace',
         fontSize: 13,
         cursorBlink: true,
-        theme: {
-          background: "#101016",
-          foreground: "#e6e6ef",
-          cursor: "#7c5cff",
-          selectionBackground: "#7c5cff44"
-        }
+        theme: buildTermTheme()
       });
       const fit = new o();
       term.loadAddon(fit);
@@ -42370,6 +42500,7 @@ var client_default = {
     return () => {
       container.ownerDocument.removeEventListener("keydown", onGlobalKey, true);
       document.removeEventListener("click", hideMenu);
+      window.removeEventListener(THEME_CHANGE_EVENT, onThemeChange);
       for (const [, t2] of terms.entries()) {
         try {
           t2.ro?.disconnect();

@@ -19,8 +19,13 @@ web/dist/
 # Plugin dependencies (installed per-plugin)
 plugins/*/node_modules/
 
+# 插件运行期数据（书源/书架/进度等，属于用户数据不入库）
+plugins/*/storage/
+
 # Scratch/test temp files
 tests/scratch/
 
 # pi-web-ui Electron 桌面版构建产物
 release/
+# Secretos locales (nunca commitear)
+.env

@@ -1,10 +1,10 @@
 import { useEffect, useRef } from "react";
 import { makePluginContext, type LoadedPluginView } from "../plugin-loader";
 import { useT } from "../i18n";
+import { appSend } from "../app-globals";
 
 interface PluginViewProps {
 	entry: LoadedPluginView;
-	send: (msg: { type: "plugin_message"; pluginId: string; payload: unknown }) => boolean;
 }
 
 /**
@@ -12,7 +12,7 @@ interface PluginViewProps {
  * mount()。切走时容器整体 display:none（不卸载，插件内部状态保留）；
  * 插件被移除/失败时才真正清理。
  */
-export function PluginView({ entry, send }: PluginViewProps) {
+export function PluginView({ entry }: PluginViewProps) {
 	const ref = useRef<HTMLDivElement>(null);
 	const t = useT();
 	useEffect(() => {
@@ -22,7 +22,7 @@ export function PluginView({ entry, send }: PluginViewProps) {
 		try {
 			cleanup = entry.module.mount(
 				el,
-				makePluginContext(entry.info.id, (msg) => send(msg)),
+				makePluginContext(entry.info.id, (msg) => appSend(msg)),
 			);
 		} catch (err) {
 			console.error(`[plugin:${entry.info.id}] mount failed:`, err);
@@ -38,6 +38,6 @@ export function PluginView({ entry, send }: PluginViewProps) {
 			}
 			el.textContent = "";
 		};
-	}, [entry, send]);
+	}, [entry]);
 	return <div className="plugin-view" ref={ref} />;
 }

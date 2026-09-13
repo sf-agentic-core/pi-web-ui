@@ -12,7 +12,10 @@ import {
 } from "../../server/wait-subscription-scan.js";
 
 const SESSION_FILE = "/root/.pi/agent/sessions/--proj--/2026-01-01T00-00-00Z_session.jsonl";
-const NOW = 1_000_000;
+// 用现代时间戳作为假想「现在」（而非 1_000_000/1970 附近）：过期场景会算出
+// 1970 之前的负 mtime，而 Windows 文件系统不支持 1970 前的时间戳（utimesSync
+// 会把负时间折返成 2106 年），导致「marker 过期」用例在 Windows 上误判为新鲜。
+const NOW = Date.UTC(2026, 0, 1);
 const TOKEN = "0ffbdaf3-c196-4e88-8ae2-0674b2586335";
 
 function record(overrides: Record<string, unknown> = {}) {

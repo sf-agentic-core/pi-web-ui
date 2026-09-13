@@ -17,6 +17,7 @@ export interface ThemeInfo {
 	id: string;
 	name: string;
 	builtin: boolean;
+	nameEn?: string;
 }
 
 /** Only simple file ids — no path traversal. */
@@ -24,9 +25,12 @@ const ID_RE = /^[A-Za-z0-9_-]+$/;
 
 /** Display-name marker inside a theme css file (first lines):
  *  `/* theme-name: 中文名 *∕` — falls back to the file id when absent.
+ *  `/* theme-name-en: English Name *∕` — optional English label; falls back
+ *  to `name` when absent.
  *  Lets built-in AND user themes carry a human-readable label while the
  *  filename stays ASCII (id must match ID_RE). */
 const THEME_NAME_RE = /\/\*\s*theme-name:\s*(.+?)\s*\*\//;
+const THEME_NAME_EN_RE = /\/\*\s*theme-name-en:\s*(.+?)\s*\*\//;
 
 function readDisplayName(path: string, fallback: string): string {
 	try {
@@ -37,6 +41,15 @@ function readDisplayName(path: string, fallback: string): string {
 	}
 }
 
+function readDisplayNameEn(path: string): string | undefined {
+	try {
+		const head = readFileSync(path, "utf8").slice(0, 300);
+		return head.match(THEME_NAME_EN_RE)?.[1]?.trim() || undefined;
+	} catch {
+		return undefined;
+	}
+}
+
 export function listThemes(builtinDir: string, userDir: string): ThemeInfo[] {
 	const scan = (dir: string, builtin: boolean): ThemeInfo[] => {
 		if (!existsSync(dir)) return [];
@@ -44,11 +57,18 @@ export function listThemes(builtinDir: string, userDir: string): ThemeInfo[] {
 			.filter((f) => f.endsWith(".css"))
 			.filter((f) => ID_RE.test(f.slice(0, -4)))
 			.sort()
-			.map((f) => ({
-				id: f.slice(0, -4),
-				name: readDisplayName(join(dir, f), f.slice(0, -4)),
-				builtin,
-			}));
+			.map((f) => {
+				const path = join(dir, f);
+				const id = f.slice(0, -4);
+				const name = readDisplayName(path, id);
+				const nameEn = readDisplayNameEn(path);
+				return {
+					id,
+					name,
+					builtin,
+					...(nameEn ? { nameEn } : {}),
+				};
+			});
 	};
 	const builtin = scan(builtinDir, true);
 	const user = scan(userDir, false);

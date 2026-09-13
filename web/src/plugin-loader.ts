@@ -25,8 +25,24 @@ export interface PluginViewContext {
 	onData: (cb: (payload: unknown) => void) => () => void;
 }
 
+/** 上下文传给插件 fenced-code renderer（与视图 mount 的窄通道同一套）。 */
+export interface FenceRenderContext {
+	pluginId: string;
+	/** 上行一条消息给插件的服务端入口（index.mjs 的 onMessage 处理器）。 */
+	send: (payload: unknown) => void;
+	/** 订阅服务端广播；返回取消订阅函数。 */
+	onData: (cb: (payload: unknown) => void) => () => void;
+}
+
+/** 插件把 ```lang 围栏渲染成自定义 DOM 的工厂函数。返回 null 表示不渲染
+ *  （回退普通代码块）。可以是任意技术栈——主应用只负责把返回的 DOM 挂进
+ *  消息流，不共享 React 实例。 */
+export type FenceRenderer = (code: string, ctx: FenceRenderContext) => HTMLElement | null | Promise<HTMLElement | null>;
+
 export interface PluginViewModule {
 	mount(container: HTMLElement, ctx: PluginViewContext): void | (() => void);
+	/** 可选：fenced-code 渲染器（manifest "renderers" 声明的语言）。 */
+	renderers?: Record<string, FenceRenderer>;
 }
 
 export interface LoadedPluginView {
@@ -105,7 +121,9 @@ export async function syncPluginViews(plugins: UiPluginInfo[], epoch: number): P
 	}
 	await Promise.all(
 		plugins
-			.filter((p) => p.hasClient && !p.error && !loaded.has(p.id) && !failed.has(p.id))
+			// view:false 的纯 renderer 插件不进视图注册表——它们只在消息里命中
+			// ```lang 围栏时才按需懒加载（见 plugin-fence.ts），避免打进主包。
+			.filter((p) => p.hasClient && p.view !== false && !p.error && !loaded.has(p.id) && !failed.has(p.id))
 			.map(async (p) => {
 				try {
 					// @vite-ignore：URL 运行时才知道，Vite 不要试图打包它。

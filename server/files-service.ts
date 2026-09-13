@@ -8,11 +8,52 @@
 import { mkdirSync, statSync, writeFileSync, watch } from "node:fs";
 import { resolve, relative, sep } from "node:path";
 import type { ServerMessage, FileEntry, FileSearchResult } from "./protocol.js";
+import { pick, type ServerLang } from "./i18n.js";
 import { previewKind, looksLikeText, decodeText, hexDump, countLines } from "./text-sniff.js";
 import { gitDirOf, isNotRepoError, scmStatus, scmHistory, scmFileDiff, scmCommitDetail } from "./scm.js";
 import { discoverGitRepos } from "./git-discovery.js";
 
 export const IS_WIN32 = process.platform === "win32";
+
+/** 机器根虚拟路径：工作区「上一级」到达此处，列出所有盘符（Windows）/ "/"（posix）。
+ *  这是 wire 字面量，前端 web/src/components/{RightPanel,FooterBar}.tsx 里同值使用。 */
+export const MACHINE_ROOT = "@root";
+
+/** wire 路径统一用 "/"。绝对 = posix "/..."；win32 还有 "C:/..." / 裸 "C:"。
+ *  机器浏览（越过工作区根换盘符）发送这些路径；工作区相对树不会产生它们（Windows
+ *  文件名不能含 ":"，相对路径经 relative() 归一化后也不以 "/" 开头）。 */
+export function isAbsoluteWirePath(p: string): boolean {
+	if (p === MACHINE_ROOT || p.startsWith("/")) return true;
+	return IS_WIN32 && /^[A-Za-z]:([\\/]|$)/.test(p);
+}
+
+/** 去掉结尾 "/"（保留 posix 根 "/" 本身），归一成规范的 wire 形式。前端面包屑
+ *  不产生结尾斜杠，这里只对补全/直接输入做防御性清理。 */
+export function normWirePath(p: string): string {
+	if (p.endsWith("/") && p !== "/") return p.slice(0, -1);
+	return p;
+}
+
+/** wire 绝对路径（"C:/Users/x" / "/Users/x" / "C:"）→ 原生绝对路径。
+ *  裸盘符根（"C:"）在 win32 的 resolve 里会落到「C: 上的当前目录」，必须显式转 "C:\\"。 */
+export function wireToAbs(wire: string): string {
+	const w = normWirePath(wire);
+	if (IS_WIN32) {
+		const m = /^([A-Za-z]):$/.exec(w);
+		if (m) return `${m[1].toUpperCase()}:\\`;
+	}
+	return resolve(w);
+}
+
+/** 机器浏览模式下某目录的父级 wire 路径：盘符根（"C:"）→ 机器根；posix "/" 无父级。 */
+export function absoluteParent(wire: string): string | null {
+	const s = normWirePath(wire);
+	if (s === "" || s === MACHINE_ROOT) return null;
+	const i = s.lastIndexOf("/");
+	if (i < 0) return IS_WIN32 && /^[A-Za-z]:$/.test(s) ? MACHINE_ROOT : null;
+	if (i === 0) return "/"; // posix "/a" → "/"
+	return s.slice(0, i);
+}
 /** 预览只读文件前 512KB。 */
 export const MAX_PREVIEW_BYTES = 512 * 1024;
 
@@ -67,8 +108,10 @@ export function workspacePath(root: string, raw: string): { abs: string; rel: st
  * Read a directory for the file panel. The two platforms intentionally use
  * different strategies — do NOT unify them:
  *
- * darwin/linux (posix): original behavior — hide build/dependency noise,
- * small cap, hard error notice when the directory itself is unreadable.
+ * darwin/linux (posix): hide build/dependency noise, small cap; a listing
+ * failure (deleted/renamed dir → ENOENT/ENOTDIR, permission → EACCES/EPERM)
+ * degrades to an empty listing plus a notice chosen by errorCode — the server
+ * must NEVER crash on a vanished directory (issue #74).
  *
  * win32: stability and completeness first, preview second. ACL-protected
  * system dirs (C:\$Recycle.Bin, Program Files internals, OneDrive placeholders)
@@ -81,7 +124,7 @@ export function workspacePath(root: string, raw: string): { abs: string; rel: st
 async function readDirForUI(
 	abs: string,
 	rel: string,
-): Promise<{ entries: FileEntry[]; truncated: boolean; error?: string }> {
+): Promise<{ entries: FileEntry[]; truncated: boolean; error?: string; errorCode?: string }> {
 	const { join } = await import("node:path");
 	const fs = await import("node:fs/promises");
 	const ignored = ignoredEntries();
@@ -91,10 +134,14 @@ async function readDirForUI(
 	try {
 		dirents = await fs.readdir(abs, { withFileTypes: true });
 	} catch (err) {
-		if (!IS_WIN32) throw err;
-		// Windows ACL-protected/system dirs throw EPERM/EACCES on open —
-		// degrade to an empty listing; listFiles turns this into a warning.
-		return { entries: [], truncated: false, error: (err as Error).message };
+		// 任何 readdir 失败都降级为“空列表 + notice”，绝不向上抛：listFiles 以
+		// fire-and-forget（void …）调用，未处理的 rejection 会成为 unhandled
+		// rejection 直接杀掉整个服务进程（issue #74：目录被删除/改名后刷新即崩）。
+		// 缺失（ENOENT/ENOTDIR）、权限拒绝（EACCES/EPERM）、系统 ACL 目录全部归此，
+		// 文案由 listFiles 按 errorCode 分类：缺失 = 软提示“目录不存在”，
+		// 权限/其余 = posix 硬错误 notice / win32 软提示（ACL 系统目录是常态）。
+		const e = err as NodeJS.ErrnoException;
+		return { entries: [], truncated: false, error: e.message, errorCode: e.code };
 	}
 
 	const out: FileEntry[] = [];
@@ -114,9 +161,11 @@ async function readDirForUI(
 		} else {
 			type = d.isDirectory() ? "dir" : "file";
 		}
+		// 机器浏览（绝对路径）下 rel 是绝对 wire 路径；posix 根 "/" 特殊处理避免 "//name"。
+		const entryPath = rel === "" ? d.name : rel.endsWith("/") ? `${rel.slice(0, -1)}/${d.name}` : `${rel}/${d.name}`;
 		const entry: FileEntry = {
 			name: d.name,
-			path: rel === "" ? d.name : `${rel}/${d.name}`,
+			path: entryPath,
 			type,
 		};
 		if (type === "file") entry.kind = previewKind(d.name);
@@ -137,6 +186,12 @@ export interface FilesHost {
 	getCwd: () => string;
 	/** SCM 查询的工作区（当前活动对话所属项目，可能与 getCwd 不同）。 */
 	getActiveCwd: () => string;
+	/**
+	 * 服务端语言（issue #91）：单字段错误通道（scm_data.error、抛错 message 插值）
+	 * 经 pick 按此选中文/英文；推 UI 的 notice 已是 text+textEn 双字段，不用它。
+	 * 缺省英文。agent-service 接线 () => this.getLang()。
+	 */
+	getLang?: () => ServerLang;
 }
 
 export class FilesService {
@@ -158,10 +213,99 @@ export class FilesService {
 
 	constructor(private readonly host: FilesHost) {}
 
+	/** 机器根列目录（此电脑/盘符列表）；posix 上就是根 "/"。 */
+	private async machineRootEntries(): Promise<FileEntry[]> {
+		const fsp = await import("node:fs/promises");
+		if (IS_WIN32) {
+			const out: FileEntry[] = [];
+			for (let c = 65; c <= 90; c++) {
+				const drive = `${String.fromCharCode(c)}:`;
+				try {
+					const st = await fsp.stat(`${drive}\\`);
+					if (st.isDirectory()) out.push({ name: drive, path: drive, type: "dir" });
+				} catch {
+					// 空口/未挂载盘符 —— 跳过
+				}
+			}
+			return out;
+		}
+		return [{ name: "/", path: "/", type: "dir" }];
+	}
+
+	/** 单字段错误文本的语言（host 未接线时英文默认）。 */
+	private lang(): ServerLang {
+		return this.host.getLang?.() ?? "en";
+	}
+
+	/** 目录列表失败的 notice：缺失路径（ENOENT/ENOTDIR）是删除/改名等正常场景，
+	 *  软提示“目录不存在”；其余（权限拒绝等）保留原平台语义——win32 软提示
+	 *  （ACL 系统目录常见），posix 硬错误（error 级 notice，取代曾经的 throw）。 */
+	private emitListError(path: string, error: string, code?: string): void {
+		if (code === "ENOENT") {
+			this.host.emit({
+				type: "notice",
+				level: "warning",
+				text: `目录不存在：${path}`,
+				textEn: `Directory not found: ${path}`,
+			});
+			return;
+		}
+		if (code === "ENOTDIR") {
+			this.host.emit({
+				type: "notice",
+				level: "warning",
+				text: `不是目录：${path}`,
+				textEn: `Not a directory: ${path}`,
+			});
+			return;
+		}
+		this.host.emit({
+			type: "notice",
+			level: IS_WIN32 ? "warning" : "error",
+			text: `目录不可读：${error}`,
+			textEn: `Directory is not readable: ${error}`,
+		});
+	}
+
 	async listFiles(relPath?: string): Promise<void> {
 		const { resolve, sep, relative } = await import("node:path");
 		const root = resolve(this.host.getCwd());
-		const target = relPath ? resolve(root, relPath) : root;
+		const raw = relPath ?? "";
+
+		// ---- 机器根（此电脑：盘符列表）—— 工作区之上的虚拟层 ----
+		if (raw === MACHINE_ROOT || raw === MACHINE_ROOT + "/") {
+			const entries = await this.machineRootEntries();
+			this.host.emit({
+				type: "files",
+				path: MACHINE_ROOT,
+				parent: null,
+				entries,
+				truncated: false,
+				absolute: true,
+			});
+			return;
+		}
+
+		// ---- 绝对路径浏览（Windows 盘符 / posix "/"）：允许越过工作区根 ----
+		// 机器模式不设 watcher（工作区递归 watch 不覆盖别的盘），文件变动靠 10s 轮询。
+		if (isAbsoluteWirePath(raw)) {
+			const wire = normWirePath(raw);
+			const abs = wireToAbs(wire);
+			const { entries, truncated, error, errorCode } = await readDirForUI(abs, wire);
+			this.host.emit({
+				type: "files",
+				path: wire,
+				parent: absoluteParent(wire),
+				entries,
+				truncated,
+				absolute: true,
+			});
+			if (error) this.emitListError(wire, error, errorCode);
+			return;
+		}
+
+		// ---- 工作区相对视图（原有行为） ----
+		const target = raw ? resolve(root, raw) : root;
 		const rawRel = relative(root, target);
 		if (rawRel.startsWith("..") || rawRel.includes(`${sep}..`)) {
 			this.host.emit({
@@ -175,24 +319,19 @@ export class FilesService {
 		// Normalize to forward slashes: the wire protocol and the frontend
 		// always use "/", but relative() returns "\\" on Windows.
 		const rel = rawRel.split(sep).join("/");
-		const { entries, truncated, error } = await readDirForUI(target, rel);
-		// Watch the listed directory (only after a successful read — a missing
-		// dir throws above and must not create a watcher on a phantom path).
-		this.watchDir(target, rel);
+		const { entries, truncated, error, errorCode } = await readDirForUI(target, rel);
+		// Watch the listed directory only after a successful read — a missing
+		// dir must not create a watcher on a phantom path (issue #74).
 		if (error) {
-			// Windows-only: unreadable system dirs degrade to an empty list
-			// with a warning instead of a hard error — the panel stays usable.
-			this.host.emit({
-				type: "notice",
-				level: "warning",
-				text: `目录不可读：${error}`,
-				textEn: `Directory is not readable: ${error}`,
-			});
+			this.emitListError(rel === "" ? root : rel, error, errorCode);
+		} else {
+			this.watchDir(target, rel);
 		}
 		this.host.emit({
 			type: "files",
 			path: rel === "" ? "" : rel,
-			parent: rel === "" ? null : rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "",
+			// 工作区根也允许「上一级」→ 机器根（Windows 换盘符 / posix 到 /）。
+			parent: rel === "" ? MACHINE_ROOT : rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "",
 			entries,
 			truncated,
 		});
@@ -288,7 +427,7 @@ export class FilesService {
 		if (kind === "status") this.watchGitDir(cwd);
 		try {
 			if (kind === "status") {
-				const data = await scmStatus(cwd);
+				const data = await scmStatus(cwd, () => this.lang());
 				const discovered = await discoverGitRepos(workspaceRoot);
 				this.host.emit({
 					type: "scm_data",
@@ -302,7 +441,7 @@ export class FilesService {
 				return;
 			}
 			if (kind === "history") {
-				const history = await scmHistory(cwd);
+				const history = await scmHistory(cwd, () => this.lang());
 				this.host.emit({
 					type: "scm_data",
 					reqId,
@@ -318,8 +457,11 @@ export class FilesService {
 				// from our own listing, and execFile passes args verbatim anyway).
 				const { resolve, relative } = await import("node:path");
 				const rel = relative(resolve(cwd), resolve(cwd, arg.path));
-				if (rel.startsWith("..") || rel === "") throw new Error("路径超出工作区");
-				const { staged, worktree } = await scmFileDiff(cwd, arg.path);
+				if (rel.startsWith("..") || rel === "")
+					throw new Error(
+						pick(this.lang(), "路径超出工作区", "Path is outside the workspace", "files.path.outside.workspace"),
+					);
+				const { staged, worktree } = await scmFileDiff(cwd, arg.path, () => this.lang());
 				this.host.emit({
 					type: "scm_data",
 					reqId,
@@ -332,7 +474,7 @@ export class FilesService {
 				return;
 			}
 			if (kind === "commit" && arg?.hash && /^[0-9a-f]{7,40}$/i.test(arg.hash)) {
-				const text = await scmCommitDetail(cwd, arg.hash);
+				const text = await scmCommitDetail(cwd, arg.hash, () => this.lang());
 				this.host.emit({
 					type: "scm_data",
 					reqId,
@@ -343,7 +485,9 @@ export class FilesService {
 				});
 				return;
 			}
-			throw new Error("无有效 de scm 查询参数");
+			throw new Error(
+				pick(this.lang(), "无效的 scm 查询参数", "Invalid scm query arguments", "files.scm.invalid.args"),
+			);
 		} catch (err) {
 			const discovered = kind === "status" ? await discoverGitRepos(workspaceRoot) : [];
 			if (isNotRepoError(err)) {
@@ -550,17 +694,27 @@ export class FilesService {
 		try {
 			const fs = await import("node:fs/promises");
 			const root = this.host.getCwd();
-			const wp = workspacePath(resolve(root), relPath);
-			if (!wp) {
-				this.host.emit({
-					type: "notice",
-					level: "warning",
-					text: `路径超出工作区：${relPath}`,
-					textEn: `Path is outside the workspace: ${relPath}`,
-				});
-				return;
+			const absWire = isAbsoluteWirePath(relPath);
+			let abs: string;
+			let rel: string;
+			if (absWire) {
+				// 机器浏览：绝对路径直接读；回显用绝对 wire 形式（前端按 path 匹配）。
+				abs = wireToAbs(relPath);
+				rel = abs.split(sep).join("/");
+			} else {
+				const w = workspacePath(resolve(root), relPath);
+				if (!w) {
+					this.host.emit({
+						type: "notice",
+						level: "warning",
+						text: `路径超出工作区：${relPath}`,
+						textEn: `Path is outside the workspace: ${relPath}`,
+					});
+					return;
+				}
+				abs = w.abs;
+				rel = w.rel;
 			}
-			const { abs, rel } = wp;
 			const stat = await fs.stat(abs);
 			if (!stat.isFile()) {
 				this.host.emit({
@@ -640,15 +794,25 @@ export class FilesService {
 	async writeFile(relPath: string, text: string): Promise<void> {
 		try {
 			const root = this.host.getCwd();
-			const wp = workspacePath(resolve(root), relPath);
-			if (!wp) {
-				this.host.emit({
-					type: "notice",
-					level: "warning",
-					text: `路径超出工作区：${relPath}`,
-					textEn: `Path is outside the workspace: ${relPath}`,
-				});
-				return;
+			const absWire = isAbsoluteWirePath(relPath);
+			let abs: string;
+			let rel: string;
+			if (absWire) {
+				abs = wireToAbs(relPath);
+				rel = abs.split(sep).join("/");
+			} else {
+				const w = workspacePath(resolve(root), relPath);
+				if (!w) {
+					this.host.emit({
+						type: "notice",
+						level: "warning",
+						text: `路径超出工作区：${relPath}`,
+						textEn: `Path is outside the workspace: ${relPath}`,
+					});
+					return;
+				}
+				abs = w.abs;
+				rel = w.rel;
 			}
 			if (Buffer.byteLength(text, "utf8") > 2 * 1024 * 1024) {
 				this.host.emit({
@@ -659,7 +823,7 @@ export class FilesService {
 				});
 				return;
 			}
-			const stat = statSync(wp.abs);
+			const stat = statSync(abs);
 			if (!stat.isFile()) {
 				this.host.emit({
 					type: "notice",
@@ -669,16 +833,16 @@ export class FilesService {
 				});
 				return;
 			}
-			writeFileSync(wp.abs, text, "utf8");
+			writeFileSync(abs, text, "utf8");
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `已保存：${wp.rel}`,
-				textEn: `Saved: ${wp.rel}`,
+				text: `已保存：${rel}`,
+				textEn: `Saved: ${rel}`,
 			});
 			// Re-read through the same path as the preview request so the client
 			// gets the canonical content, line count and file size after saving.
-			await this.readFile(wp.rel);
+			await this.readFile(rel);
 		} catch (err) {
 			this.host.emit({
 				type: "notice",
@@ -697,16 +861,20 @@ export class FilesService {
 	 * for the target dir (the recursive watcher may not cover it on posix).
 	 */
 	async uploadFile(relDir: string, name: string, data: string): Promise<void> {
-		const emitErr = (text: string) => this.host.emit({ type: "notice", level: "error", text });
+		const emitErr = (text: string, textEn?: string) => this.host.emit({ type: "notice", level: "error", text, textEn });
 		try {
 			const root = this.host.getCwd();
+			const absDir = relDir ? isAbsoluteWirePath(relDir) : false;
 			let wp: { abs: string; rel: string } | null;
-			if (relDir) {
+			if (relDir && !absDir) {
 				wp = workspacePath(resolve(root), relDir);
 				if (!wp) {
-					emitErr(`路径超出工作区：${relDir}`);
+					emitErr(`路径超出工作区：${relDir}`, `Path outside workspace: ${relDir}`);
 					return;
 				}
+			} else if (relDir) {
+				// 机器浏览的目录（可能是盘符根 "C:"）：按绝对路径解析。
+				wp = { abs: wireToAbs(relDir), rel: wireToAbs(relDir).split(sep).join("/") };
 			} else {
 				wp = { abs: root, rel: "" };
 			}
@@ -715,18 +883,28 @@ export class FilesService {
 			const base = name.split(/[\\/]/).pop() ?? "";
 			const safe = (base.replace(/[/:*?"<>|\x00-\x1f]/g, "_").trim() || "file").slice(0, 200);
 			const abs = resolve(wp.abs, safe);
-			const rawRel = relative(root, abs);
-			if (rawRel.startsWith("..") || rawRel.includes(`${sep}..`)) {
-				emitErr(`文件名不合法：${name}`);
-				return;
+			let uploadRel: string;
+			if (absDir) {
+				// 绝对目录模式不再校验工作区归属（机器浏览）。
+				uploadRel = abs.split(sep).join("/");
+			} else {
+				const rawRel = relative(root, abs);
+				if (rawRel.startsWith("..") || rawRel.includes(`${sep}..`)) {
+					emitErr(`文件名不合法：${name}`, `Invalid file name: ${name}`);
+					return;
+				}
+				uploadRel = rawRel.split(sep).join("/");
 			}
 			const buf = Buffer.from(data, "base64");
 			if (buf.length === 0) {
-				emitErr(`空文件：${name}`);
+				emitErr(`空文件：${name}`, `Empty file: ${name}`);
 				return;
 			}
 			if (buf.length > MAX_UPLOAD_BYTES) {
-				emitErr(`文件过大：${name}（上限 ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB）`);
+				emitErr(
+					`文件过大：${name}（上限 ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB）`,
+					`File too large: ${name} (max ${Math.round(MAX_UPLOAD_BYTES / 1024 / 1024)}MB)`,
+				);
 				return;
 			}
 			mkdirSync(wp.abs, { recursive: true });
@@ -734,8 +912,8 @@ export class FilesService {
 			this.host.emit({
 				type: "notice",
 				level: "info",
-				text: `已上传：${rawRel.split(sep).join("/")}`,
-				textEn: `Uploaded: ${rawRel.split(sep).join("/")}`,
+				text: `已上传：${uploadRel}`,
+				textEn: `Uploaded: ${uploadRel}`,
 			});
 			// Emit for the target directory itself so the panel refreshes even
 			// when the active listing/preview isn't that dir (posix watcher only
@@ -745,7 +923,46 @@ export class FilesService {
 				path: wp.rel,
 			});
 		} catch (err) {
-			emitErr(`上传文件失败：${(err as Error).message}`);
+			emitErr(`上传文件失败：${(err as Error).message}`, `Upload failed: ${(err as Error).message}`);
+		}
+	}
+
+	/**
+	 * Create a folder. Accepts absolute, ~-prefixed or session-relative paths
+	 * (same expansion rules as completePath — the cwd picker may browse outside
+	 * the session root, and set_cwd itself accepts any directory). Answers
+	 * with a notice; the picker refreshes its listing on its own.
+	 */
+	async makeDir(input: string): Promise<void> {
+		try {
+			const fs = await import("node:fs/promises");
+			const { resolve, sep, isAbsolute } = await import("node:path");
+			const { homedir } = await import("node:os");
+			const home = homedir();
+			let expanded = input.trim();
+			if (!expanded) throw new Error(pick(this.lang(), "路径为空", "Empty path", "files.path.empty"));
+			if (expanded === "~" || expanded === "~\\") {
+				expanded = home;
+			} else if (expanded.startsWith("~/") || expanded.startsWith("~\\")) {
+				expanded = home + sep + expanded.slice(2);
+			} else if (!isAbsolute(expanded)) {
+				expanded = resolve(this.host.getCwd(), expanded);
+			}
+			const abs = resolve(expanded);
+			await fs.mkdir(abs, { recursive: true });
+			this.host.emit({
+				type: "notice",
+				level: "info",
+				text: `已创建文件夹：${abs}`,
+				textEn: `Folder created: ${abs}`,
+			});
+		} catch (err) {
+			this.host.emit({
+				type: "notice",
+				level: "error",
+				text: `创建文件夹失败：${(err as Error).message}`,
+				textEn: `Failed to create folder: ${(err as Error).message}`,
+			});
 		}
 	}
 
@@ -761,14 +978,67 @@ export class FilesService {
 			const { homedir } = await import("node:os");
 			const home = homedir();
 			const cwd = this.host.getCwd();
-
-			// Expand ~ and relative inputs to an absolute path. Windows users type
-			// backslashes (P:\agent) and ~\ — handle both separator styles.
-			let expanded = input.trim();
-			if (expanded === "") {
+			const isWin = IS_WIN32;
+			const rawInput = input.trim();
+			if (rawInput === "") {
 				empty();
 				return;
 			}
+
+			// ---- 机器根（此电脑/盘符列表）----
+			if (rawInput === MACHINE_ROOT || rawInput === MACHINE_ROOT + "/") {
+				this.host.emit({ type: "path_completions", completions: await this.machineRootEntries() });
+				return;
+			}
+
+			// ---- Windows 盘符输入："D"（补全到盘符，Tab 即换盘）/ "D:"（列盘根）----
+			if (isWin && /^[A-Za-z]:?$/.test(rawInput)) {
+				const letter = rawInput[0].toUpperCase();
+				const drive = `${letter}:`;
+				let st: { isDirectory(): boolean };
+				try {
+					st = await fs.stat(`${drive}\\`);
+				} catch {
+					empty();
+					return;
+				}
+				if (!st.isDirectory()) {
+					empty();
+					return;
+				}
+				if (rawInput.length === 2) {
+					// 已带冒号：直接列出盘根条目。
+					const dirents = await fs.readdir(`${drive}\\`, { withFileTypes: true }).catch(() => null);
+					if (!dirents) {
+						empty();
+						return;
+					}
+					const items = dirents
+						.filter((d) => !ignoredEntries().has(d.name))
+						.map((d) => ({
+							name: d.name,
+							path: `${drive}/${d.name}`,
+							type: (d.isDirectory() ? "dir" : "file") as "dir" | "file",
+						}))
+						.sort((a, b) => {
+							const aHidden = a.name.startsWith(".");
+							const bHidden = b.name.startsWith(".");
+							if (aHidden !== bHidden) return aHidden ? 1 : -1;
+							if (a.type !== b.type) return a.type === "dir" ? -1 : 1;
+							return a.name.localeCompare(b.name);
+						})
+						.slice(0, 100);
+					this.host.emit({ type: "path_completions", completions: items });
+					return;
+				}
+				// 只有字母：补全到盘符本身。
+				this.host.emit({ type: "path_completions", completions: [{ name: drive, path: drive, type: "dir" }] });
+				return;
+			}
+
+			// Expand ~ and relative inputs to an absolute path. Windows users type
+			// backslashes (P:\agent) and ~\ — handle both separator styles.
+			let expanded = rawInput;
 			if (expanded === "~" || expanded === "~\\") {
 				expanded = home;
 			} else if (expanded.startsWith("~/") || expanded.startsWith("~\\")) {

@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { FiLayers, FiRefreshCw, FiSquare, FiTerminal, FiX } from "react-icons/fi";
-import type { BgServer, ClientMessage } from "../types";
+import type { BgServer } from "../types";
 import { useT } from "../i18n";
+import { appSend } from "../app-globals";
 
 interface BgTasksModalProps {
 	servers: BgServer[];
-	send: (msg: ClientMessage) => boolean;
 	onClose: () => void;
 }
 
@@ -27,7 +27,7 @@ function formatSince(since: number, t: ReturnType<typeof useT>): string {
  * conversation ends and reconnects — it only empties when tasks are stopped or
  * their processes exit on their own.
  */
-export function BgTasksModal({ servers, send, onClose }: BgTasksModalProps) {
+export function BgTasksModal({ servers, onClose }: BgTasksModalProps) {
 	const t = useT();
 	// Which tasks have their command line expanded (default: one truncated line
 	// + hover tooltip; click toggles full wrap so long commands stay readable).
@@ -43,7 +43,7 @@ export function BgTasksModal({ servers, send, onClose }: BgTasksModalProps) {
 
 	// Ask the server for a fresh list (it prunes dead entries) on open.
 	useEffect(() => {
-		send({ type: "list_bg_servers" });
+		appSend({ type: "list_bg_servers" });
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, []);
 
@@ -115,8 +115,8 @@ export function BgTasksModal({ servers, send, onClose }: BgTasksModalProps) {
 										title={t("bgTaskStop")}
 										onClick={() =>
 											isPlugin
-												? send({ type: "kill_background_server", taskId: s.taskId })
-												: send({ type: "kill_background_server", port: s.port })
+												? appSend({ type: "kill_background_server", taskId: s.taskId })
+												: appSend({ type: "kill_background_server", port: s.port })
 										}
 									>
 										<FiSquare />
@@ -133,7 +133,7 @@ export function BgTasksModal({ servers, send, onClose }: BgTasksModalProps) {
 						type="button"
 						className="btn"
 						title={t("bgTaskRefresh")}
-						onClick={() => send({ type: "list_bg_servers" })}
+						onClick={() => appSend({ type: "list_bg_servers" })}
 					>
 						<FiRefreshCw />
 						<span>{t("bgTaskRefresh")}</span>
@@ -143,7 +143,7 @@ export function BgTasksModal({ servers, send, onClose }: BgTasksModalProps) {
 						className="btn bg-task-stopall"
 						disabled={servers.length === 0}
 						title={t("bgTaskStopAll")}
-						onClick={() => send({ type: "kill_background_servers" })}
+						onClick={() => appSend({ type: "kill_background_servers" })}
 					>
 						<FiSquare />
 						<span>{t("bgTaskStopAll")}</span>

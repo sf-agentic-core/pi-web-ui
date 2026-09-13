@@ -81,6 +81,28 @@ function serializeAssistantContent(content: Extract<AgentMessage, { role: "assis
 	});
 }
 
+/**
+ * Hide transient LLM failures while an auto-retry is pending.
+ *
+ * The SDK finalizes the failed assistant message (message_end, then agent_end
+ * with willRetry) BEFORE it slices the message out of state and backs off, so
+ * a snapshot taken in between would paint a red error that vanishes one frame
+ * later. While `retryActive` the trailing stopReason=error assistant messages
+ * are intermediate state: dropped here (retry success → the user never sees
+ * them; exhaustion → auto_retry_end clears the flag and the message renders
+ * red permanently). Non-trailing content is never touched.
+ */
+export function stripTransientRetryErrors(messages: UiMessage[], retryActive: boolean): UiMessage[] {
+	if (!retryActive) return messages;
+	let end = messages.length;
+	while (end > 0) {
+		const m = messages[end - 1];
+		if (m.role === "assistant" && m.stopReason === "error") end -= 1;
+		else break;
+	}
+	return end === messages.length ? messages : messages.slice(0, end);
+}
+
 export function serializeMessage(m: AgentMessage, seq: number): UiMessage | null {
 	switch (m.role) {
 		case "user":
@@ -170,6 +192,7 @@ export function serializeMessage(m: AgentMessage, seq: number): UiMessage | null
 				role: "compactionSummary",
 				content: [{ type: "text", text, truncated }],
 				timestamp: m.timestamp,
+				tokensBefore: (m as { tokensBefore?: unknown }).tokensBefore as number | undefined,
 			};
 		}
 

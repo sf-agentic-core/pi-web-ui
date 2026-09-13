@@ -2,13 +2,13 @@ import { useEffect, useRef, useState } from "react";
 import { randomUuid } from "../uuid";
 import { FiEdit2, FiMenu, FiPlay, FiPlus, FiRefreshCw, FiTerminal, FiTrash2, FiX } from "react-icons/fi";
 import type { ChatState, TerminalMeta } from "../use-chat";
-import type { ClientMessage, CommandDef } from "../types";
+import type { CommandDef } from "../types";
 import { TermXterm } from "./TermXterm";
 import { useT } from "../i18n";
+import { appSend } from "../app-globals";
 
 interface TerminalPanelProps {
 	chat: ChatState;
-	send: (msg: ClientMessage) => boolean;
 	terminal: {
 		create: (meta: TerminalMeta) => void;
 		close: (id: string) => void;
@@ -36,7 +36,7 @@ const EMPTY_DRAFT: Draft = { name: "", command: "", cwd: "${pwd}" };
  *          (on mobile this whole column slides in as a drawer)
  *   right: the active terminal (one xterm per tab, kept mounted)
  */
-export function TerminalPanel({ chat, send, terminal }: TerminalPanelProps) {
+export function TerminalPanel({ chat, terminal }: TerminalPanelProps) {
 	const t = useT();
 	const [activeId, setActiveId] = useState<string | null>(null);
 	// Mobile: the left column (commands + tabs) slides in as a drawer.
@@ -50,6 +50,8 @@ export function TerminalPanel({ chat, send, terminal }: TerminalPanelProps) {
 	const confirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 	// 终端接管 bash 的「AI bash」折叠分组开关（默认展开）。
 	const [aiBashOpen, setAiBashOpen] = useState(true);
+	const [renamingTab, setRenamingTab] = useState<string | null>(null);
+	const [renameDraft, setRenameDraft] = useState("");
 
 	// When the connection drops the server kills all PTYs and the reducer clears
 	// the tab list — make sure the active selection doesn't dangle.
@@ -116,7 +118,7 @@ export function TerminalPanel({ chat, send, terminal }: TerminalPanelProps) {
 		if (existing) {
 			terminal.restart(existing.id);
 			setActiveId(existing.id);
-			send({
+			appSend({
 				type: "run_command",
 				terminalId: existing.id,
 				conversationId: existing.conversationId,
@@ -131,7 +133,7 @@ export function TerminalPanel({ chat, send, terminal }: TerminalPanelProps) {
 
 	const closeTab = (id: string) => {
 		const tab = chat.terminals.find((item) => item.id === id);
-		if (tab) send({ type: "terminal_kill", terminalId: id, conversationId: tab.conversationId });
+		if (tab) appSend({ type: "terminal_kill", terminalId: id, conversationId: tab.conversationId });
 		terminal.close(id);
 		if (activeId === id) {
 			const rest = chat.terminals.filter((t) => t.id !== id);
@@ -147,13 +149,37 @@ export function TerminalPanel({ chat, send, terminal }: TerminalPanelProps) {
 				className="term-tab-main"
 				title={`${tab.cwd}${tab.command ? `\n> ${tab.command.command}` : ""}`}
 				onClick={() => {
+					if (renamingTab) return;
 					setActiveId(tab.id);
 					setSideOpen(false);
 				}}
 			>
 				<span className={`term-tab-dot ${tab.running ? "run" : "exit"}`} />
 				<span className="term-tab-title">
-					{tab.title}
+					{renamingTab === tab.id ? (
+						<input
+							autoFocus
+							className="term-tab-rename-input"
+							value={renameDraft}
+							placeholder={tab.title}
+							onClick={(e) => e.stopPropagation()}
+							onChange={(e) => setRenameDraft(e.target.value)}
+							onKeyDown={(e) => {
+								e.stopPropagation();
+								if (e.key === "Enter" && !e.nativeEvent.isComposing) {
+									const title = renameDraft.trim();
+									if (title)
+										appSend({ type: "rename_terminal", terminalId: tab.id, conversationId: tab.conversationId, title });
+									setRenamingTab(null);
+								} else if (e.key === "Escape") {
+									setRenamingTab(null);
+								}
+							}}
+							onBlur={() => setRenamingTab(null)}
+						/>
+					) : (
+						tab.title
+					)}
 					{!tab.running && (
 						<span className="term-tab-exit">
 							{t("exited", {
@@ -162,6 +188,18 @@ export function TerminalPanel({ chat, send, terminal }: TerminalPanelProps) {
 						</span>
 					)}
 				</span>
+			</button>
+			<button
+				type="button"
+				className="term-tab-close term-tab-rename"
+				title={t("renameTerminal")}
+				onClick={(e) => {
+					e.stopPropagation();
+					setRenameDraft(tab.title);
+					setRenamingTab(tab.id);
+				}}
+			>
+				<FiEdit2 />
 			</button>
 			<button type="button" className="term-tab-close" title={t("closeTerminal")} onClick={() => closeTab(tab.id)}>
 				<FiX />
@@ -201,14 +239,14 @@ export function TerminalPanel({ chat, send, terminal }: TerminalPanelProps) {
 			: editingIdx !== null
 				? chat.commands.map((c, i) => (i === editingIdx ? def : c))
 				: chat.commands;
-		send({ type: "save_commands", commands: next });
+		appSend({ type: "save_commands", commands: next });
 		cancelEdit();
 	};
 
 	const requestDelete = (idx: number) => {
 		if (confirmDel === idx) {
 			const next = chat.commands.filter((_, i) => i !== idx);
-			send({ type: "save_commands", commands: next });
+			appSend({ type: "save_commands", commands: next });
 			setConfirmDel(null);
 			if (confirmTimer.current) clearTimeout(confirmTimer.current);
 		} else {
@@ -231,7 +269,7 @@ export function TerminalPanel({ chat, send, terminal }: TerminalPanelProps) {
 							type="button"
 							className="panel-refresh"
 							title={t("rerun")}
-							onClick={() => send({ type: "list_commands" })}
+							onClick={() => appSend({ type: "list_commands" })}
 						>
 							<FiRefreshCw />
 						</button>
@@ -377,7 +415,8 @@ export function TerminalPanel({ chat, send, terminal }: TerminalPanelProps) {
 							cwd={t.cwd}
 							title={t.title}
 							active={t.id === activeId}
-							send={send}
+							running={t.running}
+							exitCode={t.exitCode}
 							register={terminal.register}
 						/>
 					))

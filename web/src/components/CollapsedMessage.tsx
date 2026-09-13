@@ -1,5 +1,5 @@
 import { memo } from "react";
-import { FiChevronDown } from "react-icons/fi";
+import { FiChevronRight } from "react-icons/fi";
 import type { UiMessage } from "../types";
 import { useT } from "../i18n";
 import { asBash, asImage, asText, asThinking, asToolCall, roleLabel } from "./Message";
@@ -62,12 +62,19 @@ export const CollapsedMessage = memo(function CollapsedMessage({ message, onExpa
 	if (images) chips.push(`${t("images")} ${images}`);
 
 	return (
-		<button
-			type="button"
+		<div
+			role="button"
+			tabIndex={0}
 			className="msg-collapsed"
 			data-msg-id={message.id}
 			title={`${t("expandMsg")} · ${preview || chips.join(" · ") || message.role}`}
 			onClick={() => onExpand(message.id)}
+			onKeyDown={(e) => {
+				if (e.key === "Enter" || e.key === " ") {
+					e.preventDefault();
+					onExpand(message.id);
+				}
+			}}
 		>
 			<span className={`msg-collapsed-role role-${message.role}`}>
 				{message.role === "custom" && message.customType === "file" ? t("attachment") : roleLabel(message.role, t)}
@@ -86,9 +93,9 @@ export const CollapsedMessage = memo(function CollapsedMessage({ message, onExpa
 			</span>
 			{message.timestamp ? <span className="msg-collapsed-time">{formatTime(message.timestamp)}</span> : null}
 			<span className="msg-collapsed-action">
-				<FiChevronDown /> {t("expandMsg")}
+				<FiChevronRight /> {t("expandMsg")}
 			</span>
-		</button>
+		</div>
 	);
 });
 

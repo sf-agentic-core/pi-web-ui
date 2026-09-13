@@ -27,13 +27,19 @@ export default {
 		.mbx .meta { display: flex; gap: 10px; opacity: .65; font-size: 12px; margin-bottom: 4px; }
 		.mbx form { display: grid; grid-template-columns: 1fr 2fr auto; gap: 8px; margin: 14px 0; }
 		.mbx input, .mbx textarea {
-			background: var(--bg-elev1, #16161d); color: inherit;
+			background: var(--bg-elev, #16161d); color: inherit;
 			border: 1px solid var(--border, #333); border-radius: 6px; padding: 6px 8px;
 			font: inherit; resize: vertical;
 		}
 		.mbx button {
 			background: var(--accent, #7c5cff); color: #fff; border: 0;
 			border-radius: 6px; padding: 6px 14px; cursor: pointer; font: inherit;
+		}
+		/* 手机竖屏：表单单列（textarea 本来就占 1/-1），大字号防 iOS 聚焦缩放，按钮全宽高点击区 */
+		@media (max-width: 640px) {
+			.mbx form { grid-template-columns: 1fr; }
+			.mbx input, .mbx textarea { font-size: 16px; }
+			.mbx button { min-height: 40px; width: 100%; }
 		}
 	</style>
 	<h2>📬 邮箱 <small style="opacity:.5;font-weight:normal">插件视图示例</small></h2>

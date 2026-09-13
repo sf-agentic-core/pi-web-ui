@@ -51,6 +51,55 @@ export async function snapshotListeningPorts(): Promise<Map<number, number>> {
 	return m;
 }
 
+/**
+ * Snapshot every process's parent pid → Map<pid, ppid>. Windows: one
+ * PowerShell CIM pass (avoids spawning PowerShell once per pid); POSIX:
+ * one `ps -Ao pid=,ppid=` pass. Returns undefined when the whole query
+ * fails — callers should treat that as "cannot verify, stay conservative".
+ */
+export async function snapshotProcessParents(): Promise<Map<number, number> | undefined> {
+	try {
+		const { execFile } = await import("node:child_process");
+		const m = new Map<number, number>();
+		if (process.platform === "win32") {
+			const out = await new Promise<string>((resolve, reject) =>
+				execFile(
+					"powershell.exe",
+					[
+						"-NoProfile",
+						"-NonInteractive",
+						"-Command",
+						'Get-CimInstance Win32_Process | ForEach-Object { "$($_.ProcessId):$($_.ParentProcessId)" }',
+					],
+					{ windowsHide: true, timeout: 10000 },
+					(err, stdout) => (err ? reject(err) : resolve(stdout)),
+				),
+			);
+			for (const line of out.split(/\r?\n/)) {
+				const [pid, ppid] = line.trim().split(":").map(Number);
+				if (Number.isFinite(pid) && Number.isFinite(ppid)) m.set(pid, ppid);
+			}
+		} else {
+			const out = await new Promise<string>((resolve, reject) =>
+				execFile("ps", ["-Ao", "pid=,ppid="], { timeout: 5000 }, (err, stdout) =>
+					err ? reject(err) : resolve(stdout),
+				),
+			);
+			for (const line of out.split(/\r?\n/)) {
+				const p = line.trim().split(/\s+/);
+				if (p.length >= 2) {
+					const pid = Number(p[0]);
+					const ppid = Number(p[1]);
+					if (Number.isFinite(pid) && Number.isFinite(ppid)) m.set(pid, ppid);
+				}
+			}
+		}
+		return m;
+	} catch {
+		return undefined;
+	}
+}
+
 /** Kill a pid and its whole process tree (cross-platform). */
 export function killPidTree(pid: number): void {
 	try {

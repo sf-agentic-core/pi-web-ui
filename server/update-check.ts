@@ -7,9 +7,9 @@
  * (and an injected pi-core probe); ClientSession only wires it to the wire
  * protocol.
  */
-import { spawnSync } from "node:child_process";
-import { readdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, realpathSync, existsSync } from "node:fs";
+import { delimiter, dirname, join } from "node:path";
+import { pick, type ServerLang } from "./i18n.js";
 
 const PI_CORE_PACKAGE = "@earendil-works/pi-coding-agent";
 
@@ -169,32 +169,67 @@ function readLocalPackage(dir: string): LocalPackage | null {
 	}
 }
 
-/** Uncached pi core probe (memoized machine-wide below). */
-function rawProbePiCore(): string | null {
-	try {
-		const res = spawnSync("pi", ["--version"], {
-			timeout: 5000,
-			stdio: "pipe",
-			shell: process.platform === "win32",
-		});
-		if (res.error || res.status !== 0) return null;
-		return parsePiVersionOutput(res.stdout?.toString() ?? "");
-	} catch {
-		return null;
-	}
-}
-
 /** How long a pi probe result stays hot (mirrors ClientSession.piCliProbe). */
 const PI_PROBE_TTL_MS = 10_000;
+
+let piCoreProbe: { at: number; version: string | null } | null = null;
+
+/** Locate the pi CLI on PATH without spawning anything. */
+function piCliOnPath(): string | null {
+	const dirs = (process.env.PATH ?? "").split(delimiter);
+	for (const dir of dirs) {
+		if (!dir) continue;
+		const candidate = join(dir, "pi");
+		if (existsSync(candidate)) return candidate;
+	}
+	return null;
+}
+
+/**
+ * Read the pi core version from disk: resolve the `pi` bin (typically a
+ * symlink into <global>/node_modules/<pkg>/dist/bundle/cli.js) and walk up to
+ * its package.json. FORK-FREE by design — see the note on defaultProbePiCore.
+ */
+function readPiCoreVersionFromDisk(): string | null {
+	const bin = piCliOnPath();
+	if (!bin) return null;
+	try {
+		let dir = dirname(realpathSync(bin));
+		for (let i = 0; i < 8; i++) {
+			const pkgPath = join(dir, "package.json");
+			if (existsSync(pkgPath)) {
+				try {
+					const pkg = JSON.parse(readFileSync(pkgPath, "utf8")) as { name?: string; version?: string };
+					if (pkg.name === PI_CORE_PACKAGE && pkg.version) return pkg.version;
+				} catch {
+					/* unreadable package.json — keep walking */
+				}
+			}
+			const parent = dirname(dir);
+			if (parent === dir) break;
+			dir = parent;
+		}
+	} catch {
+		/* ignore */
+	}
+	return null;
+}
 
 /**
  * Default pi core probe: run the globally installed `pi --version`, memoized
  * machine-wide for PI_PROBE_TTL_MS so repeated collectTargets calls never
- * re-block the event loop on a 5s spawnSync. Null on any failure or absence.
- * Mirrors ClientSession.isPiCliInstalled() (same spawnSync shape; Windows
- * resolves `pi` to a pi.cmd shim that only execs through a shell).
+ * re-probe. Reads the version from disk (pi bin → realpath → package.json)
+ * instead of spawning `pi --version`. FORK-FREE by design — see the note on
+ * defaultProbePiCore.
  */
-export const defaultProbePiCore = memoizeWithTtl(rawProbePiCore, PI_PROBE_TTL_MS);
+export function defaultProbePiCore(): string | null {
+	const now = Date.now();
+	const cached = piCoreProbe;
+	if (cached && now - cached.at < PI_PROBE_TTL_MS) return cached.version;
+	const version = readPiCoreVersionFromDisk();
+	piCoreProbe = { at: now, version };
+	return version;
+}
 
 /**
  * Fallback when the CLI probe yields nothing: the version of the vendored pi
@@ -272,7 +307,13 @@ export async function fetchLatest(
  * error item (upToDate: false) without failing the rest. Results keep the
  * input order. Bounded concurrency (CONCURRENCY) keeps registry load polite.
  */
-export async function checkAll(targets: LocalPackage[], fetcher: Fetcher = defaultFetcher): Promise<UpdateItem[]> {
+export async function checkAll(
+	targets: LocalPackage[],
+	fetcher: Fetcher = defaultFetcher,
+	/** 单项 registry 查询失败时的 error 文案语言（默认英文）。 */
+	lang?: () => ServerLang,
+): Promise<UpdateItem[]> {
+	const l = lang?.() ?? "en";
 	const results: UpdateItem[] = Array.from({ length: targets.length }) as UpdateItem[];
 	let cursor = 0;
 	async function worker() {
@@ -290,6 +331,7 @@ export async function checkAll(targets: LocalPackage[], fetcher: Fetcher = defau
 					upToDate: latest === null || compareVersions(t.version, latest) >= 0,
 				};
 			} catch (err) {
+				const errMessage = (err as Error).message;
 				results[i] = {
 					name: t.name,
 					kind: t.kind,
@@ -297,7 +339,13 @@ export async function checkAll(targets: LocalPackage[], fetcher: Fetcher = defau
 					latest: null,
 					latestPublishedAt: null,
 					upToDate: false,
-					error: `检查更新失败：${(err as Error).message}`,
+					error: pick(
+						l,
+						`检查更新失败：${errMessage}`,
+						`Failed to check for updates: ${errMessage}`,
+						"updatecheck.check.failed",
+						{ errMessage },
+					),
 				};
 			}
 		}

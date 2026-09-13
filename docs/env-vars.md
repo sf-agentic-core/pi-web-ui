@@ -16,10 +16,15 @@
 | `PI_WEB_HOST` | `127.0.0.1` | 监听地址。**默认只绑 loopback**（本地个人工具，不暴露到网络）；局域网/容器访问需显式 `0.0.0.0`（docker-compose 已内置） |
 | `PI_WEB_ALLOW_ORIGINS` | 空 | 逗号分隔的额外 Origin 白名单（如 `http://localhost:5173` dev 代理、反代场景），用于绕过 WS 的 Origin/Host 同权威校验 |
 | `PI_WEB_ALLOW_HOSTS` | 空 | 可选严格模式：设置了才启用，请求 Host 的 hostname 必须在此白名单（逗号分隔） |
-| `PI_WEB_TOKEN` | 空 | **可选共享口令鉴权**：设置后所有 HTTP/WS 请求必须携带（`Authorization: Bearer` / `X-PI-Token` 头、`?token=` 参数或 `pi_web_token` cookie 任一匹配；浏览器首次经 `?token=xxx` 进入后存 localStorage 并下发 HttpOnly cookie）；`/api/health` 保持开放供探针，但**绝不因命中 `/api/health` 就反射下发真实 token cookie**（issue #45，仅当请求确实携带有效 token 才 `Set-Cookie`）。前端 `web/src/auth-token.ts` 统一注入；回归：`tests/token-auth-test.mjs`（端口 8975） || `PI_WEB_ENGINE` | `pi` | 智能体引擎：`pi`（SDK 进程内）或 `dsh`（DeepSeek Harness 子进程，见 docs/dsh-engine.md）——重启生效 |
+| `PI_WEB_TOKEN` | 空 | **可选共享口令鉴权**：设置后所有 HTTP/WS 请求必须携带（`Authorization: Bearer` / `X-PI-Token` 头、`?token=` 参数或 `pi_web_token` cookie 任一匹配；浏览器首次经 `?token=xxx` 进入后存 localStorage 并下发 HttpOnly cookie）；`/api/health` 保持开放供探针，但**绝不因命中 `/api/health` 就反射下发真实 token cookie**（issue #45，仅当请求确实携带有效 token 才 `Set-Cookie`）。**cookie 生命周期（issue #71）**：每次请求携带有效 token 即把 cookie 刷新为当前值；服务端改了口令后，旧 cookie 会在 401 时被自动过期清除，再经一次正确的 `?token=` 进入即永久恢复，**无需清缓存**。前端 `web/src/auth-token.ts` 统一注入；回归：`tests/token-auth-test.mjs`（端口 8975） || `PI_WEB_ENGINE` | `pi` | 智能体引擎：`pi`（SDK 进程内）或 `dsh`（DeepSeek Harness 子进程，见 docs/dsh-engine.md）——重启生效 |
 | `PI_WEB_DSH_RUNTIME` | 自动解析 | DSH 运行时树根（含 `@deepseek-ai/dsh-base` 的 node_modules；默认按 本包→execPath 邻近→`npm root -g` 顺序解析，支持全局 `dsh` 嵌套树） |
 | `PI_WEB_DSH_DATA_DIR` | `PI_WEB_DATA_DIR` | DSH 专用数据目录（用户 patch 层 `<dir>/dsh-patches/*.yml` 所在；launcher 读） |
 | `PI_WEB_DSH_PATCH_DIR` | 空 | 用户 patch 目录的显式覆盖（优先级高于 `PI_WEB_DSH_DATA_DIR` 推导） |
 | `PI_WEB_DSH_QUESTION_TIMEOUT_MS` | `600000` (10 分钟) | 模型 ask_user_question 提问桥超时（前端显示倒计时，归零自动取消） |
 | `PI_WEB_DSH_SESSION_RETENTION_DAYS` | `90` | dsh 会话 JSONL 保留天数（启动 10s 首清 + 每 24h 幂等清理）；0 = 关闭清理 |
 | `PI_WEB_DSH_DEBUG` | 空 | `1` 时把 DSH 运行时 RPC 帧与生命周期事件打到 stderr（诊断用，默认关） |
+| `PI_WEB_LOCALE_BASE_URL` | `https://raw.githubusercontent.com/xing-shuyin/pi-web-ui` | 语言包下载根：`locales/<code>.json` 先试 `v<版本>` tag、再回落 `main` 分支；key 缺失自动回落英文，版本错位可容忍；离线可手工把 JSON 放进 `<dataDir>/locales/` |
+| `PI_WEB_LOCALE` | 空 | 首访默认语言（fallback，非覆盖）：无显式选择且浏览器语言无可用包时用；不认识的值忽略回英文；设 `zh` 可恢复旧行为（新访客默认中文） |
+| `PI_WEB_MANAGED` | 空 | `1`/`true`/`yes`/`on` 时该实例由部署方统一管理：服务端拒绝 `check_update`/`check_updates_all`/`install_pi_agent`/`plugin_catalog_add`，前端隐藏更新徽标/面板与插件市场（服务端拒绝为主，前端仅隐藏）。适用于 Docker/发行版/发布管线等由外部更新软件的场景；不设则行为不变（见 server/managed.ts） |
+| `PI_WEB_TABS` | 空 | 逗号分隔的页签白名单（如 `chat,search,settings`）：前端不画被排除页签，服务端拒绝其消息（`terminal_*`/`run_command`、`scm_*`、后台任务、两个搜索），`chat` 永不可关；未知名保留不拒绝；缺省 = 全部页签（见 server/tabs.ts） |
+| `PI_WEB_LAUNCHED_BY` / `PI_WEB_SERVICE_NAME` | 空 | **由 `pi-web-ui server install` 写进服务单元/启动脚本**（不用手设）：前者固定为 `service`，后者为服务名（`--name`，默认 `pi-web-ui`）。服务端读它得出「本实例由平台服务托管」（见 server/launch-origin.ts），据此在更新面板给出「重启服务」按钮（退出后 supervisor 会拉起：launchd/systemd/Windows watchdog）。已装好的老服务没有这两个变量，服务端回落到运行时判据（macOS `XPC_SERVICE_NAME`、Linux `INVOCATION_ID`+cgroup、Windows `%APPDATA%\pi-web-ui\<name>.pid` 对比 `process.ppid`），效果相同 |

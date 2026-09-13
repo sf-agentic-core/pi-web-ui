@@ -1,7 +1,8 @@
 /* Source-control (Git) panel E2E test.
  * Boots the compiled server against a throwaway git repo and drives the real
  * browser UI: status list, per-file diff, commit through the terminal bridge,
- * clean-tree auto-refresh, and branch switching.
+ * clean-tree auto-refresh, branch switching, and the resizable left sidebar
+ * (#139: drag the divider, width survives a reload, double-click resets).
  * Run:  npm run build && node scm-test.mjs */
 import { spawn, execSync } from "node:child_process";
 import { mkdtempSync, realpathSync, writeFileSync, rmSync } from "node:fs";
@@ -9,6 +10,7 @@ import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright-core";
+import { CHROME_PATH } from "./lib/chrome.mjs";
 
 const here = dirname(dirname(fileURLToPath(import.meta.url))); // tests/ → repo root
 const NODE = realpathSync(process.execPath); // fnm shim → real installation
@@ -19,7 +21,8 @@ const repo = join(workdir, "repo");
 const dataDir = join(workdir, "data");
 process.env.PI_WEB_CWD = repo; // the workspace the panel inspects
 process.env.PI_WEB_DATA_DIR = dataDir;
-const CHROME = "C:/Program Files/Google/Chrome/Application/chrome.exe";
+// Chrome 路径逐平台探测（PI_WEB_CHROME 可覆盖；不再写死本机路径）
+const CHROME = CHROME_PATH;
 
 // ---- set up a throwaway git repo with a modification + an untracked file ----
 execSync("mkdir repo", { cwd: workdir, stdio: "ignore" });
@@ -199,9 +202,9 @@ async function main() {
 	);
 	check("untracked file shows note", true);
 
-	// -- commit through the terminal bridge -----------------------------------
+	// -- commit through the terminal bridge (Commit All → git add -A && git commit) -----
 	await page.locator(".scm-commit-input").fill("my first commit");
-	await page.click(".scm-header button.btn.primary");
+	await page.click('.scm-header button:has-text("全部提交"), .scm-header button:has-text("Commit All")');
 	await page.waitForSelector('.view-switch button[aria-selected="true"]:has-text("终端")', {
 		timeout: 5000,
 	});
@@ -240,6 +243,46 @@ async function main() {
 		"newfile.txt committed too (git add -A)",
 		execSync("git status --porcelain", { cwd: repo }).toString().trim() === "",
 	);
+
+	// -- resizable left sidebar (#139) ----------------------------------------
+	// 分隔条拖动改宽度 → 存档到 localStorage → 刷新后保持 → 双击复位。
+	await page.click('.view-switch button:has-text("Git")');
+	await page.waitForSelector(".scm-divider", { timeout: 5000 });
+	const readSidebarWidth = () =>
+		page.locator(".scm-files").evaluate((el) => Math.round(el.getBoundingClientRect().width));
+	const readStoredWidth = () => page.evaluate(() => localStorage.getItem("pi-web-ui:scm-sidebar-width"));
+	const startWidth = await readSidebarWidth();
+	check("sidebar starts at the 300px default", startWidth === 300);
+
+	const dividerBox = await page.locator(".scm-divider").boundingBox();
+	await page.mouse.move(dividerBox.x + dividerBox.width / 2, dividerBox.y + dividerBox.height / 2);
+	await page.mouse.down();
+	await page.mouse.move(dividerBox.x + dividerBox.width / 2 + 120, dividerBox.y + dividerBox.height / 2, {
+		steps: 8,
+	});
+	await page.mouse.up();
+	await sleep(200);
+	const draggedWidth = await readSidebarWidth();
+	check("dragging the divider widens the sidebar (+120px)", Math.abs(draggedWidth - 420) <= 2, `width=${draggedWidth}`);
+	check("dragged width is persisted", (await readStoredWidth()) === String(draggedWidth));
+
+	// 刷新页面：宽度记忆生效（跨会话/跨刷新）
+	await page.reload();
+	await page.waitForSelector(".topbar", { timeout: 20000 });
+	await sleep(600);
+	const skipAgain = page.locator("button:has-text('跳过'), button:has-text('Skip')").first();
+	if (await skipAgain.isVisible().catch(() => false)) await skipAgain.click();
+	await page.click('.view-switch button:has-text("Git")');
+	await page.waitForSelector(".scm-divider", { timeout: 5000 });
+	await sleep(300);
+	const restoredWidth = await readSidebarWidth();
+	check("width survives a page reload", Math.abs(restoredWidth - draggedWidth) <= 2, `width=${restoredWidth}`);
+
+	// 双击复位 → 回到默认宽度，存档同步更新
+	await page.locator(".scm-divider").dblclick();
+	await sleep(200);
+	check("double-click resets to 300px", (await readSidebarWidth()) === 300);
+	check("reset is persisted too", (await readStoredWidth()) === "300");
 
 	// -- branch switching ------------------------------------------------------
 	execSync("git branch feature-x", { cwd: repo, stdio: "ignore" });

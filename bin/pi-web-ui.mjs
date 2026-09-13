@@ -62,7 +62,21 @@ try {
 	// version is best-effort — the server itself doesn't need it
 }
 
-const HELP = `pi-web-ui v${pkg.version} — web chat for the pi coding agent
+/** Detect if the user prefers Chinese locale: POSIX env vars win, then Intl API fallback. */
+function isZhLang() {
+	const env = process.env.LC_ALL || process.env.LC_MESSAGES || process.env.LANG || "";
+	if (env.startsWith("zh")) return true;
+	if (!env) {
+		try {
+			return Intl.DateTimeFormat().resolvedOptions().locale.startsWith("zh");
+		} catch {
+			/* ignore */
+		}
+	}
+	return false;
+}
+
+const HELP_ZH = `pi-web-ui v${pkg.version} — web chat for the pi coding agent
 
 用法:
   pi-web-ui                               启动服务器（前台，Ctrl+C 停止，自动打开浏览器）
@@ -109,6 +123,55 @@ server 选项:
   鉴权口令 PI_WEB_TOKEN：仅环境变量（不走命令行，避免被 ps 看到），需要时手动加入服务配置。
 `;
 
+const HELP_EN = `pi-web-ui v${pkg.version} — web chat for the pi coding agent
+
+Usage:
+  pi-web-ui                               Start server (foreground, Ctrl+C to stop, auto-opens browser)
+  pi-web-ui --engine dsh --port 9000 --cwd /path      Start with engine/port/cwd/data-dir overrides
+  pi-web-ui --no-browser                   Start without auto-opening browser
+  pi-web-ui server install [options]       Install system service (autostart on boot) and launch it
+  pi-web-ui server shortcut [options]      Create desktop "one-click start" icon
+  pi-web-ui server uninstall [options]     Uninstall system service (also removes desktop icon)
+  pi-web-ui server start|stop|restart|status [options]
+  pi-web-ui server quiesce [options]       Drain mode: reject new chats/messages/edits; let current runs finish
+  pi-web-ui server unquiesce [options]     Exit drain mode, resume accepting new work
+  pi-web-ui --version / --help
+
+Server options:
+  --port <n>        Port (default 8787, or $PI_WEB_PORT)
+  --cwd <dir>       Working directory (default $PI_WEB_CWD or home dir; foreground uses current dir)
+  --data-dir <dir>  Session data directory (default <cwd>/.pi-web)
+  --engine <pi|dsh> Agent engine (default $PI_WEB_ENGINE or pi)
+  --host <addr>     Listen address (default $PI_WEB_HOST or 127.0.0.1; 0.0.0.0 for LAN/containers)
+  --agent-dir <dir> pi config directory (default $PI_CODING_AGENT_DIR or ~/.pi/agent)
+  --name <name>     Service name (default pi-web-ui; macOS launchd label is
+                    com.xingshuyin.pi-web-ui, or com.<name>.server for custom names)
+  --print           Only print generated config files (no actual install)
+
+Platforms: macOS → launchd user agent · Linux → systemd · Windows → Logon Run key
+           (HKCU, no admin needed; wscript hidden launch, no black window)
+Shortcuts: Windows → desktop .lnk · macOS → desktop .command · Linux → desktop .desktop
+
+UI plugins (installed into <data-dir>/plugins/; refresh browser to activate while running):
+  pi-web-ui install <source>          Install a UI plugin from GitHub
+  pi-web-ui uninstall <id>            Uninstall a UI plugin
+  pi-web-ui plugins                   List installed UI plugins
+
+  Source formats: owner/repo · https://github.com/owner/repo · local directory path
+                  URL with /tree/<branch>/<subdir> to specify branch and sub-directory;
+                  append #<branch-or-tag> to any source to pin a branch (e.g. owner/repo#v1.2)
+  install options: --name <id>   Custom plugin directory name (default: repo name)
+                   --data-dir <dir>  Data directory (default: ~/.pi-web)
+                   --force       Overwrite if target already exists
+
+Environment variables (flag takes precedence, env var as fallback):
+  PI_WEB_PORT / PI_WEB_CWD / PI_WEB_DATA_DIR / PI_WEB_ENGINE / PI_WEB_HOST /
+  PI_CODING_AGENT_DIR
+  Auth token PI_WEB_TOKEN: env var only (not on command line, to avoid ps exposure)
+`;
+
+const HELP = isZhLang() ? HELP_ZH : HELP_EN;
+
 /** Minimum Node required by the pi SDK (its dist uses `import … with { type: "json" }`). */
 const NODE_MIN = [22, 19, 0];
 function checkNodeVersion() {
@@ -118,11 +181,15 @@ function checkNodeVersion() {
 		(v[0] === NODE_MIN[0] && v[1] < NODE_MIN[1]) ||
 		(v[0] === NODE_MIN[0] && v[1] === NODE_MIN[1] && v[2] < NODE_MIN[2]);
 	if (tooOld) {
-		console.error(
+		const zh =
 			`✖ pi-web-ui 需要 Node.js >= ${NODE_MIN.join(".")}（当前 ${process.versions.node}）。\n` +
-				`  pi SDK 的代码使用了 import attributes（with）语法，旧版 Node 无法解析。\n` +
-				`  请升级 Node：https://nodejs.org（或 nvm-windows / fnm）后重装：npm i -g pi-web-ui`,
-		);
+			`  pi SDK 的代码使用了 import attributes（with）语法，旧版 Node 无法解析。\n` +
+			`  请升级 Node：https://nodejs.org（或 nvm-windows / fnm）后重装：npm i -g pi-web-ui`;
+		const en =
+			`✖ pi-web-ui requires Node.js >= ${NODE_MIN.join(".")} (current: ${process.versions.node}).\n` +
+			`  The pi SDK uses import attributes (\`with\` syntax) which older Node versions can't parse.\n` +
+			`  Upgrade Node: https://nodejs.org then reinstall: npm i -g pi-web-ui`;
+		console.error(isZhLang() ? zh : en);
 		process.exit(1);
 	}
 }
@@ -955,11 +1022,19 @@ function serviceOptions(opts) {
 	return { name, port, cwd, dataDir, engine, host, agentDir };
 }
 
-function serviceEnv(port, cwd, dataDir, engine, host, agentDir) {
+function serviceEnv(port, cwd, dataDir, engine, host, agentDir, service = {}) {
 	const env = {
 		PI_WEB_PORT: port,
 		PI_WEB_CWD: cwd,
 	};
+	// 启动来源标记（见 server/launch-origin.ts）：只有真正被平台服务管理器托管的
+	// 启动器才写。桌面快捷方式 / .command 在「未安装服务」时是前台跑（退出不回来），
+	// 不能带这个标记，所以它们不传 service。已装好的老服务没有这两个变量，服务端
+	// 仍能靠运行时判据（XPC_SERVICE_NAME / INVOCATION_ID / PID 文件）认出来。
+	if (service.name) {
+		env.PI_WEB_LAUNCHED_BY = "service";
+		env.PI_WEB_SERVICE_NAME = service.name;
+	}
 	// Interactive Windows tasks inherit the user's PATH; only systemd/launchd
 	// run with a minimal environment that needs an explicit PATH.
 	if (!isWin) env.PATH = process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin";
@@ -980,7 +1055,7 @@ function installLaunchd(opts) {
 	const { name, port, cwd, dataDir, engine, host, agentDir } = serviceOptions(opts);
 	const label = serviceLabel(name);
 	const plist = launchAgentPlist(name);
-	const content = buildPlist(label, cwd, serviceEnv(port, cwd, dataDir, engine, host, agentDir));
+	const content = buildPlist(label, cwd, serviceEnv(port, cwd, dataDir, engine, host, agentDir, { name }));
 	if (opts.print) {
 		console.log(`# ${plist}\n${content}`);
 		return;
@@ -1004,7 +1079,7 @@ function installLaunchd(opts) {
 
 function installSystemd(opts) {
 	const { name, port, cwd, dataDir, engine, host, agentDir } = serviceOptions(opts);
-	const content = buildUnit(cwd, serviceEnv(port, cwd, dataDir, engine, host, agentDir));
+	const content = buildUnit(cwd, serviceEnv(port, cwd, dataDir, engine, host, agentDir, { name }));
 	const unitPath = systemdUnitPath(name);
 	if (opts.print) {
 		console.log(`# ${unitPath}\n${content}`);
@@ -1053,7 +1128,7 @@ function uninstallSystemd(opts) {
 
 function installWindows(opts) {
 	const { name, port, cwd, dataDir, engine, host, agentDir } = serviceOptions(opts);
-	const env = serviceEnv(port, cwd, dataDir, engine, host, agentDir);
+	const env = serviceEnv(port, cwd, dataDir, engine, host, agentDir, { name });
 	const ps1Path = winPs1Path(name);
 	const vbsPath = winVbsPath(name);
 	const pidPath = winPidFilePath(name);
@@ -1177,6 +1252,15 @@ async function printLiveStatus(opts) {
 	console.log("   --- 实时状态 (control socket) ---");
 	console.log(`   版本 : ${st.version} · PID ${st.pid}`);
 	console.log(`   目录 : ${st.cwd}`);
+	// 启动来源（server/launch-origin.ts）：有 supervisor = 这个进程退出后会被自动
+	// 拉起（server restart / 更新面板的「重启服务」才有意义）。
+	console.log(
+		`   启动 : ${
+			st.service
+				? `pi-web-ui 服务（${st.service.supervisor} · ${st.service.name}）`
+				: "前台 / 开发模式（无 supervisor，退出不自动重启）"
+		}`,
+	);
 	console.log(`   排空 : ${st.quiesced ? `是（自 ${new Date(st.quiescedSince).toLocaleString()}）` : "否"}`);
 	console.log(
 		`   连接 : ${st.connectedClients} 个浏览器 · ${st.activeConversations} 个运行中对话 · ${st.pendingMessages} 条排队消息`,

@@ -22,7 +22,11 @@ import { DshQuestionDialog } from "./components/DshQuestionDialog";
 const TerminalPanel = lazy(() => import("./components/TerminalPanel").then((m) => ({ default: m.TerminalPanel })));
 import { ScmPanel } from "./components/SCMPanel";
 import { PluginView } from "./components/PluginView";
+import { createPluginHostApi, installPluginHostApi } from "./plugin-host";
+import { registerAttachmentSink } from "./composer-bridge";
+import { appendDraftAttachments } from "./composer-draft";
 import { syncPluginViews, subscribeLoadedPluginViews, type LoadedPluginView } from "./plugin-loader";
+import { setFenceSend, syncFenceRenderers } from "./plugin-fence";
 import { PiSetupModal } from "./components/PiSetupModal";
 import { ModelConfigModal } from "./components/ModelConfigModal";
 
@@ -34,18 +38,25 @@ import { FilePreview, type PreviewFile } from "./components/FilePreview";
 import { useChat } from "./use-chat";
 import type { ClientMessage, CommandDef, PromptAttachment, UiMessage } from "./types";
 import { useT, useI18n } from "./i18n";
+import { QUICK_PHRASE_DEFAULTS } from "./quick-phrases";
 import { FiAlertCircle, FiAlertTriangle, FiChevronsLeft, FiChevronsRight, FiInfo, FiX } from "react-icons/fi";
 import type { AuthFlow, Notice } from "./use-chat";
 import { fileToProcessedImage, isRasterImage, type ProcessedImage } from "./image-paste";
 import { randomUuid } from "./uuid";
+import { recordModelUsage } from "./model-usage";
 import { loadSoundSettings, playSound, saveSoundSettings, type SoundKind, type SoundSettings } from "./sounds";
+import { useWideChat } from "./chat-width-settings";
+import { projectNameFromCwd, useProjectTitle } from "./title-settings";
 import { notify } from "./notify";
 import { useTheme } from "./theme";
+import { useWallpaperEffect } from "./wallpaper";
 
 export interface PendingAttachment {
 	path: string;
 	name: string;
-	mode: "inline" | "reference" | "lines";
+	/** "page" = 已授权给 AI 的网页（page-picker 扩展）：path 是页面 origin，
+	 *  name 是页面标题，不会被当工作区路径处理。 */
+	mode: "inline" | "reference" | "lines" | "page";
 	/** Folder path link (always reference mode). */
 	isDir?: boolean;
 	/** 1-based inclusive line range (mode "lines" only). */
@@ -106,7 +117,7 @@ function AuthFlowBanner({ flow }: { flow: AuthFlow }) {
 function NoticeToast({ notice, onDismiss }: { notice: Notice; onDismiss: (id: number) => void }) {
 	const t = useT();
 	const { locale } = useI18n();
-	const text = locale === "en" && notice.textEn ? notice.textEn : notice.text;
+	const text = locale !== "zh" && notice.textEn ? notice.textEn : notice.text;
 	const [paused, setPaused] = useState(false);
 	useEffect(() => {
 		if (paused) return;
@@ -201,14 +212,62 @@ type ViewName = "chat" | "terminal" | "git" | `plugin:${string}`;
 
 export function App() {
 	const t = useT();
+	const { locale } = useI18n();
 	const { chat, send, dismissNotice, pushNotice, terminal } = useChat();
+	// 快捷短语 seeding：首次看到空列表 → 按界面语言填一批内置常用短语，之后即为用户
+	// 数据（增删改/恢复默认/关闭都在设置里）。「已 seed」标记存服务端全局
+	// （settings.quickPhrasesSeeded，非浏览器 localStorage）——clientId 在
+	// sessionStorage、每次新会话都是新 id，若按浏览器记 seed，重启后删掉的默认
+	// 短语又会被填回默认；存服务端则跨会话/跨浏览器一致。
+	const quickSeedRef = useRef(false);
+	useEffect(() => {
+		if (!chat.ready || !chat.settings) return;
+		if (quickSeedRef.current || chat.settings.quickPhrasesSeeded) return;
+		quickSeedRef.current = true;
+		if (chat.settings.quickPhrases.length === 0) {
+			send({
+				type: "set_settings",
+				quickPhrases: QUICK_PHRASE_DEFAULTS[locale] ?? QUICK_PHRASE_DEFAULTS.en,
+				quickPhrasesSeeded: true,
+			});
+		}
+	}, [chat.ready, chat.settings, send, locale]);
+	// 浏览器标题：开关开启时显示当前项目（工作目录文件夹名），否则固定应用名。
+	const cwd = chat.state?.cwd ?? "";
+	const projectTitle = useProjectTitle();
+	useEffect(() => {
+		const name = projectTitle ? projectNameFromCwd(cwd) : "";
+		document.title = name ? `${name} — pi-web-ui` : t("docTitle");
+	}, [cwd, projectTitle, t]);
 	const [attachments, setAttachments] = useState<PendingAttachment[]>([]);
+	// 宿主注入的待发附件（浏览器元素拾取扩展的截图 → window.__piWebUiHost.compose）：
+	// 只追加不覆盖，判重口径与下面的 attach() 一致（见 composer-draft.ts）。
+	useEffect(() => {
+		registerAttachmentSink((items) => setAttachments((prev) => appendDraftAttachments(prev, items)));
+		return () => registerAttachmentSink(null);
+	}, []);
 	const [previewFile, setPreviewFile] = useState<PreviewFile | null>(null);
 	/** Full-window file drag in progress (issue #19) — shows the app-wide
 	 *  drop overlay; drop anywhere attaches, the input bar keeps priority via
 	 *  its own stopPropagation handlers. */
 	const [appDragOver, setAppDragOver] = useState(false);
-	const [view, setView] = useState<ViewName>("chat");
+	// 嵌套落点（输入条 / 消息编辑器）的 onDrop 会 stopPropagation（保优先级），
+	// 父级 onDrop 就收不到 → 全屏遮罩会一直挂着。在 window 捕获阶段兜底复位：
+	// 捕获先于任何子 handler 执行，只清提示、不碰落点处理。
+	useEffect(() => {
+		const clear = () => setAppDragOver(false);
+		window.addEventListener("drop", clear, true);
+		return () => window.removeEventListener("drop", clear, true);
+	}, []);
+	const [viewChosen, setView] = useState<ViewName>("chat");
+	/* PI_WEB_TABS: a tab this instance does not offer cannot be shown, even if
+	   something else asks for it — a plugin firing pi-web-ui:plugin-run-command,
+	   or a panel's "open this in a terminal" button. The server refuses those
+	   messages anyway, so the pane would sit there empty. No list means every
+	   tab, which is the default. */
+	const tabOn = (tab: string) => !chat.tabs || tab === "chat" || chat.tabs.includes(tab);
+	const viewTab = viewChosen.startsWith("plugin:") ? "plugins" : viewChosen;
+	const view: ViewName = tabOn(viewTab) ? viewChosen : "chat";
 	// 已安装且未在设置面板禁用的插件（决定 tab 与视图加载）。
 	const enabledPlugins = useMemo(
 		() => chat.plugins.filter((p) => !chat.settings?.disabledPlugins?.includes(p.id)),
@@ -219,9 +278,33 @@ export function App() {
 	useEffect(() => subscribeLoadedPluginViews(setPluginViews), []);
 	// 目录清单/禁用集合/epoch 变化 → 同步注册表：新增的拉取、消失的清理
 	// （React 卸载对应 PluginView 时调用插件的 cleanup）、服务端 reload 后重拉。
+	// fenced-code 渲染插件：注入底层 send + 同步「语言→插件」注册表（renderer
+	// 插件是命中了才懒加载，见 plugin-fence.ts / PluginFenceBlock.tsx）。
 	useEffect(() => {
+		setFenceSend(send);
+		syncFenceRenderers(enabledPlugins, chat.pluginsEpoch);
 		void syncPluginViews(enabledPlugins, chat.pluginsEpoch);
-	}, [enabledPlugins, chat.pluginsEpoch]);
+	}, [enabledPlugins, chat.pluginsEpoch, send]);
+	// 插件宿主动作桥（window.__piWebUiHost）：插件 client bundle 拿不到 React 实例，
+	// 需要「切视图 / 新建对话 + 自动发一段话」这类动作时走它（见 plugin-host.ts）。
+	// deps 读的是 ref（挂载时装一次，不能把每次渲染的闭包困在里面）。
+	const chatRefForPlugins = useRef(chat);
+	chatRefForPlugins.current = chat;
+	const setViewRefForPlugins = useRef(setView);
+	setViewRefForPlugins.current = setView;
+	useEffect(() => {
+		installPluginHostApi(
+			createPluginHostApi({
+				send,
+				isReady: () => Boolean(chatRefForPlugins.current.state),
+				setView: (v) => setViewRefForPlugins.current(v as ViewName),
+				getCwd: () => chatRefForPlugins.current.state?.cwd ?? "",
+				getConversationId: () => chatRefForPlugins.current.state?.conversationId ?? null,
+				isConversationBlank: () => (chatRefForPlugins.current.state?.messages.length ?? 0) === 0,
+			}),
+		);
+		return () => installPluginHostApi(null);
+	}, [send]);
 	// 左右面板可拖拽宽度（桌面端）：localStorage 持久化，双击手柄复位。
 	const [leftWidth, setLeftWidth] = useState(() => readPanelWidth("left"));
 	const [rightWidth, setRightWidth] = useState(() => readPanelWidth("right"));
@@ -261,6 +344,8 @@ export function App() {
 	const [manageModelsOpen, setManageModelsOpen] = useState(false);
 	// Settings panel (system prompt / skills / extensions / presets).
 	const [settingsOpen, setSettingsOpen] = useState(false);
+	// Wide chat column (client-local, default off).
+	const wide = useWideChat();
 	// Background-task panel (AI-started servers — stop individually or all).
 	const [bgTasksOpen, setBgTasksOpen] = useState(false);
 	// Global search panel (sessions / projects / workspace files).
@@ -317,7 +402,16 @@ export function App() {
 			setView("terminal");
 		};
 		window.addEventListener("pi-web-ui:plugin-run-command", onPluginRunCommand);
-		return () => window.removeEventListener("pi-web-ui:plugin-run-command", onPluginRunCommand);
+		// 派单卡片的「查看子代理」按钮：切到对应的子代理对话（与左栏点击同效果）。
+		const onSwitchConversation = (e: Event) => {
+			const id = (e as CustomEvent<string>).detail;
+			if (typeof id === "string" && id) send({ type: "switch_conversation", id });
+		};
+		window.addEventListener("pi-web-ui:switch-conversation", onSwitchConversation);
+		return () => {
+			window.removeEventListener("pi-web-ui:plugin-run-command", onPluginRunCommand);
+			window.removeEventListener("pi-web-ui:switch-conversation", onSwitchConversation);
+		};
 	}, [chat, terminal, send]);
 
 	// Ctrl+K / Cmd+K opens global search (also reachable via the topbar button).
@@ -335,8 +429,11 @@ export function App() {
 	const [sound, setSound] = useState<SoundSettings>(loadSoundSettings);
 	// -- theme (whole stylesheet swap) ---------------------------------------
 	const { themes, theme, switchTheme } = useTheme();
+	// -- chat wallpaper (message-list background image, issue #100) -------------
+	useWallpaperEffect();
 	const prevStreaming = useRef<boolean | null>(null);
 	const prevDialogId = useRef<number | null>(null);
+	const prevQuestionId = useRef<string | null>(null);
 	const lastErrorNotice = useRef(0);
 	// Remembers a terminal-view click made before the WebSocket is ready.
 	const terminalOpenRequested = useRef(false);
@@ -386,7 +483,9 @@ export function App() {
 		}
 	}, [chat.state?.isStreaming, sound]);
 
-	// Questionnaire cue — each new dialog id.
+	// Questionnaire cue — each new dialog id + each new DSH question id.
+	// dialog = 扩展 select/confirm/input；question = ask_user_question 问卷。
+	// 之前只监听了 dialog，问卷出来没有提示音（issue：当前问卷出来没有问卷的提示音）。
 	useEffect(() => {
 		const id = chat.dialog?.id ?? null;
 		if (id !== null && id !== prevDialogId.current) {
@@ -395,6 +494,15 @@ export function App() {
 		}
 		prevDialogId.current = id;
 	}, [chat.dialog, sound]);
+
+	useEffect(() => {
+		const qid = chat.question?.id ?? null;
+		if (qid !== null && qid !== prevQuestionId.current) {
+			playSound("question", sound);
+			void notify(t("notifyQuestionTitle"), t("notifyQuestionBody"));
+		}
+		prevQuestionId.current = qid;
+	}, [chat.question, sound]);
 
 	// Error cue — new error notices only.
 	useEffect(() => {
@@ -547,6 +655,20 @@ export function App() {
 		[send],
 	);
 
+	// 撤回一条排队/插队消息：先从队列移除（同 ✕ 的协议），再把文字放回输入框。
+	// ChatInput 内部持有 text state，这里用数组递过去（seq 递增；数组保证连续点两条不丢第一条）。
+	const [recallDrafts, setRecallDrafts] = useState<{ text: string; seq: number }[]>([]);
+	const recallSeqRef = useRef(0);
+	const onRecallQueued = useCallback(
+		(kind: "steer" | "followUp", text: string) => {
+			send({ type: "queue_remove", kind, text });
+			recallSeqRef.current += 1;
+			const item = { text, seq: recallSeqRef.current };
+			setRecallDrafts((prev) => [...prev.slice(-9), item]);
+		},
+		[send],
+	);
+
 	// Stable callbacks for memoized panels (LeftPanel/RightPanel/ChatInput/
 	// GoalBar skip re-render while tokens stream in — inline closures here
 	// would break their shallow prop comparison every render).
@@ -640,7 +762,6 @@ export function App() {
 			)}
 			<TopBar
 				chat={chat}
-				send={send}
 				terminal={terminal}
 				view={view}
 				plugins={enabledPlugins}
@@ -672,7 +793,7 @@ export function App() {
 					<NoticeToast key={n.id} notice={n} onDismiss={dismissNotice} />
 				))}
 			</div>
-			<TemplateProvider send={send}>
+			<TemplateProvider currentModelId={model ? `${model.provider}/${model.id}` : null}>
 				<div
 					className="layout"
 					style={{ "--left-w": `${leftWidth}px`, "--right-w": `${rightWidth}px` } as CSSProperties}
@@ -686,11 +807,8 @@ export function App() {
 							<LeftPanel
 								collapsible={!isMobile}
 								onToggleCollapse={toggleLeft}
-								send={panelSend}
+								panelSend={panelSend}
 								active={!isMobile || drawer === "left"}
-								ready={chat.ready}
-								status={chat.status}
-								cwd={chat.state?.cwd ?? ""}
 								sessionFile={chat.state?.sessionFile ?? null}
 								conversations={chat.conversations}
 								sessions={chat.sessions}
@@ -699,7 +817,7 @@ export function App() {
 							/>
 						</div>
 						{!isMobile && <ResizeHandle side="left" width={leftWidth} onResize={resizeLeft} />}
-						<main className="main">
+						<main className={wide ? "main wide-chat" : "main"}>
 							{chat.state ? (
 								<MessageList
 									key={chat.state.conversationId ?? "boot"}
@@ -708,7 +826,15 @@ export function App() {
 									toolStatuses={chat.toolStatuses}
 									onEdit={onEditMessage}
 									onKillBash={() => send({ type: "abort_bash" })}
+									onRetry={() => {
+										// 重试沿用当前模型续跑上一轮请求，同样算一次模型使用（下拉按次数排序）。
+										if (send({ type: "retry_last" })) {
+											const m = chat.state?.model;
+											if (m) recordModelUsage(`${m.provider}/${m.id}`);
+										}
+									}}
 									onRemoveQueued={onRemoveQueued}
+									onRecallQueued={onRecallQueued}
 									thinkingWrap={chat.settings?.thinkingWrap ?? true}
 									toolsWrap={chat.settings?.toolsWrap ?? true}
 									jumpTarget={searchJump}
@@ -717,20 +843,18 @@ export function App() {
 							) : (
 								<div className="boot-wait">{chat.ready ? t("loadingSession") : t("connectingServer")}</div>
 							)}
-							<GoalBar
-								send={send}
-								goal={chat.goal}
-								models={chat.models}
-								modelsLoading={chat.modelsLoading}
-								activeConversationId={chat.activeConversationId}
-								engine={chat.engine}
-							/>
+							{chat.settings?.goalModeEnabled !== false && (
+								<GoalBar
+									goal={chat.goal}
+									models={chat.models}
+									modelsLoading={chat.modelsLoading}
+									activeConversationId={chat.activeConversationId}
+								/>
+							)}
 							{/* 扩展问卷：非模态内联面板，插在输入框上方，对话内容保持可见 */}
-							{chat.dialog && <Dialog dialog={chat.dialog} send={send} />}
-							{chat.question && <DshQuestionDialog question={chat.question} send={send} />}
+							{chat.dialog && <Dialog dialog={chat.dialog} />}
+							{chat.question && <DshQuestionDialog question={chat.question} />}
 							<ChatInput
-								send={send}
-								ready={chat.ready}
 								streaming={chat.state?.isStreaming ?? false}
 								messages={chat.state?.messages ?? EMPTY_MESSAGES}
 								slashCommands={chat.slashCommands}
@@ -745,6 +869,9 @@ export function App() {
 								onNotice={pushNotice}
 								onManageModels={openManageModels}
 								onSent={clearAttachments}
+								quickPhrases={chat.settings?.quickPhrases ?? []}
+								quickPhrasesEnabled={chat.settings?.quickPhrasesEnabled ?? true}
+								recallDrafts={recallDrafts}
 							/>
 						</main>
 						{!isMobile && <ResizeHandle side="right" width={rightWidth} onResize={resizeRight} />}
@@ -754,11 +881,10 @@ export function App() {
 							<RightPanel
 								collapsible={!isMobile}
 								onToggleCollapse={toggleRight}
-								send={panelSend}
+								panelSend={panelSend}
 								files={chat.files}
 								fileChanged={chat.fileChanged}
 								widgets={chat.widgets}
-								cwd={chat.state?.cwd ?? ""}
 								onAttach={(path, name, mode, isDir) => {
 									setDrawer(null);
 									attach(path, name, mode, isDir);
@@ -774,13 +900,12 @@ export function App() {
 					</div>
 					<div className={`view-pane ${view === "terminal" ? "" : "hidden"}`}>
 						<Suspense fallback={null}>
-							<TerminalPanel chat={chat} send={send} terminal={terminal} />
+							<TerminalPanel chat={chat} terminal={terminal} />
 						</Suspense>
 					</div>
 					<div className={`view-pane ${view === "git" ? "" : "hidden"}`}>
 						<ScmPanel
 							chat={chat}
-							send={send}
 							terminal={terminal}
 							active={view === "git"}
 							onSwitchToTerminal={() => setView("terminal")}
@@ -790,18 +915,17 @@ export function App() {
 						const name = `plugin:${entry.info.id}` as ViewName;
 						return (
 							<div key={entry.info.id} className={`view-pane ${view === name ? "" : "hidden"}`}>
-								<PluginView entry={entry} send={send} />
+								<PluginView entry={entry} />
 							</div>
 						);
 					})}
 				</div>
 			</TemplateProvider>
-			<FooterBar chat={chat} send={send} />
+			<FooterBar chat={chat} />
 			{previewFile && (
 				<FilePreview
 					file={previewFile}
 					content={chat.fileContent}
-					send={send}
 					onAddLines={(path, name, start, end) => attach(path, name, "lines", false, { start, end })}
 					onAttach={(path, name, mode) => attach(path, name, mode)}
 					onClose={() => setPreviewFile(null)}
@@ -809,7 +933,6 @@ export function App() {
 			)}
 			{chat.ready && chat.state && chat.state.piConfigured === false && !setupDismissed && !manageModelsOpen && (
 				<PiSetupModal
-					send={send}
 					piConfigured={chat.state.piConfigured}
 					piAgentInstalled={chat.state.piAgentInstalled}
 					providers={chat.providers}
@@ -819,7 +942,6 @@ export function App() {
 			)}
 			{manageModelsOpen && (
 				<ModelConfigModal
-					send={send}
 					providers={chat.modelsConfig}
 					providerStatus={chat.providers}
 					providerKeys={chat.providerKeys}
@@ -831,18 +953,15 @@ export function App() {
 			{settingsOpen && (
 				<SettingsModal
 					chat={chat}
-					send={send}
 					terminal={terminal}
 					onSwitchToTerminal={() => setView("terminal")}
 					onClose={() => setSettingsOpen(false)}
 				/>
 			)}
-			{bgTasksOpen && <BgTasksModal servers={chat.bgServers} send={send} onClose={() => setBgTasksOpen(false)} />}
+			{bgTasksOpen && <BgTasksModal servers={chat.bgServers} onClose={() => setBgTasksOpen(false)} />}
 			<GlobalSearchModal
 				open={globalSearchOpen}
-				send={send}
 				projects={chat.projects}
-				cwd={chat.state?.cwd ?? ""}
 				fileSearch={chat.fileSearch}
 				sessionSearch={chat.sessionSearch}
 				onClose={() => setGlobalSearchOpen(false)}

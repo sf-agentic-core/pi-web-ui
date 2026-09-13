@@ -28,7 +28,7 @@ export default {
 		.dbx .hidden { display: none !important; }
 		/* ---- 左侧连接栏 ---- */
 		.dbx-side { width: 230px; min-width: 170px; flex-shrink: 0; display: flex; flex-direction: column;
-			border-right: 1px solid var(--border, #333); background: var(--bg-elev1, #16161d); overflow: hidden; }
+			border-right: 1px solid var(--border, #333); background: var(--bg-elev, #16161d); overflow: hidden; }
 		.dbx-side-head { display: flex; align-items: center; padding: 9px 10px 6px; font-size: 11px;
 			letter-spacing: .08em; text-transform: uppercase; opacity: .85; }
 		.dbx-side-head b { flex: 1; font-weight: 600; }
@@ -52,11 +52,11 @@ export default {
 			font-size: 12px; color: var(--amber, #fbbf24); }
 		.dbx-deps button:disabled { cursor: wait; opacity: .6; }
 		/* ---- 右侧主区 ---- */
-		.dbx-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg-elev0, #101016); overflow: hidden; position: relative; }
+		.dbx-main { flex: 1; min-width: 0; display: flex; flex-direction: column; background: var(--bg, #101016); overflow: hidden; position: relative; }
 		.dbx-placeholder { flex: 1; display: grid; place-items: center; opacity: .45; text-align: center; line-height: 2.1; }
 		.dbx-work { display: flex; }
 		.dbx-topbar { display: flex; align-items: center; gap: 8px; padding: 7px 12px; border-bottom: 1px solid var(--border, #333);
-			background: var(--bg-elev1, #16161d); }
+			background: var(--bg-elev, #16161d); }
 		.dbx-topbar .lbl { font-weight: 600; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 		.dbx-topbar select, .dbx-topbar button.act, .dbx button.btn { all: unset; cursor: pointer; padding: 3px 10px; border-radius: 6px;
 			font-size: 12px; border: 1px solid var(--border, #444); color: inherit; }
@@ -92,7 +92,7 @@ export default {
 			border: 1px solid var(--border, #333); border-radius: 6px; padding: 3px 8px; font: 12px ui-monospace, Consolas, monospace; }
 		.grid-wrap { flex: 1; min-height: 0; overflow: auto; }
 		table.dgrid { width: max-content; min-width: 100%; border-collapse: collapse; font-size: 12.5px; }
-		.dgrid th { position: sticky; top: 0; z-index: 2; background: var(--bg-elev1, #16161d); text-align: left;
+		.dgrid th { position: sticky; top: 0; z-index: 2; background: var(--bg-elev, #16161d); text-align: left;
 			padding: 6px 10px; border-bottom: 1px solid var(--border, #444); white-space: nowrap;
 			font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
 		th.sortable { cursor: pointer; user-select: none; }
@@ -150,7 +150,7 @@ export default {
 			border: 1px solid var(--border, #444); border-radius: 12px; padding: 16px 18px; }
 		.dbx-modal h3 { margin: 0 0 12px; }
 		.dbx-modal label { display: block; font-size: 11.5px; opacity: .7; margin: 10px 0 4px; }
-		.dbx-modal input, .dbx-modal select { width: 100%; box-sizing: border-box; background: var(--bg-elev0, #101016);
+		.dbx-modal input, .dbx-modal select { width: 100%; box-sizing: border-box; background: var(--bg, #101016);
 			color: inherit; border: 1px solid var(--border, #444); border-radius: 6px; padding: 6px 9px; font: inherit; }
 		.dbx-modal .grid2 { display: grid; grid-template-columns: 1fr 110px; gap: 10px; }
 		.dbx-modal .btns { display: flex; justify-content: space-between; gap: 8px; margin-top: 16px; }
@@ -169,18 +169,85 @@ export default {
 		.dgrid td.ops-cell button { all: unset; cursor: pointer; opacity: 0; padding: 1px 6px; border-radius: 4px; font-size: 12px; }
 		.dgrid tr:hover td.ops-cell button { opacity: .75; }
 		.dgrid td.ops-cell button:hover { opacity: 1 !important; background: var(--bg-elev3, #2a2a38); }
-		.dbx .inline-edit { width: 95%; box-sizing: border-box; background: var(--bg-elev0, #101016); color: inherit;
+		.dbx .inline-edit { width: 95%; box-sizing: border-box; background: var(--bg, #101016); color: inherit;
 			border: 1px solid var(--accent, #7c5cff); border-radius: 4px; padding: 1px 5px;
 			font: inherit; outline: 0; }
 		.row-body textarea.jsonbox { width: 100%; box-sizing: border-box; min-height: 300px; resize: vertical;
-			background: var(--bg-elev0, #101016); color: inherit; border: 1px solid var(--border, #444);
+			background: var(--bg, #101016); color: inherit; border: 1px solid var(--border, #444);
 			border-radius: 6px; padding: 8px 10px; font: 12.5px/1.6 ui-monospace, Consolas, monospace; }
 		.row-body .flds { display: grid; grid-template-columns: auto 1fr; gap: 8px 10px; align-items: center; max-height: 46vh; overflow: auto; }
 		.row-body .flds label { margin: 0; font-family: ui-monospace, Consolas, monospace; }
 		.row-body .flds label small { opacity: .5; display: block; font-size: 10px; }
 		.kd-text { flex: 1; margin: 0; padding: 10px 12px; background: transparent; color: inherit; border: 0; outline: 0;
 			resize: none; font: 12.5px/1.6 ui-monospace, Consolas, monospace; white-space: pre; }
+		/* ---- 移动端抽屉/折叠树的桌面端默认（窄屏外不占位） ---- */
+		.dbx .btn-menu { display: none; }
+		.dbx-tree-toggle { display: none; }
+		.dbx-backdrop { display: none; }
+		/* ---- 手机端适配（≤640px，只覆盖窄屏，桌面端表现不变） ---- */
+		@media (max-width: 640px) {
+			.dbx { min-height: 0; overflow-x: clip; }
+			/* 顶栏：汉堡按钮 + 允许换行 */
+			.dbx .btn-menu { display: inline-block; padding: 8px 12px; }
+			.dbx-topbar { flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
+			.dbx-topbar .lbl { max-width: 42vw; }
+			.dbx-tabs { margin-left: 0; flex-wrap: wrap; }
+			.query-bar { flex-wrap: wrap; }
+			/* 连接侧栏 → 左滑抽屉 */
+			.dbx-side { position: fixed; top: 0; left: 0; bottom: 0; z-index: 50;
+				width: min(78vw, 300px); min-width: 0; height: 100vh; height: 100dvh;
+				transform: translateX(-105%); transition: transform .22s ease; }
+			.dbx-side.open { transform: none; box-shadow: 8px 0 30px rgba(0,0,0,.45); }
+			.dbx-crow { padding: 10px 12px; min-height: 36px; }
+			.dbx .dbx-backdrop:not(.hidden) { display: block; position: fixed; inset: 0; z-index: 40;
+				background: rgba(0,0,0,.5); }
+			/* 主体纵排：库表树变数据区上方折叠面板（默认收起） */
+			.dbx-body { flex-direction: column; }
+			.dbx-tree { width: auto; min-width: 0; border-right: 0;
+				border-bottom: 1px solid var(--border, #333); flex-shrink: 0; }
+			.dbx-tree-toggle { display: flex; align-items: center; gap: 8px; width: 100%; box-sizing: border-box;
+				background: transparent; color: inherit; border: 0; cursor: pointer;
+				min-height: 44px; padding: 10px 12px; font: inherit; font-weight: 600; text-align: left; }
+			.dbx-tree-toggle .tn { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+				font-family: ui-monospace, Consolas, monospace; font-weight: 400; opacity: .8; }
+			.dbx-tree input.filter, .dbx-tree .dbx-tables { display: none; }
+			.dbx-tree.open input.filter { display: block; }
+			.dbx-tree.open .dbx-tables { display: block; max-height: 38vh; max-height: 38dvh; }
+			.dbx-trow { padding: 9px 10px; min-height: 36px; }
+			/* 表格横滑只发生在容器内，页面本身不横向溢出 */
+			.grid-wrap, .q-result { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+			/* Redis 上下排 */
+			.redis-split { flex-direction: column; }
+			.keys-list { width: auto; min-width: 0; border-right: 0;
+				border-bottom: 1px solid var(--border, #333);
+				max-height: 30vh; max-height: 30dvh; flex-shrink: 0; }
+			.redis-bar input.pattern { width: 120px; }
+			.redis-bar input.cmdline { min-width: 120px; }
+			/* 触摸目标加大 */
+			.dbx-topbar select, .dbx-topbar button.act, .dbx button.btn, .dbx-tab { padding: 8px 12px; }
+			.krow { padding: 9px 10px; min-height: 36px; }
+			.dgrid th { padding: 9px 10px; }
+			.dgrid td { padding: 8px 10px; }
+			/* iOS 聚焦不自动缩放 */
+			.dbx-tree input.filter, .data-bar input.docfilter, .redis-bar input,
+			.dbx-topbar select, .dbx-modal input, .dbx-modal select,
+			textarea.sqlbox, .row-body textarea.jsonbox, textarea.kd-text, .dbx .inline-edit { font-size: 16px; }
+			/* 弹窗：单列 + 大按钮 */
+			.dbx-modal { width: min(460px, 94%); }
+			.dbx-modal .grid2 { grid-template-columns: 1fr; }
+			.dbx-modal .btns { flex-wrap: wrap; }
+			.dbx-modal .btns button { padding: 10px 18px; }
+			.dbx-modal .btns .btn-test { flex: 1 1 100%; text-align: center; }
+			.dbx-modal .btns .right { flex: 1 1 100%; display: flex; }
+			.dbx-modal .btns .right button { flex: 1; text-align: center; }
+		}
+		/* 触屏：hover 才显示的操作键改为常显 */
+		@media (hover: none) {
+			.dbx-crow .ops { display: flex; }
+			.dgrid td.ops-cell button { opacity: .75; }
+		}
 	</style>
+	<div class="dbx-backdrop hidden"></div>
 	<div class="dbx-side">
 		<div class="dbx-side-head"><b>数据库连接</b><button data-act="add" title="新建连接">＋</button></div>
 		<div class="dbx-deps"></div>
@@ -190,6 +257,7 @@ export default {
 		<div class="dbx-placeholder">👈 选择左侧连接打开数据库<br><small>库表浏览 · 数据分页 · 结构查看 · SQL 查询</small></div>
 		<div class="dbx-work hidden" style="flex-direction:column;flex:1;min-height:0">
 			<div class="dbx-topbar">
+				<button class="act btn-menu" title="连接列表">☰</button>
 				<span class="lbl"></span>
 				<select class="db-sel" title="选择数据库"></select>
 				<span class="dbx-tabs">
@@ -353,11 +421,37 @@ export default {
 		const kdText = $(".kd-text");
 		const pgInfo = $(".pginfo");
 
+		// ---- 手机端：连接抽屉 + 库表树折叠 --------------------------------------
+		const sideEl = $(".dbx-side");
+		const backdropEl = $(".dbx-backdrop");
+		const menuBtn = $(".btn-menu");
+		const isNarrow = () => window.matchMedia("(max-width: 640px)").matches;
+		function setDrawer(open) {
+			sideEl.classList.toggle("open", open);
+			backdropEl.classList.toggle("hidden", !open);
+		}
+		menuBtn.addEventListener("click", () => setDrawer(true));
+		backdropEl.addEventListener("click", () => setDrawer(false));
+		root.addEventListener("keydown", (ev) => { if (ev.key === "Escape") setDrawer(false); });
+		// 库表树折叠开关（桌面端 CSS display:none，窄屏下显示为数据区上方通栏按钮）
+		const treeToggle = document.createElement("button");
+		treeToggle.type = "button";
+		treeToggle.className = "dbx-tree-toggle";
+		treeEl.prepend(treeToggle);
+		function syncTreeToggle() {
+			const open = treeEl.classList.contains("open");
+			treeToggle.innerHTML = `<span>${open ? "▾" : "▸"}</span>`
+				+ `<span class="tn">${work?.curTable ? esc(`${work.curDb}.${work.curTable}`) : "选择数据表…"}</span>`;
+		}
+		treeToggle.addEventListener("click", () => { treeEl.classList.toggle("open"); syncTreeToggle(); });
+
 		// ---- 全局状态 --------------------------------------------------------
 		let state = { depsOk: true, depsInstalling: false, conns: [], active: [], types: {} };
 		let work = null; // 当前工作区：{connId, label, kind, dialect, dbs[], curDb, tables[], curTable, page:{no,size,total}, orderBy, dir}
 		let activeTab = "data";
 		let modalEditId = null;
+		// 初次同步库表树折叠按钮（必须在 work 声明之后，否则 TDZ 抛错导致挂载失败）
+		syncTreeToggle();
 
 		function toast(text, isErr) {
 			root.querySelector(".dbx-toast")?.remove();
@@ -492,6 +586,7 @@ export default {
 			btnFilter.classList.toggle("hidden", kind !== "mongodb");
 			dbSel.classList.toggle("hidden", kind === "redis" || dialect === "sqlite");
 			renderConns();
+			setDrawer(false);
 			setTab(kind === "redis" ? "redis" : "data");
 
 			try {
@@ -589,6 +684,8 @@ export default {
 			work.editable = false;
 			work.docs = null;
 			renderTables();
+			if (isNarrow()) treeEl.classList.remove("open");
+			syncTreeToggle();
 			tblLbl.textContent = `${work.curDb}.${name}`;
 			kdName.textContent = "";
 			setTab(activeTab === "redis" ? "data" : activeTab);
@@ -1021,6 +1118,7 @@ export default {
 			qf("uri").placeholder = conn?.hasUri ? "已保存（留空保持不变）" : "mongodb://user:pass@host:27017";
 			qf("redisDb").value = conn?.redisDb || "0";
 			syncFormGroups(type);
+			setDrawer(false);
 			modalBg.classList.remove("hidden");
 			qf("host").focus();
 		}

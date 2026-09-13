@@ -20,6 +20,7 @@ import { createServer, createConnection, type Server, type Socket } from "node:n
 import { chmodSync, existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { AgentService } from "./agent-service.js";
+import type { UiServiceInfo } from "./protocol.js";
 
 /** 控制 socket 只需服务状态与 quiesce 控制（pi/dsh 引擎都满足）。 */
 type ControlService = Pick<AgentService, "serviceStatus" | "quiesce" | "unquiesce">;
@@ -51,6 +52,8 @@ export interface ControlStatus {
 	connectedClients?: number;
 	activeConversations?: number;
 	pendingMessages?: number;
+	/** 托管本实例的平台服务（null = 前台/dev/Docker）——CLI 显示启动方式。 */
+	service?: UiServiceInfo | null;
 }
 
 /** Start the control socket; returns a stop function. */

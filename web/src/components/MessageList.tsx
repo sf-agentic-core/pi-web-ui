@@ -5,6 +5,7 @@ import type { CSSProperties } from "react";
 import { FiArrowDown } from "react-icons/fi";
 import type { PromptAttachment, ToolStatus, UiMessage, UiState } from "../types";
 import { Message, asText } from "./Message";
+import { Markdown } from "./Markdown";
 
 import { collectQuestionAttachments } from "../question-attachments";
 
@@ -58,6 +59,90 @@ const LAZY_MARGIN = 1200;
  *  但按累计高度截断——单条巨型消息不允许把常驻区撑成半个文档。 */
 const ALWAYS_BUDGET = 1600;
 
+/** 压缩进行中的常驻进度条：toast 会自动消失，而摘要 LLM 调用可能持续
+ *  数十秒——这里跟随快照 compaction 字段常驻显示，并用 startedAt 滴答
+ *  累计耗时，让用户知道压缩正在进行而不是卡死。 */
+/** 排队/插队消息：和用户消息同结构（msg-user 气泡 + Markdown），仅多一个
+ *  状态 tag + 右上角移除键，待服务端真正下发后变为正式用户消息。 */
+function QueuedMessage({
+	kind,
+	text,
+	onRemoveQueued,
+	onRecallQueued,
+}: {
+	kind: "steer" | "followUp";
+	text: string;
+	onRemoveQueued?: (kind: "steer" | "followUp", text: string) => void;
+	/** 撤回：把这条排队/插队消息从队列里取回，文字放回输入框（可编辑后重发）。 */
+	onRecallQueued?: (kind: "steer" | "followUp", text: string) => void;
+}) {
+	const t = useT();
+	return (
+		<div className="msg msg-user msg-queued" data-role="user">
+			<div className="msg-meta">
+				<span className="msg-role">{t("role.user")}</span>
+				<span className={`queued-tag ${kind === "steer" ? "steer" : "follow"}`}>
+					{kind === "steer" ? t("queueSteerTag") : t("queueFollowTag")}
+				</span>
+				<div className="msg-queued-actions">
+					{onRecallQueued && (
+						<button
+							type="button"
+							className="msg-queued-recall"
+							title={t("queueRecallTip")}
+							aria-label={t("queueRecallTip")}
+							onClick={() => onRecallQueued(kind, text)}
+						>
+							↩
+						</button>
+					)}
+					{onRemoveQueued && (
+						<button
+							type="button"
+							className="msg-queued-remove"
+							title={t("queueRemoveTip")}
+							aria-label={t("queueRemoveTip")}
+							onClick={() => onRemoveQueued(kind, text)}
+						>
+							✕
+						</button>
+					)}
+				</div>
+			</div>
+			<div className="msg-body">
+				<div className="msg-text">
+					<Markdown text={text} hardBreaks />
+				</div>
+			</div>
+		</div>
+	);
+}
+
+function CompactionBanner({ compaction }: { compaction: NonNullable<UiState["compaction"]> }) {
+	const t = useT();
+	const [, setTick] = useState(0);
+	useEffect(() => {
+		const timer = setInterval(() => setTick((n) => n + 1), 1000);
+		return () => clearInterval(timer);
+	}, []);
+	const elapsed = Math.max(0, Math.floor((Date.now() - compaction.startedAt) / 1000));
+	const reason =
+		compaction.reason === "manual"
+			? t("compactingReasonManual")
+			: compaction.reason === "overflow"
+				? t("compactingReasonOverflow")
+				: t("compactingReasonThreshold");
+	return (
+		<div className="compact-notice" role="status">
+			<span className="compact-pulse" />
+			<span className="compact-text">
+				{t("compactingContext")} · {elapsed}s
+			</span>
+			<span className="compact-reason">{reason}</span>
+		</div>
+	);
+}
+
 function hasToolCall(m: UiMessage): boolean {
 	return m.content.some((b) => b.type === "toolCall");
 }
@@ -70,8 +155,13 @@ interface MessageListProps {
 	onEdit?: (messageId: string, text: string, attachments?: PromptAttachment[]) => void;
 	/** Kill the running bash command from its tool card (agent run continues). */
 	onKillBash?: () => void;
+	/** Manually retry the last failed model call (forwarded to the red error
+	 *  on the last message; sends the server `retry_last` message). */
+	onRetry?: () => void;
 	/** Remove one queued prompt (the ✕ on a pending bubble). */
 	onRemoveQueued?: (kind: "steer" | "followUp", text: string) => void;
+	/** 撤回一条排队/插队消息（取回队列 + 文字回到输入框）。 */
+	onRecallQueued?: (kind: "steer" | "followUp", text: string) => void;
 	/** 思考文本是否换行（设置面板开关；false = 不换行横向滚动）。 */
 	thinkingWrap?: boolean;
 	/** 工具调用是否默认展开（设置面板开关；false = 默认折叠）。 */
@@ -88,7 +178,9 @@ export function MessageList({
 	toolStatuses,
 	onEdit,
 	onKillBash,
+	onRetry,
 	onRemoveQueued,
+	onRecallQueued,
 	thinkingWrap,
 	toolsWrap,
 	jumpTarget,
@@ -400,6 +492,39 @@ export function MessageList({
 		[state.messages, recentStart, expanded, expand],
 	);
 
+	// ---- 新压缩摘要到达：自动展开 + 滚动定位 ------------------------------
+	// 压缩动辄数十秒，用户很可能已上滚回看；完成 toast 出现时新摘要卡在下方
+	// 看不见。检测到同对话新增 compactionSummary → 展开该卡 + jumpTo 定位闪光。
+	// 首载 / 切换对话时静默记住现有 id（历史摘要不跳转）。
+	const [freshCompactionId, setFreshCompactionId] = useState<string | null>(null);
+	const compactionSeenRef = useRef<{ convId: string; ids: Set<string> } | null>(null);
+	const jumpedCompactionRef = useRef<string | null>(null);
+	useEffect(() => {
+		const cur = compactionSeenRef.current;
+		if (!cur || cur.convId !== state.conversationId) {
+			compactionSeenRef.current = {
+				convId: state.conversationId,
+				ids: new Set(state.messages.filter((m) => m.role === "compactionSummary").map((m) => m.id)),
+			};
+			jumpedCompactionRef.current = null;
+			setFreshCompactionId(null);
+			return;
+		}
+		for (const m of state.messages) {
+			if (m.role === "compactionSummary" && !cur.ids.has(m.id)) {
+				cur.ids.add(m.id);
+				setFreshCompactionId(m.id);
+				break;
+			}
+		}
+	}, [state.messages, state.conversationId]);
+	useEffect(() => {
+		// jumpTo 身份随 messages 变化，守卫保证每个新摘要只跳一次
+		if (!freshCompactionId || jumpedCompactionRef.current === freshCompactionId) return;
+		jumpedCompactionRef.current = freshCompactionId;
+		jumpTo(freshCompactionId);
+	}, [freshCompactionId, jumpTo]);
+
 	// ---- 全局搜索「会话」结果跳转 ----------------------------------------
 	// 锚点 = role + timestamp；会话载入后从 UiMessage[] 解析出 message id。
 	const jumpMsgId = useMemo(() => {
@@ -512,28 +637,22 @@ export function MessageList({
 		}
 	}, [queueSig]);
 
-	// Geometry-driven stick (RO era): the composer sits BELOW this scroll
-	// container in a flex column. Typing grows the composer → the container's
-	// border-box shrinks → distance-to-bottom grows with NO scroll event (scrollTop
-	// untouched), so the entire scroll-event-driven stick machinery is blind to
-	// the drift. A ResizeObserver on the container catches it directly: any box
-	// change while stuck && !escaped re-pins the bottom. Observing the container
-	// (not the composer / a content sentinel) is sufficient: composer growth is
-	// exactly a container-box shrink; content-height growth (streaming appends,
-	// image loads) is already covered by the messages/liveOutputs snap effects.
-	// No feedback loop: the snap mutates scrollTop only — RO reports box size,
-	// which is unchanged. The snap's echo scroll event carries positive dSt with
-	// dSh=0, which classifyScroll no-ops (dSt >= -4) — no grace restamp needed.
+	// The composer sits BELOW this scroll container in a flex column. Its
+	// growth shrinks this box from the bottom; ChatInput sets scrollTop =
+	// pre-transient position + net growth, so the anchor row stays stationary.
+	// Only box GROWTH (composer shrink) needs a nudge — clamp the stranded
+	// scrollTop back so no dead gap lingers at the bottom. Content-height
+	// growth (streaming appends, image loads) doesn't change the box and stays
+	// covered by the messages/liveOutputs snap effects.
 	useEffect(() => {
 		const el = scrollRef.current;
 		if (!el || typeof ResizeObserver === "undefined") return;
+		let prevH = el.clientHeight;
 		const ro = new ResizeObserver(() => {
-			if (stickRef.current && !escapedRef.current) {
-				el.scrollTop = el.scrollHeight;
-				// stickRef is already true; keep the chip's state source in sync so
-				// the Back-to-bottom button can never linger after an RO re-pin.
-				setStickBottom(true);
-			}
+			const h = el.clientHeight;
+			const grew = h - prevH;
+			prevH = h;
+			if (grew > 0) el.scrollTop = Math.min(el.scrollTop, el.scrollHeight - el.clientHeight);
 		});
 		ro.observe(el);
 		return () => ro.disconnect();
@@ -690,6 +809,7 @@ export function MessageList({
 								toolStatuses={toolStatuses}
 								streaming={state.isStreaming}
 								onKillBash={onKillBash}
+								onRetry={m.id === lastId ? onRetry : undefined}
 								toolsWrap={toolsWrap}
 								thinkingWrap={thinkingWrap}
 								isLast={m.id === lastId}
@@ -697,6 +817,7 @@ export function MessageList({
 								questionAttachments={questionAttachments.get(m.id)}
 								onCollapse={isExpandedOld ? collapse : undefined}
 								searchActive={searchOpen}
+								autoExpand={m.id === freshCompactionId}
 							/>
 						</LazyMount>
 					);
@@ -717,42 +838,44 @@ export function MessageList({
 						searchActive={searchOpen}
 					/>
 				)}
+				{/* 仅流式中显示：isStreaming 为 false 说明运行已结算，此时若 retry
+					残留必是过期 flag（结束信号丢失），不显示，后续成功消息/agent_end
+					会把它清掉 */}
+				{state.retry && state.isStreaming && (
+					<div className="retry-notice" role="status" title={state.retry.errorMessage || undefined}>
+						<span className="retry-pulse" />
+						<span className="retry-text">
+							{state.retry.maxAttempts > 0
+								? t("retryingApi", {
+										attempt: Math.max(1, state.retry.attempt),
+										max: state.retry.maxAttempts,
+										error: state.retry.errorMessage,
+									})
+								: t("retryingApiSoon", { error: state.retry.errorMessage })}
+						</span>
+					</div>
+				)}
+				{/* 压缩中常驻进度：不依赖 isStreaming（压缩本身也算 streaming，
+					但即使结束信号丢失也要凭 compaction 字段显示，直到 compaction_end） */}
+				{state.compaction && <CompactionBanner compaction={state.compaction} />}
 				{state.isStreaming && messages.length === 0 && <div className="streaming-wait">{t("waitingResponse")}</div>}
 				{state.queue.steering.map((text, i) => (
-					<div className="queued-msg" key={`q-steer-${i}`}>
-						<div className="queued-bubble">
-							<span className="queued-tag steer">{t("queueSteerTag")}</span>
-							<div className="queued-text">{text}</div>
-							{onRemoveQueued && (
-								<button
-									type="button"
-									className="queued-remove"
-									title={t("queueRemoveTip")}
-									onClick={() => onRemoveQueued("steer", text)}
-								>
-									✕
-								</button>
-							)}
-						</div>
-					</div>
+					<QueuedMessage
+						key={`q-steer-${i}`}
+						kind="steer"
+						text={text}
+						onRemoveQueued={onRemoveQueued}
+						onRecallQueued={onRecallQueued}
+					/>
 				))}
 				{state.queue.followUp.map((text, i) => (
-					<div className="queued-msg" key={`q-fu-${i}`}>
-						<div className="queued-bubble">
-							<span className="queued-tag follow">{t("queueFollowTag")}</span>
-							<div className="queued-text">{text}</div>
-							{onRemoveQueued && (
-								<button
-									type="button"
-									className="queued-remove"
-									title={t("queueRemoveTip")}
-									onClick={() => onRemoveQueued("followUp", text)}
-								>
-									✕
-								</button>
-							)}
-						</div>
-					</div>
+					<QueuedMessage
+						key={`q-fu-${i}`}
+						kind="followUp"
+						text={text}
+						onRemoveQueued={onRemoveQueued}
+						onRecallQueued={onRecallQueued}
+					/>
 				))}
 			</div>
 			{!stickBottom && (

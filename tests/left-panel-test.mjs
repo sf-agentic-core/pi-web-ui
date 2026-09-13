@@ -1,9 +1,9 @@
 /**
  * Left-panel sections + per-project workspace switching (UI):
- *   fresh state shows only 历史对话 (no 运行的对话 — nothing has been
- *   displaced while streaming), new_chat keeps the running list empty by
- *   design, and switching workspace via the footer updates the file tree and
- *   fires the 已切换到工作目录 notice.
+ *   fresh state shows only 历史对话 — every chat here is still BLANK, and a
+ *   blank chat never enters 运行的对话 (one with content does, issue #140) —
+ *   new_chat keeps the running list empty too, and switching workspace via the
+ *   footer updates the file tree and fires the 已切换到工作目录 notice.
  */
 import { CHROME_PATH } from "./lib/chrome.mjs";
 import { portUp, freePort } from "./lib/port-utils.mjs";
@@ -63,8 +63,8 @@ await page.waitForSelector(".panel-left .panel-sessions", { timeout: 15000 });
 await sleep(800);
 
 // 1. Fresh state: only 历史对话 title; no 运行的对话 section, no divider
-//    (a single fresh conversation is never listed — it never ran in the
-//    background).
+//    (the only conversation is blank — blank chats are never listed; one with
+//    content is, see tests/panel-layout-test.mjs).
 let titles = await page.locator(".panel-left .panel-section-title").allTextContents();
 check(
 	"history title present in fresh state",
@@ -72,13 +72,13 @@ check(
 	titles.join("|"),
 );
 check(
-	"no 运行的对话 section yet (nothing running in background)",
+	"no 运行的对话 section yet (blank chats are not listed)",
 	!titles.some((t) => t.includes("运行的对话")),
 	titles.join("|"),
 );
 
-// 2. Start a second conversation (still project A) — the fresh chat is not
-//    listed either, so the running section stays hidden by design.
+// 2. Start a second conversation (still project A) — still a blank chat, so
+//    the running section stays hidden by design.
 await page.evaluate(() => {
 	const btn = [...document.querySelectorAll("button")].find((b) => b.textContent && b.textContent.includes("新对话"));
 	btn?.click();
@@ -86,7 +86,7 @@ await page.evaluate(() => {
 await sleep(1200);
 titles = await page.locator(".panel-left .panel-section-title").allTextContents();
 check(
-	"running list still empty after new_chat (by design)",
+	"running list still empty after new_chat (blank chat, by design)",
 	!titles.some((t) => t.includes("运行的对话")),
 	titles.join("|"),
 );

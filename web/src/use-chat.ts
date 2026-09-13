@@ -22,17 +22,39 @@ import type {
 	ToolStatus,
 	TerminalInfo,
 	UiModelConfigEntry,
+	UiPendingQuestion,
+	UiPluginCatalogEntry,
 	UiPluginInfo,
 	UiProviderConfig,
+	UiServiceInfo,
 	UiSettingsState,
 	UiState,
 } from "./types";
 
 import { applyMessageDelta, type MessageDeltaMsg } from "./message-delta";
+import { resolvePendingQuestion, type QuestionSource } from "./pending-question";
+import { setAppGlobals, setAppSend } from "./app-globals";
 import { emitPluginData } from "./plugin-loader";
 import { PROTOCOL_VERSION } from "./protocol-version";
 
 export type ConnStatus = "connecting" | "open" | "closed";
+
+/** localStorage key for the UI language (mirrors i18n.tsx STORAGE_KEY). */
+const UI_LANG_KEY = "pi-web-ui:lang";
+
+/** Browser UI locale for the hello/set_locale server report (issue #91).
+ *  Read straight from localStorage so the socket layer never depends on
+ *  React context. Missing → "" (server treats it as English default). */
+function readUiLocale(): string {
+	try {
+		return (localStorage.getItem(UI_LANG_KEY) ?? "").trim();
+	} catch {
+		return "";
+	}
+}
+
+/** Event fired by i18n.tsx setLocale when the user switches UI language. */
+export const UI_LOCALE_EVENT = "pi-web-ui:locale";
 
 /** One component in an all-source update check (update_status_all). */
 export interface UpdateAllItem {
@@ -87,6 +109,17 @@ export interface ChatState {
 	serverVersion?: string;
 	/** 引擎标识（pi | dsh）—— ready 消息携带，底栏显示徽标。 */
 	engine?: string;
+	/** PI_WEB_MANAGED=1 on the server: updates and plugin installs come from
+	 *  whoever deploys this instance, so the interface does not offer them.
+	 *  The server refuses those messages regardless (server/managed.ts). */
+	/** pi-web-ui's own version, from `ready`. `serverVersion` is the pi SDK's,
+	 *  and the update check — the client's other source — does not run on a
+	 *  managed instance. */
+	appVersion?: string;
+	managed?: boolean;
+	/** PI_WEB_TABS on the server: the tabs this instance offers. Undefined
+	 *  means all of them, which is the default. */
+	tabs?: string[];
 	/** Persisted session list for the left panel. */
 	sessions: SessionSummary[];
 	/** Open conversations (each runs its own session in parallel). */
@@ -137,18 +170,9 @@ export interface ChatState {
 		title: string;
 		args: unknown[];
 	} | null;
-	/** DSH engine: pending model question(s) (ask_user_question tool). */
-	question: {
-		id: string;
-		questions: {
-			id: string;
-			question: string;
-			detail?: string;
-			header?: string;
-			options?: { label: string; description?: string }[];
-			multiSelect?: boolean;
-		}[];
-	} | null;
+	/** 待用户回答的模型提问（ask_user_question）——两个引擎共用。服务端是事实源：
+	 *  即时通道（question_pending）+ 快照（UiState.pendingQuestion，见 syncPendingQuestion）。 */
+	question: UiPendingQuestion | null;
 	/** User command list from .pi/commands.json (terminal left panel). */
 	commands: CommandDef[];
 	commandsPath: string;
@@ -213,6 +237,11 @@ export interface ChatState {
 	plugins: UiPluginInfo[];
 	/** Server-side plugin reload counter (import-cache buster, see plugins msg). */
 	pluginsEpoch: number;
+	/** Installable-plugin list (marketplace): shipped catalog + user-added
+	 *  entries, each a one-click install candidate (see plugin_catalog msg). */
+	pluginCatalog: UiPluginCatalogEntry[];
+	/** Catalog epoch (increments on every add/remove — re-render trigger). */
+	pluginCatalogEpoch: number;
 	/** DSH engine: <dataDir>/dsh-patches user patch files (list + dir). */
 	dshPatches: { patchDir: string; files: { name: string; path: string; size: number; mtimeMs: number }[] } | null;
 	/** Increments when the server reports the watched git dir changed
@@ -234,7 +263,16 @@ type Action =
 	| { type: "notice"; notice: Notice }
 	| { type: "dismiss_notice"; id: number }
 	| { type: "auth_flow"; flow: AuthFlow }
-	| { type: "ready"; serverVersion: string; protocolVersion?: number; engine?: string }
+	| {
+			type: "ready";
+			serverVersion: string;
+			protocolVersion?: number;
+			engine?: string;
+			appVersion?: string;
+			managed?: boolean;
+			tabs?: string[];
+			service?: UiServiceInfo;
+	  }
 	| { type: "sessions"; sessions: SessionSummary[] }
 	| {
 			type: "conversations";
@@ -310,17 +348,7 @@ type Action =
 	  }
 	| {
 			type: "question";
-			question: {
-				id: string;
-				questions: {
-					id: string;
-					question: string;
-					detail?: string;
-					header?: string;
-					options?: { label: string; description?: string }[];
-					multiSelect?: boolean;
-				}[];
-			} | null;
+			question: UiPendingQuestion | null;
 	  }
 	| { type: "commands"; commands: CommandDef[]; path: string }
 	| { type: "slash_commands"; commands: SlashCommandInfo[] }
@@ -334,6 +362,7 @@ type Action =
 	| { type: "settings"; settings: UiSettingsState }
 	| { type: "bg_servers"; servers: BgServer[] }
 	| { type: "plugins"; plugins: UiPluginInfo[]; epoch: number }
+	| { type: "plugin_catalog"; entries: UiPluginCatalogEntry[]; epoch: number }
 	| {
 			type: "dsh_patches";
 			patchDir: string;
@@ -494,6 +523,9 @@ function reducer(state: ChatState, action: Action): ChatState {
 				...state,
 				serverVersion: action.serverVersion,
 				engine: action.engine,
+				appVersion: action.appVersion,
+				managed: action.managed === true,
+				tabs: action.tabs,
 				ready: true,
 				// Old page + new server (or the reverse) after an in-place update:
 				// WS handling on either side may be stale — banner asks for refresh.
@@ -650,6 +682,8 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return { ...state, bgServers: action.servers };
 		case "plugins":
 			return { ...state, plugins: action.plugins, pluginsEpoch: action.epoch };
+		case "plugin_catalog":
+			return { ...state, pluginCatalog: action.entries, pluginCatalogEpoch: action.epoch };
 		case "dsh_patches":
 			return { ...state, dshPatches: { patchDir: action.patchDir, files: action.files } };
 		case "terminal_add":
@@ -730,6 +764,33 @@ export function getClientId(): string {
 	return id;
 }
 
+/**
+ * 上次成功工作目录（localStorage，跨浏览器重启记忆）——解决「每次打开浏览器都
+ * 回默认目录」：clientId 在 sessionStorage（每标签页独立，issue #10），浏览器
+ * 整个关闭后 sessionStorage 清空 → 新 clientId 在服务端 client-state 里查不到
+ *  lastCwd → 落回默认目录。这里用 localStorage 单独记住最近一次成功的工作目录
+ * （只存一个路径字符串，不涉及客户端身份），首帧快照时若服务端落在其他目录则
+ * 补发 set_cwd 切回。
+ */
+const LAST_CWD_KEY = "pi-web-last-cwd";
+
+/** Read the last-used working directory remembered across browser restarts. */
+export function readLastCwd(): string | null {
+	try {
+		return localStorage.getItem(LAST_CWD_KEY);
+	} catch {
+		return null;
+	}
+}
+
+function writeLastCwd(cwd: string): void {
+	try {
+		localStorage.setItem(LAST_CWD_KEY, cwd);
+	} catch {
+		/* storage 不可用（隐私模式等）：忽略，仅本次会话生效 */
+	}
+}
+
 /** Resolve the WebSocket URL: same host when served by the backend, or the Vite proxy in dev. */
 function wsUrl(): string {
 	const proto = location.protocol === "https:" ? "wss:" : "ws:";
@@ -784,6 +845,8 @@ export function useChat() {
 		scmDirty: 0,
 		plugins: [],
 		pluginsEpoch: 0,
+		pluginCatalog: [],
+		pluginCatalogEpoch: 0,
 		dshPatches: null,
 		protocolMismatch: false,
 	});
@@ -805,6 +868,18 @@ export function useChat() {
 	 *  via snapshot when switched to. */
 	const lastDeltaSeqRef = useRef<Map<string, number>>(new Map());
 	const resyncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+	/** 跨重启工作目录记忆：restoreRef 只允许首帧快照发起一次恢复；lastCwdRef
+	 *  避免对同一目录重复写 localStorage。 */
+	const restoreRef = useRef(false);
+	const lastCwdRef = useRef<string | null>(null);
+
+	/** 已作答/取消的问卷 id —— 在途旧快照不得把已答过的问卷重新弹出来。
+	 *  id 全局单调递增（服务端 questionSeq / 时间戳），保留少量历史即可。 */
+	const answeredQuestionsRef = useRef<Set<string>>(new Set());
+	/** 当前问卷面板的来源：live = question_pending 即时通道弹出；snapshot = 由快照
+	 *  恢复（重连/刷新）。只有 snapshot 来源的才接受快照收起（见 syncPendingQuestion）。 */
+	const questionSourceRef = useRef<QuestionSource>("live");
 
 	/** Debounced authoritative resync: get_state always returns a FULL snapshot.
 	 *  Shared by delta-seq gap detection and snapshot_delta rev mismatch. */
@@ -849,10 +924,48 @@ export function useChat() {
 				dispatch({ type: "updates_check_started" });
 			}
 			ws.send(JSON.stringify(msg));
+			// 提交/取消模型提问后立即收起对话框：服务端只 resolve 模型侧 Promise，
+			// 不会发任何回执清除前端面板（否则会出现“回答后不消失、取消无效”）。
+			// 模型再次 ask_user_question 时会重新 question_pending，面板自动回来。
+			if (msg.type === "question_answer") {
+				// 记住这个 id：快照恢复时跳过它（回答消息与快照在途时会交错，服务端
+				// 删除 pending 之前生成的快照仍带着这张问卷）。
+				answeredQuestionsRef.current.add(msg.id);
+				if (answeredQuestionsRef.current.size > 64) {
+					const oldest = answeredQuestionsRef.current.values().next().value;
+					if (oldest !== undefined) answeredQuestionsRef.current.delete(oldest);
+				}
+				questionSourceRef.current = "live";
+				dispatch({ type: "question", question: null });
+			}
 			return true;
 		}
 		return false;
 	}, []);
+
+	/** 快照里的待答问卷 → 恢复/收起对话框（页面刷新、WS 重连、新标签页）。
+	 *
+	 *  为什么需要它：question_pending 是即时通道，只推给「提问那一刻在线」的连接；
+	 *  刷新/重连后前端拿不到那条历史消息，而服务端还在阻塞等人回答——问卷就从眼前
+	 *  消失（DshQuestionDialog 无入口）。快照是权威态，据此把面板补回来。
+	 *  判定规则（含两条防闪烁/防赖着的边界）全在纯函数 resolvePendingQuestion。 */
+	const syncPendingQuestion = useCallback((p: UiPendingQuestion | null | undefined) => {
+		const decision = resolvePendingQuestion({
+			current: chatApi.current.chat.question,
+			source: questionSourceRef.current,
+			snapshot: p,
+			answered: answeredQuestionsRef.current,
+		});
+		if (!decision.changed) return;
+		questionSourceRef.current = decision.source;
+		dispatch({ type: "question", question: decision.question });
+	}, []);
+
+	// 装配全局发送器（web/src/app-globals.ts 的 appSend）：**在 render 期间**赋值，不用 effect。
+	// 子组件的 effect 先于父组件跑，若放到 effect 里装配，那些「挂载即发请求」的弹窗
+	// （PiSetupModal / ModelConfigModal / TerminalPanel …）会在 appSend 还是空的时候发消息，
+	// 静默丢包。send 是 useCallback([]) 的稳定引用，重复赋值无副作用（StrictMode 双渲染亦然）。
+	setAppSend(send);
 
 	/** Stable across renders — the reconnect loop lives entirely inside this closure. */
 	const connect = useCallback(() => {
@@ -870,6 +983,9 @@ export function useChat() {
 				JSON.stringify({
 					type: "hello",
 					clientId: getClientId(),
+					// UI language report (issue #91): server persists it per
+					// client and uses it for tool return values / AI prompts.
+					locale: readUiLocale(),
 				} satisfies ClientMessage),
 			);
 		};
@@ -885,11 +1001,26 @@ export function useChat() {
 			}
 			switch (msg.type) {
 				case "ready":
+					// 全局运行态（engine / managed / tabs / 版本号）在这里落一次：
+					// 同步于 dispatch 之前，等 React 因为新状态重渲染时，读全局的组件
+					// 已经拿到正确值（不会闪一帧 pi）。详见 web/src/app-globals.ts。
+					setAppGlobals({
+						engine: msg.engine ?? "pi",
+						managed: !!msg.managed,
+						tabs: msg.tabs,
+						appVersion: msg.appVersion,
+						serverVersion: msg.serverVersion,
+						service: msg.service,
+					});
 					dispatch({
 						type: "ready",
 						serverVersion: msg.serverVersion,
 						protocolVersion: msg.protocolVersion,
 						engine: msg.engine,
+						appVersion: msg.appVersion,
+						managed: msg.managed,
+						tabs: msg.tabs,
+						service: msg.service,
 					});
 					// Ensure a fresh snapshot on (re)connect.
 					ws.send(JSON.stringify({ type: "get_state" } satisfies ClientMessage));
@@ -901,13 +1032,20 @@ export function useChat() {
 					ws.send(JSON.stringify({ type: "list_models" } satisfies ClientMessage));
 					ws.send(JSON.stringify({ type: "list_commands" } satisfies ClientMessage));
 					ws.send(JSON.stringify({ type: "get_commands" } satisfies ClientMessage));
-					ws.send(JSON.stringify({ type: "check_update" } satisfies ClientMessage));
-					ws.send(JSON.stringify({ type: "check_updates_all" } satisfies ClientMessage));
+					// A managed instance refuses both (server/managed.ts): asking
+					// anyway would greet every visitor with two red toasts about a
+					// thing the interface does not even offer.
+					if (!msg.managed) {
+						ws.send(JSON.stringify({ type: "check_update" } satisfies ClientMessage));
+						ws.send(JSON.stringify({ type: "check_updates_all" } satisfies ClientMessage));
+					}
 					break;
 				case "snapshot":
 					// Snapshot is authoritative — delta sequence tracking restarts.
 					lastDeltaSeqRef.current = new Map();
 					dispatch({ type: "snapshot", state: msg.state });
+					// 重连/刷新后从这里把待答问卷恢复出来（见 syncPendingQuestion）。
+					syncPendingQuestion(msg.state.pendingQuestion);
 					break;
 				case "snapshot_delta": {
 					// Gap detection BEFORE dispatch: if this incremental checkpoint
@@ -916,6 +1054,7 @@ export function useChat() {
 					const cur = chatApi.current.chat.state;
 					if (!cur || cur.conversationId !== msg.conversationId || cur.rev !== msg.baseRev) scheduleResync();
 					dispatch({ type: "snapshot_delta", msg });
+					syncPendingQuestion(msg.state.pendingQuestion);
 					break;
 				}
 				case "tool_delta":
@@ -1084,11 +1223,61 @@ export function useChat() {
 					dispatch({ type: "dialog", dialog: null });
 					break;
 				case "question_pending":
+					questionSourceRef.current = "live";
 					dispatch({
 						type: "question",
-						question: { id: msg.id, questions: msg.questions },
+						question: {
+							id: msg.id,
+							...(msg.deadline !== undefined ? { deadline: msg.deadline } : {}),
+							questions: msg.questions,
+						},
 					});
 					break;
+				case "page_request": {
+					// 模型要操作浏览器里的页面（browser_page 工具）：转给扩展，再把结果回给服务端。
+					// 服务端的工具正阻塞等这个 page_response —— 任何一条路径（宿主桥缺失、
+					// 扩展没装、页面没授权、动作失败）都必须回一条，否则模型只能等到超时。
+					void (async () => {
+						const host = (
+							window as unknown as {
+								__piWebUiHost?: {
+									pageCall?: (opts: {
+										op: string;
+										args?: Record<string, unknown>;
+										target?: string;
+										timeoutMs?: number;
+									}) => Promise<{ ok: boolean; result?: unknown; error?: string }>;
+								};
+							}
+						).__piWebUiHost;
+						let res: { ok: boolean; result?: unknown; error?: string };
+						if (!host?.pageCall) {
+							res = { ok: false, error: "宿主页面桥不可用（页面版本过旧？）—— 刷新本页后再试" };
+						} else {
+							try {
+								res = await host.pageCall({
+									op: msg.op,
+									...(msg.args === undefined ? {} : { args: msg.args }),
+									...(msg.target ? { target: msg.target } : {}),
+									timeoutMs: msg.timeoutMs,
+								});
+							} catch (err) {
+								res = { ok: false, error: err instanceof Error ? err.message : String(err) };
+							}
+						}
+						send({
+							type: "page_response",
+							id: msg.id,
+							ok: res.ok === true,
+							...(res.ok === true
+								? res.result === undefined
+									? {}
+									: { result: res.result }
+								: { error: res.error ?? "页面操作失败" }),
+						});
+					})();
+					break;
+				}
 				case "terminal_output":
 					bridgeRef.current.write(
 						msg.conversationId ?? chatApi.current.chat.activeConversationId,
@@ -1133,6 +1322,9 @@ export function useChat() {
 				case "plugins":
 					dispatch({ type: "plugins", plugins: msg.plugins, epoch: msg.epoch });
 					break;
+				case "plugin_catalog":
+					dispatch({ type: "plugin_catalog", entries: msg.entries, epoch: msg.epoch });
+					break;
 				case "dsh_patches":
 					dispatch({ type: "dsh_patches", patchDir: msg.patchDir, files: msg.files });
 					break;
@@ -1172,6 +1364,18 @@ export function useChat() {
 		};
 	}, []);
 
+	// UI language changes (i18n.tsx setLocale) → report to the server so tool
+	// return values / AI prompts follow the UI locale (issue #91). Socket may
+	// be mid-reconnect — hello already carries the fresh code on re-open.
+	useEffect(() => {
+		const onLocale = (ev: Event) => {
+			const locale = (ev as CustomEvent<string>).detail ?? readUiLocale();
+			if (locale) send({ type: "set_locale", locale });
+		};
+		window.addEventListener(UI_LOCALE_EVENT, onLocale);
+		return () => window.removeEventListener(UI_LOCALE_EVENT, onLocale);
+	}, [send]);
+
 	// Mount once; all reconnection is self-contained in `connect`.
 	useEffect(() => {
 		aliveRef.current = true;
@@ -1196,6 +1400,38 @@ export function useChat() {
 			wsRef.current = null;
 		};
 	}, [connect]);
+
+	// -- 跨浏览器重启：恢复上次工作目录（localStorage 记忆） ---------------------
+	// 服务端按 clientId 记 lastCwd，而 clientId 在 sessionStorage（关浏览器即失），
+	// 重启后新 clientId 查不到记录 → 落回默认目录。这里在首帧快照上：若服务端
+	// 当前目录 ≠ 记忆目录，补发 set_cwd 切回；此后每次 cwd 变化都写回记忆。
+	useEffect(() => {
+		const cwd = chat.state?.cwd;
+		if (!cwd) return;
+		if (!restoreRef.current) {
+			restoreRef.current = true;
+			const remembered = readLastCwd();
+			if (remembered && remembered !== cwd) {
+				// 记忆目录存在则服务端切换后会推新快照；不存在则服务端报错通知，
+				// 保持默认目录——两种结果都不回写记忆，等用户下次操作再更新。
+				send({ type: "set_cwd", path: remembered });
+				return;
+			}
+		}
+		if (lastCwdRef.current !== cwd) {
+			lastCwdRef.current = cwd;
+			writeLastCwd(cwd);
+		}
+	}, [chat.state?.cwd, send]);
+
+	// -- 全局镜像：连接态 + 当前工作目录 -----------------------------------------
+	// 这三个值整棵树都要（左栏/输入框/右栏/全局搜索/底栏…）且变化频率低，放全局 store
+	// 省掉逐层传参（见 web/src/app-globals.ts）。用 effect 单一写入：值就是 reducer
+	// 里的真值，不会出现第二个 source of truth；最多晚一帧（对应默认值只会是
+	//「未就绪 / 未连接 / 空目录」，用户看不出）。
+	useEffect(() => {
+		setAppGlobals({ ready: chat.ready, status: chat.status, cwd: chat.state?.cwd ?? "" });
+	}, [chat.ready, chat.status, chat.state?.cwd]);
 
 	const dismissNotice = useCallback((id: number) => dispatch({ type: "dismiss_notice", id }), []);
 

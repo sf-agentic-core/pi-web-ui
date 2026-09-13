@@ -20,8 +20,17 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { existsSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
-import type { ServerMessage, UiPluginInfo, BgServer, UiPluginSettingField } from "./protocol.js";
+import type {
+	ServerMessage,
+	UiMessage,
+	UiPluginInfo,
+	BgServer,
+	UiPluginSettingField,
+	UiPluginCatalogEntry,
+} from "./protocol.js";
+import { pick, type ServerLang } from "./i18n.js";
 import { PluginStorage, PluginSecrets, ensurePluginDeps, WorkspaceFS } from "./plugin-facilities.js";
+import { readCatalog, addCustomEntry, removeCustomEntry, type CatalogAddInput } from "./plugin-catalog.js";
 import type { Request, Response } from "express";
 import { createHash } from "node:crypto";
 
@@ -34,9 +43,64 @@ export interface PluginToolEvent {
 	toolName: string;
 	/** 事件所属对话（会话未就绪时可能为空）。 */
 	conversationId?: string;
+	/** SDK 工具调用 id（start/end 成对关联；旧插件忽略即可）。 */
+	toolCallId?: string;
 	/** end 独有：真实执行耗时毫秒 / 是否报错。 */
 	durationMs?: number;
 	isError?: boolean;
+}
+
+/**
+ * 当前打开对话的快照（host.getActiveConversation 返回，轨迹类插件用）。
+ * messages/streamingMessage 是服务端只读缓存对象的引用——插件只读、不得修改，
+ * 要广播/持久化必须先抽成摘要（截断封顶），禁止原样下发（单条可达 200K）。
+ */
+export interface PluginConversationSnapshot {
+	conversationId: string;
+	title: string;
+	/** 该对话最近活跃毫秒时间戳（多客户端时取最新者为“当前打开”）。 */
+	at: number;
+	isStreaming: boolean;
+	messages: UiMessage[];
+	streamingMessage: UiMessage | null;
+	stats: {
+		totalMessages: number;
+		tokens: { input: number; output: number; total: number };
+		cost: number;
+	};
+}
+
+/**
+ * 插件收到的智能体运行轨迹事件（agent-service 的 SDK 事件流转发，
+ * host.onRunEvent 订阅）。一次用户任务对应一组事件：
+ * run_start → (turn_start/message/tool_start/tool_end…交错) → run_end。
+ *
+ * 轨迹视图插件（如 run-trace）靠它把「收到任务 → 思考 → 工具调用 →
+ * 文件改动 → 产出结果」聚成时间线；payload 全部截断封顶，可直接存/广播。
+ */
+export interface PluginRunEvent {
+	type: "run_start" | "run_end" | "turn_start" | "turn_end" | "message" | "tool_start" | "tool_end";
+	/** 事件所属对话。 */
+	conversationId?: string;
+	/** 事件毫秒时间戳（服务端时钟）。 */
+	at: number;
+	/** run_start：触发本轮的用户任务文本（截断 500 字；steer 等内部续跑为空）。 */
+	task?: string;
+	/** message：已定稿的一条消息（serialize.ts 同形，文本/参数已截断）。 */
+	message?: UiMessage;
+	/** tool_start/tool_end：SDK 工具调用 id（成对关联）。 */
+	toolCallId?: string;
+	/** tool_start/tool_end：工具名。 */
+	toolName?: string;
+	/** tool_start：调用参数 JSON（截断 4k）。 */
+	argsText?: string;
+	/** tool_end：结果文本预览（截断 4k）。 */
+	resultText?: string;
+	/** tool_end：真实执行耗时毫秒 / 是否报错。 */
+	durationMs?: number;
+	isError?: boolean;
+	/** run_end：末条 assistant 的 stopReason（"aborted" 等，无则省略）。 */
+	stopReason?: string;
 }
 
 /**
@@ -71,7 +135,7 @@ export interface PluginHost {
 	/** 向所有已连接的浏览器广播一条本插件的消息（plugin_data）。 */
 	broadcast(payload: unknown): void;
 	/** 发一条系统通知条（notice）给所有已连接的浏览器。 */
-	notify(level: "info" | "warning" | "error", text: string): void;
+	notify(level: "info" | "warning" | "error", text: string, textEn?: string): void;
 	/** 注册客户端上行消息（plugin_message）处理器；回调第二参为发送方 clientId
 	 *  （可用于 sendTo 定向回复）。返回注销函数。 */
 	onMessage(handler: (payload: unknown, from?: string) => void): () => void;
@@ -85,6 +149,16 @@ export interface PluginHost {
 	onAttach(handler: (clientId: string) => void): () => void;
 	/** 订阅智能体的工具执行事件（bash/读写文件等，start+end 成对）；返回注销函数。 */
 	onToolEvent(handler: (ev: PluginToolEvent) => void): () => void;
+	/** 订阅智能体的运行轨迹事件（run_start/message/tool_start/tool_end/run_end…
+	 *  —— 轨迹/时间线类插件用它聚合「任务 → 思考 → 工具 → 文件改动 → 结果」。
+	 *  返回注销函数）。 */
+	onRunEvent(handler: (ev: PluginRunEvent) => void): () => void;
+	/** 读取当前打开对话的快照（标题/消息/流式消息/统计——轨迹视图直接显示
+	 *  打开对话的时间线，不只收录插件安装后的运行）。返回 null = 暂无对话。 */
+	getActiveConversation(): PluginConversationSnapshot | null;
+	/** 订阅「当前打开对话变了」（切历史会话 / 切 running 对话 / 新对话——
+	 *  轨迹类插件靠它重拉时间线，否则切会话后视图一直是旧的）。返回注销函数。 */
+	onConversationChanged(handler: () => void): () => void;
 	/** 注册一个供 AI 调用的工具（新对话创建时带上，已有会话动态注入）；
 	 *  返回注销函数——插件可按自己的配置开关随时注册/注销（如邮箱插件的
 	 *  「让 AI 管理邮件」开关）。 */
@@ -168,6 +242,10 @@ interface LoadedPlugin {
 	/** deactivate() if the entry provided one. */
 	deactivate?: () => void;
 	toolHandlers: Set<(ev: PluginToolEvent) => void>;
+	/** 运行轨迹事件订阅（host.onRunEvent）。 */
+	runHandlers: Set<(ev: PluginRunEvent) => void>;
+	/** 对话切换订阅（host.onConversationChanged）。 */
+	convChangeHandlers: Set<() => void>;
 	/** onAttach 钩子（新客户端接入时逐个回调）。 */
 	attachHandlers: Set<(clientId: string) => void>;
 	/** onCwdChange 钩子（工作区切换时逐个回调）。 */
@@ -282,20 +360,34 @@ function saveSettingsValues(
 	dir: string,
 	schema: UiPluginSettingField[],
 	values: Record<string, unknown> | undefined,
+	/** 错误文案语言（默认英文）；调用方可传 () => getLang() 实现跟随。 */
+	lang?: () => ServerLang,
 ): { error?: string; clean: Record<string, unknown> } {
+	const l = lang?.() ?? "en";
 	const clean: Record<string, unknown> = {};
 	for (const f of schema) {
 		const v = values?.[f.key];
 		if (f.type === "number") {
 			const n = v === undefined ? Number(f.default ?? 0) : Number(v);
 			if (!Number.isFinite(n) || (f.min !== undefined && n < f.min) || (f.max !== undefined && n > f.max)) {
-				return { error: `${f.label} 超出范围`, clean };
+				return {
+					error: pick(l, `${f.label} 超出范围`, `${f.label} out of range`, "plugins.settings.out.of.range", {
+						"f.label": f.label,
+					}),
+					clean,
+				};
 			}
 			clean[f.key] = n;
 		} else if (f.type === "boolean") {
 			clean[f.key] = v === undefined ? Boolean(f.default) : Boolean(v);
 		} else if (f.type === "select") {
-			if (v !== undefined && !f.options?.includes(String(v))) return { error: `${f.label} 值非法`, clean };
+			if (v !== undefined && !f.options?.includes(String(v)))
+				return {
+					error: pick(l, `${f.label} 值非法`, `Invalid value for ${f.label}`, "plugins.settings.invalid.value", {
+						"f.label": f.label,
+					}),
+					clean,
+				};
 			clean[f.key] = v === undefined ? f.default : String(v);
 		} else {
 			clean[f.key] = v === undefined ? (f.default ?? "") : String(v);
@@ -339,12 +431,16 @@ export class PluginManager {
 	onBgTasksChanged: (() => void) | undefined = undefined;
 	/** 服务端重载纪元：每次 reload() +1，前端用作 import 缓存击穿参数。 */
 	private epochCounter = 0;
+	/** 插件市场列表纪元：每次 add/remove +1，前端据此重渲。 */
+	private catalogEpoch = 0;
 	/** 当前全局工作区（host.cwd 的背后存储）——随 notifyCwd 更新。 */
 	private cwdValue: string;
 
 	constructor(
 		private readonly dataDir: string,
 		cwd: string,
+		/** 随包发布的默认插件列表（<pkgRoot>/plugins/catalog.json）。缺省 = 无内置列表。 */
+		private readonly builtinCatalogPath?: string,
 	) {
 		this.cwdValue = resolve(cwd);
 	}
@@ -427,13 +523,27 @@ export class PluginManager {
 	/** 保存某插件的声明式设置（⚙ 面板 → plugin_settings 消息）：按 schema 校验、
 	 *  原子写 storage.json 的 settings 键、通知插件 onSettingsChanged、重推清单
 	 *  让前端回显。返回错误信息或 null（成功）。 */
-	savePluginSettings(pluginId: string, values: Record<string, unknown>): { error?: string } {
-		if (!ID_RE.test(pluginId)) return { error: "非法的插件 id" };
+	savePluginSettings(
+		pluginId: string,
+		values: Record<string, unknown>,
+		/** 错误文案语言（默认英文）；调用方可传 () => getLang() 实现跟随。 */
+		lang?: () => ServerLang,
+	): { error?: string } {
+		const l = lang?.() ?? "en";
+		if (!ID_RE.test(pluginId)) return { error: pick(l, "非法的插件 id", "Invalid plugin id", "plugins.id.invalid") };
 		const dir = join(this.pluginsDir, pluginId);
 		const info = this.loaded.get(pluginId)?.info;
 		const schema = info?.settingsSchema ?? [];
-		if (!schema.length) return { error: "该插件没有声明式设置（manifest 未声明 settings）" };
-		const { error, clean } = saveSettingsValues(dir, schema, values);
+		if (!schema.length)
+			return {
+				error: pick(
+					l,
+					"该插件没有声明式设置（manifest 未声明 settings）",
+					"This plugin has no declarative settings (manifest declares no settings)",
+					"plugins.settings.no.declarative",
+				),
+			};
+		const { error, clean } = saveSettingsValues(dir, schema, values, lang);
 		if (error) return { error };
 		// 通知插件（异常隔离）
 		for (const h of this.loaded.get(pluginId)?.settingsHandlers ?? []) {
@@ -451,6 +561,61 @@ export class PluginManager {
 	/** 当前重载纪元（随 plugins 消息下发）。 */
 	get epoch(): number {
 		return this.epochCounter;
+	}
+
+	/** 用户自定义插件列表文件（<dataDir>/plugin-catalog.json）。 */
+	get customCatalogPath(): string {
+		return join(this.dataDir, "plugin-catalog.json");
+	}
+
+	/** 合并后的插件市场列表（builtin + 用户自定义，同 id 用户覆盖）。 */
+	catalog(): UiPluginCatalogEntry[] {
+		return this.builtinCatalogPath ? readCatalog(this.builtinCatalogPath, this.customCatalogPath) : [];
+	}
+
+	/** 插件市场列表纪元（随 plugin_catalog 消息下发）。 */
+	get catalogEpochValue(): number {
+		return this.catalogEpoch;
+	}
+
+	/** 把插件市场列表推给所有 socket。 */
+	async pushCatalog(): Promise<void> {
+		this.deliverAll({ type: "plugin_catalog", entries: this.catalog(), epoch: this.catalogEpoch });
+	}
+
+	/** 往用户自定义列表加一条（同 id 覆盖）；返回错误信息或 null（成功）。
+	 *  成功后 epoch+1 并重推列表。 */
+	addCatalogEntry(input: CatalogAddInput, lang?: () => ServerLang): { error?: string } {
+		try {
+			addCustomEntry(this.customCatalogPath, input, lang);
+			this.catalogEpoch += 1;
+			void this.pushCatalog();
+			return {};
+		} catch (err) {
+			return { error: (err as Error).message };
+		}
+	}
+
+	/** 移除一条用户自定义条目（builtin 不可经此删除）；返回错误信息或 null。 */
+	removeCatalogEntry(id: string, lang?: () => ServerLang): { error?: string } {
+		const l = lang?.() ?? "en";
+		try {
+			const ok = removeCustomEntry(this.customCatalogPath, id);
+			if (!ok)
+				return {
+					error: pick(
+						l,
+						"未找到该条目，或它是内置条目（不可移除）",
+						"Entry not found, or it is a built-in entry (cannot be removed)",
+						"plugins.catalog.entry.cannot.remove",
+					),
+				};
+			this.catalogEpoch += 1;
+			void this.pushCatalog();
+			return {};
+		} catch (err) {
+			return { error: (err as Error).message };
+		}
 	}
 
 	addSender(send: (msg: ServerMessage) => void, cid: () => string | null): () => void {
@@ -502,6 +667,7 @@ export class PluginManager {
 			this.notifyAll(
 				perms.length ? "warning" : "info",
 				`插件「${info.name}」已激活（${prev ? "能力清单变更" : "首次安装"}；声明能力：${list}）——请确认来源可信`,
+				`Plugin "${info.name}" activated (${prev ? "capability list changed" : "first install"}; declared: ${list}) — verify the source is trusted`,
 			);
 			writeFileSync(markerFile, JSON.stringify({ v: 1, key, perms }), "utf8");
 		} catch (err) {
@@ -524,7 +690,15 @@ export class PluginManager {
 			return;
 		}
 		try {
-			handler(req, res);
+			// 异步 handler（`async (req, res) => …`）的 rejection 不会被这里的 try 接住，
+			// 会变成 unhandledRejection 直接杀掉整个服务（插件读文件失败、host.fs 越界
+			// 拒绝、上游超时…都会走到这条路上）——用 Promise.resolve().catch 兜住，
+			// 与同步抛错同样转 500。
+			void Promise.resolve(handler(req, res)).catch((err: unknown) => {
+				console.error(`[plugin:${pluginId}] http ${method} ${path} failed:`, err);
+				if (!res.headersSent) res.status(500).end("internal error");
+				else res.end();
+			});
 		} catch (err) {
 			console.error(`[plugin:${pluginId}] http ${method} ${path} failed:`, err);
 			if (!res.headersSent) res.status(500).end("internal error");
@@ -537,8 +711,8 @@ export class PluginManager {
 	}
 
 	/** 系统通知：发给所有 socket（复用 notice 消息，前端 toast 展示）。 */
-	notifyAll(level: "info" | "warning" | "error", text: string): void {
-		this.deliverAll({ type: "notice", level, text });
+	notifyAll(level: "info" | "warning" | "error", text: string, textEn?: string): void {
+		this.deliverAll({ type: "notice", level, text, textEn });
 	}
 
 	/** 给指定客户端定向发一条插件消息；找不到该 socket 时静默忽略。 */
@@ -562,11 +736,11 @@ export class PluginManager {
 	/** 服务端热重载：反激活全部 → 清缓存 → 重扫重激活 → epoch+1。
 	 *  返回新目录清单（含激活结果）。重激活后的插件实例是新模块，
 	 *  内存状态为初始值——逐个客户端触发 onAttach 让它们重推自身状态。 */
-	async reload(): Promise<UiPluginInfo[]> {
+	async reload(lang?: () => ServerLang): Promise<UiPluginInfo[]> {
 		this.dispose();
 		this.attempted.clear();
 		this.epochCounter += 1;
-		const list = await this.ensureLoaded();
+		const list = await this.ensureLoaded(lang);
 		for (const s of this.senders) {
 			const cid = s.cid();
 			if (cid) this.notifyAttach(cid);
@@ -596,6 +770,49 @@ export class PluginManager {
 					h(ev);
 				} catch (err) {
 					console.error(`[plugin:${p.info.id}] tool-event handler failed:`, err);
+				}
+			}
+		}
+	}
+
+	/** index.ts 注入：读取当前打开对话的快照（轨迹类插件经 host.getActiveConversation 调用）。 */
+	conversationProvider: (() => PluginConversationSnapshot | null) | undefined = undefined;
+
+	/** 当前打开对话的快照（无提供者/暂无对话时返回 null）。 */
+	getActiveConversation(): PluginConversationSnapshot | null {
+		try {
+			return this.conversationProvider?.() ?? null;
+		} catch (err) {
+			console.error("[plugins] conversationProvider failed:", err);
+			return null;
+		}
+	}
+
+	/** agent-service 调：当前打开对话变了（切历史会话/切 running 对话/新对话）——
+	 *  轨迹类插件靠它重拉时间线（异常隔离）。 */
+	emitConversationChanged(): void {
+		for (const p of this.loaded.values()) {
+			if (p.convChangeHandlers.size === 0) continue;
+			for (const h of p.convChangeHandlers) {
+				try {
+					h();
+				} catch (err) {
+					console.error(`[plugin:${p.info.id}] conversation-changed handler failed:`, err);
+				}
+			}
+		}
+	}
+
+	/** agent-service 调：把运行轨迹事件扇出给所有插件（异常隔离，
+	 *  与 emitToolEvent 同级；订阅者崩了只记日志，不影响主流程）。 */
+	emitRunEvent(ev: PluginRunEvent): void {
+		for (const p of this.loaded.values()) {
+			if (p.runHandlers.size === 0) continue;
+			for (const h of p.runHandlers) {
+				try {
+					h(ev);
+				} catch (err) {
+					console.error(`[plugin:${p.info.id}] run-event handler failed:`, err);
 				}
 			}
 		}
@@ -702,12 +919,12 @@ export class PluginManager {
 	 * attach 时调用：重扫目录 + 激活尚未加载的新插件。
 	 * 返回给浏览器的目录（含激活失败的条目，前端显示为不可用）。
 	 */
-	async ensureLoaded(): Promise<UiPluginInfo[]> {
+	async ensureLoaded(lang?: () => ServerLang): Promise<UiPluginInfo[]> {
 		const found = await this.scan();
 		for (const info of found) {
 			if (this.loaded.has(info.id) || this.attempted.has(info.id)) continue;
 			if (!existsSync(join(this.pluginsDir, info.id, "index.mjs"))) continue; // 纯前端插件
-			await this.activate(info);
+			await this.activate(info, lang);
 		}
 		// 已被删除的插件：调用 deactivate 并移出缓存
 		// eslint-disable-next-line unicorn/no-useless-spread -- snapshot: handlers may unsubscribe mid-emit
@@ -719,7 +936,13 @@ export class PluginManager {
 		return found.map((f) => this.loaded.get(f.id)?.info ?? f);
 	}
 
-	/** 反激活单个插件：deactivate + 注销 AI 工具 + 清缓存。 */
+	/** 反激活单个插件：deactivate + 注销 AI 工具 + 清缓存。
+	 *
+	 *  注意这里必须把 id 从 attempted 里摘掉：目录一时不在（`pi-web-ui install --force`
+	 *  先 rm 再 cp，扫描正好撞上窗口期）只是「暂时看成卸载」，目录回来后还要能重新激活；
+	 *  留在 attempted 里 = 本进程内永远不再激活，插件的 HTTP 路由 / AI 工具全没了，
+	 *  前端只会看到「代理请求失败 404 <url>」（插件的 /proxy 路由不存在），且 CLI 承诺的
+	 *  「刷新浏览器即可加载」失效，必须重启服务才能恢复。 */
 	private deactivateEntry(id: string, p: LoadedPlugin): void {
 		try {
 			p.deactivate?.();
@@ -736,6 +959,11 @@ export class PluginManager {
 		}
 		this.loaded.delete(id);
 		this.messageHandlers.delete(id);
+		this.attempted.delete(id);
+		// 重新激活时会 import 磁盘上的 index.mjs：Node 的 ESM 缓存按 URL（含 ?e=）
+		// 命中，epoch 不变就会拿到旧模块（更新插件后还是旧代码）——所以这里也 +1，
+		// 顺带让浏览器端 ?e= 变化、重拉插件的 client bundle。
+		this.epochCounter += 1;
 		console.log(`[plugin:${id}] removed`);
 	}
 
@@ -790,6 +1018,8 @@ export class PluginManager {
 					apiVersion?: number;
 					permissions?: unknown;
 					settings?: unknown;
+					renderers?: unknown;
+					view?: unknown;
 				};
 				out.push({
 					id: name,
@@ -806,6 +1036,12 @@ export class PluginManager {
 					// 声明式设置 schema + 当前存值（⚙ 面板自动渲染表单用）
 					settingsSchema: parseSettingsSchema(m.settings),
 					settingsValues: storedSettingsValues(dir, parseSettingsSchema(m.settings)),
+					// 可渲染的 fenced-code 语言（manifest "renderers"）——前端据此按需加载
+					renderers: Array.isArray(m.renderers)
+						? m.renderers.filter((r): r is string => typeof r === "string" && r.length > 0).slice(0, 32)
+						: undefined,
+					// 是否有独立视图 tab（manifest "view"，缺省 true）；纯 renderer 插件写 false
+					view: typeof m.view === "boolean" ? m.view : true,
 					// 安装来源（pi-web-ui install 写入的 .pi-source.json）——
 					// 设置面板据此显示「更新」按钮；手工拷入的插件没有此文件。
 					source: await readFile(join(dir, ".pi-source.json"), "utf8")
@@ -826,12 +1062,15 @@ export class PluginManager {
 		return out;
 	}
 
-	private async activate(info: UiPluginInfo): Promise<void> {
+	private async activate(info: UiPluginInfo, lang?: () => ServerLang): Promise<void> {
+		const l = lang?.() ?? "en";
 		this.attempted.add(info.id);
 		const dir = join(this.pluginsDir, info.id);
 		const handlers = new Set<(payload: unknown) => void>();
 		this.messageHandlers.set(info.id, handlers);
 		const toolHandlers = new Set<(ev: PluginToolEvent) => void>();
+		const runHandlers = new Set<(ev: PluginRunEvent) => void>();
+		const convChangeHandlers = new Set<() => void>();
 		const attachHandlers = new Set<(clientId: string) => void>();
 		const cwdHandlers = new Set<(cwd: string) => void>();
 		const httpRoutes = new Map<string, (req: Request, res: Response) => void>();
@@ -846,11 +1085,19 @@ export class PluginManager {
 			apiVersion = Number(JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8")).apiVersion ?? 1) || 1;
 		} catch {}
 		if (apiVersion > PLUGIN_API_VERSION) {
-			const msg = `插件要求宿主 API v${apiVersion}，当前宿主 v${PLUGIN_API_VERSION} —— 请升级 pi-web-ui`;
+			const msg = pick(
+				l,
+				`插件要求宿主 API v${apiVersion}，当前宿主 v${PLUGIN_API_VERSION} —— 请升级 pi-web-ui`,
+				`Plugin requires host API v${apiVersion} but the host is v${PLUGIN_API_VERSION} — please upgrade pi-web-ui`,
+				"plugins.host.api.mismatch",
+				{ apiVersion, PLUGIN_API_VERSION },
+			);
 			console.error(`[plugin:${info.id}] ${msg}`);
 			this.loaded.set(info.id, {
 				info: { ...info, error: msg },
 				toolHandlers,
+				runHandlers,
+				convChangeHandlers,
 				attachHandlers,
 				cwdHandlers,
 				httpRoutes,
@@ -866,6 +1113,8 @@ export class PluginManager {
 		const p: LoadedPlugin = {
 			info,
 			toolHandlers,
+			runHandlers,
+			convChangeHandlers,
 			attachHandlers,
 			cwdHandlers,
 			commandUnsubscribers: unregisterCommands,
@@ -899,7 +1148,7 @@ export class PluginManager {
 		const self = this; // 对象字面量 getter 里不能用插件宿主的 this (oxlint no-this-alias: 誤報, getter closure 需要 host)
 		const host: PluginHost = {
 			broadcast: (payload) => this.broadcast(info.id, payload),
-			notify: (level, text) => this.notifyAll(level, text),
+			notify: (level, text, textEn) => this.notifyAll(level, text, textEn),
 			sendTo: (clientId, payload) => this.sendTo(clientId, info.id, payload),
 			onMessage: (h) => {
 				handlers.add(h);
@@ -909,6 +1158,15 @@ export class PluginManager {
 				toolHandlers.add(h);
 				return () => toolHandlers.delete(h);
 			},
+			onRunEvent: (h) => {
+				runHandlers.add(h);
+				return () => runHandlers.delete(h);
+			},
+			onConversationChanged: (h) => {
+				convChangeHandlers.add(h);
+				return () => convChangeHandlers.delete(h);
+			},
+			getActiveConversation: () => self.getActiveConversation(),
 			onAttach: (h) => {
 				attachHandlers.add(h);
 				return () => attachHandlers.delete(h);
@@ -1024,6 +1282,8 @@ export class PluginManager {
 				info: { ...info },
 				deactivate: typeof ret === "function" ? ret : undefined,
 				toolHandlers,
+				runHandlers,
+				convChangeHandlers,
 				attachHandlers,
 				cwdHandlers,
 				agentToolUnsubscribers: unregisterTools,
@@ -1041,6 +1301,8 @@ export class PluginManager {
 			this.loaded.set(info.id, {
 				info: { ...info, error: (err as Error).message },
 				toolHandlers,
+				runHandlers,
+				convChangeHandlers,
 				attachHandlers,
 				cwdHandlers,
 				httpRoutes,

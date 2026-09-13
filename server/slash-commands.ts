@@ -23,7 +23,12 @@ export interface SlashHost {
 	cwd: () => string;
 	/** 活动对话的 session。 */
 	getSession: () => AgentSession;
-	newChat: () => Promise<void>;
+	/** 新建/切到一个空白对话。返回 false = 没能进入新对话（准入关闭 / 同项目
+	 *  对话数达上限 / runtime 创建失败）——此时 /new <prompt> 不能把首条提示发
+	 *  出去，否则会落进用户原本正在用的那个对话。不返回（void）视为成功。 */
+	newChat: () => Promise<void | boolean>;
+	/** Send a prompt in the active conversation (used by /new <prompt>). */
+	prompt?: (text: string) => Promise<void>;
 	setModel: (modelId: string) => Promise<void>;
 	setCwd: (path: string) => Promise<void>;
 	setThinking: (level: "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max") => void;
@@ -52,7 +57,20 @@ export const NATIVE_COMMANDS: {
 	argumentHint?: string;
 	argumentHintEn?: string;
 }[] = [
-	{ name: "new", description: "新建对话", descriptionEn: "New chat" },
+	{
+		name: "new",
+		description: "新建对话（可带首条提示：/new <提示>）",
+		descriptionEn: "New chat (optional first prompt: /new <prompt>)",
+		argumentHint: "[提示]",
+		argumentHintEn: "[prompt]",
+	},
+	{
+		name: "name",
+		description: "重命名当前会话",
+		descriptionEn: "Set session display name",
+		argumentHint: "<名称>",
+		argumentHintEn: "<name>",
+	},
 	{
 		name: "fork",
 		description: "Bifurca la conversación actual en una nueva",
@@ -199,9 +217,18 @@ export class SlashCommandsService {
 	 *  name is not a native command (the prompt falls through to the SDK). */
 	async exec(name: string, args: string): Promise<boolean> {
 		switch (name) {
-			case "new":
-				await this.host.newChat();
+			case "new": {
+				const first = args.trim();
+				const ready = await this.host.newChat();
+				// /new <prompt>: deliver the text as the new session's first
+				// prompt, exactly as if typed after the switch. Empty = old
+				// behavior (blank chat, no send). Only when the switch actually
+				// landed on a blank chat — newChat() reports false when it bailed
+				// (cap reached / runtime creation failed) and sending anyway would
+				// drop the text into the conversation the user was already in.
+				if (ready !== false && first && this.host.prompt) await this.host.prompt(first);
 				return true;
+			}
 			case "fork":
 				if (this.host.forkSession) {
 					await this.host.forkSession(args || undefined);
@@ -249,6 +276,9 @@ export class SlashCommandsService {
 						text: current
 							? `当前模型：${current.name}（${current.provider}/${current.id}）。用法：/model <名称>`
 							: `用法：/model <名称>`,
+						textEn: current
+							? `Current model: ${current.name} (${current.provider}/${current.id}). Usage: /model <name>`
+							: `Usage: /model <name>`,
 					});
 					return true;
 				}

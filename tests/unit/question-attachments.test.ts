@@ -176,4 +176,14 @@ describe("collectQuestionAttachments", () => {
 		const kept = atts.slice(1);
 		expect(kept).toEqual([]);
 	});
+
+	it("网页引用（mode:page）→ 原样恢复 path=origin + name=标题（不被当成工作区 reference）", () => {
+		const aside = fileCard("c1", [{ type: "text", text: '<browser-page url="https://a.example" title="A 页" />' }], {
+			name: "A 页",
+			path: "https://a.example",
+			mode: "page",
+		});
+		const atts = collectQuestionAttachments([user("u1", "q"), aside]).get("u1") ?? [];
+		expect(atts).toEqual([{ path: "https://a.example", mode: "page", name: "A 页" }]);
+	});
 });

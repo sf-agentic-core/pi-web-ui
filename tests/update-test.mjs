@@ -4,10 +4,12 @@
  * it would really run npm i -g.)
  * Run: npm run build && node update-test.mjs */
 import { CHROME_PATH } from "./lib/chrome.mjs";
+import { freePort } from "./lib/port-utils.mjs";
 import { spawn } from "node:child_process";
 import { mkdtempSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { readFileSync } from "node:fs";
 import { chromium } from "playwright-core";
 
@@ -18,14 +20,18 @@ process.env.PI_WEB_PORT = String(PORT);
 process.env.PI_WEB_CWD = join(base, "work");
 process.env.PI_WEB_DATA_DIR = join(base, "data");
 
-const repoRoot = new URL("..", import.meta.url).pathname;
+// fileURLToPath（不是 URL.pathname）：Windows 上 ".pathname" 得到 "/E:/..."，
+// spawn 的脚本参数不存在 → ENOENT，测试根本起不来。
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
 const server = spawn(process.execPath, [join(repoRoot, "dist", "server", "index.js")], {
 	stdio: ["ignore", "pipe", "pipe"],
-	detached: true,
+	detached: process.platform !== "win32",
 });
 process.on("exit", () => {
 	try {
-		process.kill(-server.pid, "SIGKILL");
+		// win32 没有负数 PID 的进程组，退回按端口清理。
+		if (process.platform === "win32") freePort(PORT);
+		else process.kill(-server.pid, "SIGKILL");
 	} catch {
 		/* gone */
 	}

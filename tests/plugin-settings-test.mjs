@@ -53,7 +53,7 @@ function connect(clientId) {
 	return new Promise((resolve2, reject) => {
 		const sock = new WebSocket(`ws://127.0.0.1:${PORT}/ws`);
 		const timer = setTimeout(() => reject(new Error("connect timeout")), 15_000);
-		sock.on("open", () => sock.send(JSON.stringify({ type: "hello", clientId })));
+		sock.on("open", () => sock.send(JSON.stringify({ type: "hello", clientId, locale: "zh" })));
 		sock.on("message", (raw) => {
 			if (JSON.parse(raw.toString()).type === "ready") {
 				clearTimeout(timer);

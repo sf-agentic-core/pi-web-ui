@@ -96,16 +96,18 @@ describe("savePluginSettings", () => {
 
 	it("number 越界 / select 非法值被拒", async () => {
 		await makePlugin("cfg", SCHEMA_PLUGIN);
-		expect(mgr.savePluginSettings("cfg", { pollSec: 5 }).error).toContain("超出范围");
-		expect(mgr.savePluginSettings("cfg", { pollSec: 9999 }).error).toContain("超出范围");
-		expect(mgr.savePluginSettings("cfg", { theme: "neon" }).error).toContain("值非法");
+		// issue #91：默认英文
+		expect(mgr.savePluginSettings("cfg", { pollSec: 5 }).error).toContain("out of range");
+		expect(mgr.savePluginSettings("cfg", { pollSec: 5 }, () => "zh").error).toContain("超出范围");
+		expect(mgr.savePluginSettings("cfg", { pollSec: 9999 }, () => "zh").error).toContain("超出范围");
+		expect(mgr.savePluginSettings("cfg", { theme: "neon" }, () => "zh").error).toContain("值非法");
 		// 合法保存不受影响
 		expect(mgr.savePluginSettings("cfg", { pollSec: 30 }).error).toBeUndefined();
 	});
 
 	it("未声明 schema 的插件保存被拒", async () => {
 		await makePlugin("noschema", { permissions: ["tools"] });
-		expect(mgr.savePluginSettings("noschema", { a: 1 }).error).toContain("没有声明式设置");
+		expect(mgr.savePluginSettings("noschema", { a: 1 }, () => "zh").error).toContain("没有声明式设置");
 	});
 });
 

@@ -2,9 +2,22 @@ import { useEffect, useRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
-import type { ClientMessage, CommandDef } from "../types";
+import type { CommandDef } from "../types";
 import { buildTermTheme, THEME_CHANGE_EVENT } from "../theme";
 import { useI18n } from "../i18n";
+import { appSend } from "../app-globals";
+
+/** Strip exit sentinels/baked banners; the banner itself renders on terminal_exit. */
+export function stripExitBanner(data: string): { clean: string; exitCode: number | null } {
+	let exitCode: number | null = null;
+	const clean = data
+		.replace(/\r?\n?\[pi-term-exit:(-?\d+)\]\r?\n?/g, (_, c: string) => {
+			exitCode = Number(c);
+			return "\r\n";
+		})
+		.replace(/\r?\n?\x1b\[90m\[(?:进程已退出，退出码 |Process exited with code )-?\d+\]\x1b\[0m\r?\n?/g, "\r\n");
+	return { clean, exitCode };
+}
 
 interface TermXtermProps {
 	conversationId: string;
@@ -17,7 +30,10 @@ interface TermXtermProps {
 	title?: string;
 	/** Whether this terminal is the visible one. */
 	active: boolean;
-	send: (msg: ClientMessage) => boolean;
+	/** Live running flag (banner renders when this flips false). */
+	running?: boolean;
+	/** Exit code (banner text). */
+	exitCode?: number | null;
 	register: (conversationId: string, id: string, writer: { write(data: string): void; dispose(): void }) => () => void;
 }
 
@@ -27,14 +43,24 @@ interface TermXtermProps {
  * the bridge, and kills the PTY on unmount. Kept mounted while hidden so
  * scrollback survives tab switches.
  */
-export function TermXterm({ conversationId, terminalId, command, cwd, title, active, send, register }: TermXtermProps) {
+export function TermXterm({
+	conversationId,
+	terminalId,
+	command,
+	cwd,
+	title,
+	active,
+	running,
+	exitCode,
+	register,
+}: TermXtermProps) {
 	const containerRef = useRef<HTMLDivElement>(null);
 	const termRef = useRef<{ term: Terminal; fit: FitAddon } | null>(null);
-	// UI locale is captured at PTY creation (the server bakes the exit-banner
-	// language in then). Keep it in a ref so a later language switch does NOT
-	// re-run the mount effect — re-running it would dispose and re-create the
-	// xterm view (scrollback lost) and, for run_command terminals, make the
-	// server kill the running process and re-execute the command.
+	// PTY lifecycle: the mount effect must NOT re-run on a language switch
+	// (re-running would dispose and re-create the xterm view — scrollback lost
+	// — and, for run_command terminals, make the server kill the running
+	// process and re-execute the command). The exit banner instead follows the
+	// LIVE locale via a small effect keyed on the running→stopped edge.
 	const { locale } = useI18n();
 	const localeRef = useRef(locale);
 	localeRef.current = locale;
@@ -97,14 +123,14 @@ export function TermXterm({ conversationId, terminalId, command, cwd, title, act
 		});
 
 		const unregister = register(conversationId, terminalId, {
-			write: (data) => term.write(data),
+			write: (data) => term.write(stripExitBanner(data).clean),
 			dispose: () => term.dispose(),
 		});
 
 		const sendDims = () => {
 			try {
 				fit.fit();
-				send({
+				appSend({
 					type: "terminal_resize",
 					terminalId,
 					conversationId,
@@ -124,7 +150,7 @@ export function TermXterm({ conversationId, terminalId, command, cwd, title, act
 				// ignore
 			}
 			if (command) {
-				send({
+				appSend({
 					type: "run_command",
 					terminalId,
 					conversationId,
@@ -133,7 +159,7 @@ export function TermXterm({ conversationId, terminalId, command, cwd, title, act
 					rows: term.rows,
 				});
 			} else {
-				send({
+				appSend({
 					type: "terminal_create",
 					terminalId,
 					title,
@@ -147,7 +173,7 @@ export function TermXterm({ conversationId, terminalId, command, cwd, title, act
 		});
 
 		const onData = term.onData((data) => {
-			send({ type: "terminal_input", terminalId, conversationId, data });
+			appSend({ type: "terminal_input", terminalId, conversationId, data });
 		});
 
 		let ro: ResizeObserver | null = null;
@@ -172,7 +198,7 @@ export function TermXterm({ conversationId, terminalId, command, cwd, title, act
 			termRef.current = null;
 		};
 		// eslint-disable-next-line react-hooks/exhaustive-deps
-	}, [conversationId, terminalId, commandKey, send, register]);
+	}, [conversationId, terminalId, commandKey, register]);
 
 	// Becoming visible: re-fit (size may have changed while hidden) and focus.
 	useEffect(() => {
@@ -182,7 +208,7 @@ export function TermXterm({ conversationId, terminalId, command, cwd, title, act
 			if (!inst) return;
 			try {
 				inst.fit.fit();
-				send({
+				appSend({
 					type: "terminal_resize",
 					terminalId,
 					conversationId,
@@ -197,6 +223,23 @@ export function TermXterm({ conversationId, terminalId, command, cwd, title, act
 		return () => cancelAnimationFrame(raf);
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [active]);
+
+	// Exit banner in the LIVE locale (reads t() at effect time, not at
+	// PTY-creation time). Guarded by the running-state edge: the banner is
+	// written once per running→stopped transition, so reruns in the SAME tab
+	// (TerminalPanel reuses the component instance) and remounts of already-
+	// stopped terminals each render their banner without duplicates.
+	const { t } = useI18n();
+	const lastRunning = useRef<boolean | undefined>(undefined);
+	useEffect(() => {
+		if (running === lastRunning.current) return;
+		lastRunning.current = running;
+		if (running !== false) return;
+		const inst = termRef.current;
+		if (!inst) return;
+		inst.term.write(`\r\n\x1b[90m${t("exitBanner", { code: exitCode ?? "" })}\x1b[0m\r\n`);
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [running, terminalId, exitCode]);
 
 	return <div ref={containerRef} className={`term-xterm ${active ? "" : "hidden"}`} />;
 }

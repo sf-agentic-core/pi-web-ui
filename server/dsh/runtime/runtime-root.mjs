@@ -66,18 +66,24 @@ export async function resolveRuntimeBase() {
 		const base = runtimeBaseFor(adjacent);
 		if (base) return base;
 	}
+	// PATCHED (pi-web-ui #78 / Android-Termux deadlock): this used to run
+	// spawnSync("npm", ["root", "-g"]) as a last resort — a synchronous fork
+	// inside a multi-threaded process, which can deadlock on Android/Termux
+	// (child stuck between fork and exec while the caller blocks on libuv's
+	// spawn error pipe). Compute the npm global root without spawning instead.
 	try {
-		const { spawnSync } = await import("node:child_process");
-		const res = spawnSync(process.platform === "win32" ? "npm" : "npm", ["root", "-g"], {
-			encoding: "utf8",
-			timeout: 15_000,
-			windowsHide: true,
-			...(process.platform === "win32" ? { shell: true } : {}),
-		});
-		const root = String(res.stdout ?? "").trim();
-		if (root) {
-			const base = runtimeBaseFor(root);
-			if (base) return base;
+		const prefixCandidates = [
+			process.env.NPM_CONFIG_PREFIX,
+			process.env.npm_config_prefix,
+			join(dirname(process.execPath), ".."),
+		];
+		for (const prefix of prefixCandidates) {
+			if (!prefix) continue;
+			for (const root of [join(prefix, "lib", "node_modules"), join(prefix, "node_modules")]) {
+				if (!existsSync(root)) continue;
+				const base = runtimeBaseFor(root);
+				if (base) return base;
+			}
 		}
 	} catch {
 		/* fall through */

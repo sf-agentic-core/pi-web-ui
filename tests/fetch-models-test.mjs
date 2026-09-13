@@ -195,7 +195,8 @@ process.on("SIGINT", async () => {
 try {
 	await sleep(1000);
 	const c = await connect();
-	c.send({ type: "hello", clientId: "fetch-models-test" });
+	// 报错文案断言为中文（“无效”/“未返回任何模型”）——显式上报 zh，避免服务端默认英文。
+	c.send({ type: "hello", clientId: "fetch-models-test", locale: "zh" });
 	await c.waitFor("ready", 8000);
 	console.log("  · ready");
 

@@ -1,4 +1,5 @@
 /* theme-name: 白色 */
+/* theme-name-en: White */
 :root {
 	color-scheme: light;
 	--bg: #ffffff;
@@ -38,9 +39,13 @@
 	--term-bright-cyan: #0e7490;
 	--term-bright-white: #000000;
 	--mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+	--mermaid-font-size: 12px;
 	--tooltip-bg: #ffffff;
 	--code-bg: #f6f8fa;
 	--code-text: #1f2937;
+	--code-border: var(--border-soft);
+	--code-pad: 8px 10px;
+	--card-body-pad: 4px 14px 12px;
 	--err-text: #dc2626;
 	--red-text: #dc2626;
 	--amber-text: #b45309;
@@ -68,6 +73,7 @@
 	--search-active-fg: #1a1d26;
 	--switch-knob: #ffffff;
 	--bg-elev3: rgba(0, 0, 0, 0.03);
+	--sunken-bg: rgba(0, 0, 0, 0.04);
 	--glow-015: rgba(0, 0, 0, 0.02);
 	--glow-025: rgba(0, 0, 0, 0.02);
 	--glow-03: rgba(0, 0, 0, 0.02);
@@ -77,6 +83,21 @@
 	--glow-18: rgba(0, 0, 0, 0.12);
 	--glow-22: rgba(0, 0, 0, 0.15);
 	--glow-38: rgba(0, 0, 0, 0.25);
+	--control-fg: #59636e;
+	--control-bg: #f6f8fa;
+	--control-border: #d0d7de;
+	--bg-image: none;
+	--bg-image-dim: 0.78;
+	--bg-image-blur: 0px;
+	--wallpaper-panel-alpha: 62%;
+	--topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--card-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--chip-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--msgs-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--inputbox-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--menu-bg: var(--bg-elev2);
 }
 
 /* ---- syntax highlighting (overrides static github-dark import) ---- */

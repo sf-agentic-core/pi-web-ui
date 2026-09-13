@@ -8,25 +8,56 @@
  */
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { deriveLegacy, legacyToDisabled, normalizeDisabledAgentTools } from "./tool-manager.js";
 
 /** System-prompt mode: append the custom text to the built prompt, or replace
- *  the whole system prompt with it. */
+ *  the whole system prompt with it. (遗留字段：主会话已迁移到 compose 模板，
+ *  仅 DSH 子系统与旧存档仍读写它。) */
 export type PromptMode = "append" | "replace";
+
+/** 大模型 API 出错自动重试次数的默认值（SDK 默认 3）。 */
+export const DEFAULT_RETRY_MAX_ATTEMPTS = 6;
+
+/** 归一化重试次数：非数值回落默认，钳制到 [0, 100] 整数。 */
+export function normalizeRetryMaxAttempts(v: unknown): number {
+	const n = Math.floor(Number(v));
+	if (!Number.isFinite(n)) return DEFAULT_RETRY_MAX_ATTEMPTS;
+	return Math.min(100, Math.max(0, n));
+}
+
+/** 归一化技能名单：字符串数组原样过滤；其他（含旧 bool 开关）回落空数组。 */
+export function normalizeSkillList(v: unknown): string[] {
+	return Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+}
 
 /** Settings-panel state (system prompt + disabled skills/extensions). */
 export interface ClientSettings {
 	promptMode: PromptMode;
 	customSystemPrompt: string;
+	/** 组合模板（主会话系统提示词 = 自由拼装 {{token}}，见 server/prompt-composer.ts）。
+	 *  空 = 默认模板（全部自动段按自然顺序）；promptMode/customSystemPrompt 为
+	 *  遗留字段（旧存档迁移到 overrides，DSH 仍共用存储）。 */
+	promptTemplate: string;
+	/** 每个来源 token 的独立覆盖文本（空串/缺省 = 用该来源的自动内容）。 */
+	promptOverrides: Record<string, string>;
 	disabledSkills: string[];
 	disabledExtensions: string[];
-	/** Persistent-terminal tools on/off (default on). Off → terminal_* tools are
-	 *  removed from the agent's active tool set and no usage guidance is injected. */
+	/** Persistent-terminal tools on/off（遗留别名，兼容旧客户端/旧存档；以 disabledAgentTools 为准同步）。 */
 	terminalToolsEnabled: boolean;
 	/** 终端接管 bash（默认关）。开 → bash 工具的执行体改为持久终端：命令在可见
 	 *  PTY 里跑、跨调用保留 shell 状态（cd/venv/ssh），静默超阈值自动转后台。 */
 	terminalBash: boolean;
 	/** 接管模式下 bash 的静默解阻阈值（毫秒，默认 15000；0 = 一直等到结束）。 */
 	terminalBashIdleMs: number;
+	/** Agent 工具禁用名单（统一开关，见 tool-manager.ts；live 生效无需 reload）。 */
+	disabledAgentTools: string[];
+	/** edit_soft 工具开关（遗留别名，兼容旧客户端/旧存档；以 disabledAgentTools 为准同步）。 */
+	editSoftEnabled: boolean;
+	/** 问卷提问开关（默认开；关 → 不弹对话框且 ask_user_question 工具同步禁用。不进预设）。 */
+	questionnaireEnabled: boolean;
+	/** 目标模式（目标条 + 调研向导 + 审查循环）总开关（默认开）。关 → 目标条
+	 *  隐藏、无法设目标/启动调研/触发审查。纯运行开关，不进预设、不需 reload。 */
+	goalModeEnabled: boolean;
 	/** Vision bridge on/off (default on). Off → images are sent as-is. */
 	visionBridgeEnabled: boolean;
 	/** Preferred vision model as "provider/id", or null = auto-detect first. */
@@ -49,6 +80,20 @@ export interface ClientSettings {
 	thinkingWrap: boolean;
 	/** 工具调用是否默认展开（默认开 = 展开；关 = 折叠）。纯 UI 偏好，不进预设。 */
 	toolsWrap: boolean;
+	/** skill 全文注入名单（默认空 = 名录模式）。名单里的技能 {{skills}} 展开正文
+	 *  （oh-my-pi 式全文注入；单文件 8KB、总量 32KB 封顶，超限回落名录）。
+	 *  进预设；逐 run 实时读取，改动下一轮即生效。 */
+	skillsFullText: string[];
+	/** 子代理默认模型 ("provider/id")；null/未设 = 跟随主对话当前模型。不改会话右侧栏的模型。 */
+	subagentDefaultModel?: string | null;
+	/** 大模型 API 出错自动重试次数（默认 6；0 = 失败即停）。SDK
+	 *  settings.retry.maxRetries 的按客户端覆盖（SDK 默认 3），经
+	 *  applyOverrides 注入各会话的 SettingsManager（session.reload()
+	 *  会重读磁盘，需重放）。 */
+	retryMaxAttempts: number;
+	/** 输入框上方的快捷短语（点击即发送）。纯 UI 偏好，不进预设、不需 reload。 */
+	quickPhrases: string[];
+	quickPhrasesEnabled: boolean;
 }
 
 /** A named combo of prompt + skill/extension toggles the user can re-apply.
@@ -60,8 +105,13 @@ export interface SettingsPreset extends Omit<
 	| "visionBridgeModel"
 	| "visionBridgePromptMode"
 	| "visionBridgePrompt"
+	| "questionnaireEnabled"
+	| "goalModeEnabled"
 	| "thinkingWrap"
 	| "toolsWrap"
+	| "subagentDefaultModel"
+	| "quickPhrases"
+	| "quickPhrasesEnabled"
 > {
 	name: string;
 }
@@ -131,6 +181,11 @@ export function isExtensionEnabled(
 	return enabled.some((d) => keys.includes(d));
 }
 
+export interface MarkerSettings {
+	markersEnabled: boolean;
+	disabledMarkers: string[];
+}
+
 export interface ClientState {
 	/** Absolute path of the workspace this client last used. */
 	lastCwd?: string;
@@ -169,6 +224,13 @@ export interface ClientState {
 	 *  Together with projectProviderKeys it makes the whole {model, key} pair
 	 *  project-bound, so switching back restores both right away. */
 	projectModels?: Record<string, string>;
+	/** 内置标记工具开关（全局 + 按 marker 禁用）。 */
+	markers?: MarkerSettings;
+	/** Browser UI locale code as reported by hello/set_locale (e.g. "zh",
+	 *  "en", "ja"). Server resolves it via resolveServerLang (non-zh →
+	 *  English default, issue #91) for tool return values / AI prompts.
+	 *  Missing = never reported → English. */
+	locale?: string;
 }
 
 /**
@@ -181,6 +243,15 @@ export class ClientStateStore {
 	private cache: Record<string, ClientState> | null = null;
 
 	constructor(private filePath: string) {}
+
+	/** 长期设置（设置面板 config + 预设 + 标记开关）的固定存储键。
+	 *
+	 * 为什么用固定全局键而非 per-clientId：clientId 存 sessionStorage（每标签页独立、
+	 * 关浏览器即失），按 clientId 存设置会在每次新会话/重启后生成新 id → 设置全部重置、
+	 * 且各标签页/浏览器各有一套互不同步。改为全局共享后：所有客户端（标签页/浏览器）
+	 * 使用同一套配置，且持久化在服务端，重启不丢（「同一套配置」）。会话级状态
+	 * （最近项目 / lastCwd / 项目模型与密钥等）仍按 clientId 各自保留。 */
+	private static readonly GLOBAL_SETTINGS_KEY = "__settings__";
 
 	/** <dataDir>（client-state.json 的上一级）——共享配置（子代理模板库等）落在这里。 */
 	get dataDir(): string {
@@ -261,6 +332,17 @@ export class ClientStateStore {
 		};
 	}
 
+	/** Persist the client's UI locale code (hello/set_locale; best-effort). */
+	saveLocale(clientId: string, locale: string): void {
+		const code = locale.trim().slice(0, 16);
+		if (!code) return;
+		const all = this.load();
+		const state = (all[clientId] ??= { projects: [] });
+		if (state.locale === code) return;
+		state.locale = code;
+		this.save();
+	}
+
 	/** Persist the client's goal/review preferences (model choice, rounds, lock). */
 	saveGoalPrefs(clientId: string, prefs: ClientState["goalPrefs"]): void {
 		const all = this.load();
@@ -296,69 +378,118 @@ export class ClientStateStore {
 		return list;
 	}
 
-	/** Last-used settings-panel state for a client, or defaults. */
-	getSettings(clientId: string): ClientSettings {
-		const s = this.load()[clientId];
+	/** 设置面板状态（系统提示词模式/文字 + 禁用技能/扩展）——全局共享同一套配置。 */
+	getSettings(_clientId: string): ClientSettings {
+		const s = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY];
+		const stored = s?.settings;
+		// 旧存档（promptMode/customSystemPrompt）迁移到 compose：追加文字成为独立
+		// {{append}} 覆盖、替换文字成为 {{soul}} 覆盖；无自定义则用默认模板。
+		let promptTemplate = "";
+		let promptOverrides: Record<string, string> = {};
+		if (stored?.promptTemplate !== undefined) {
+			promptTemplate = stored.promptTemplate ?? "";
+			promptOverrides = { ...stored?.promptOverrides };
+		} else if (stored && typeof stored.customSystemPrompt === "string" && stored.customSystemPrompt.trim()) {
+			promptOverrides = {
+				[stored.promptMode === "replace" ? "soul" : "append"]: stored.customSystemPrompt,
+			};
+		}
 		return {
-			promptMode: s?.settings?.promptMode === "replace" ? "replace" : "append",
-			customSystemPrompt: s?.settings?.customSystemPrompt ?? "",
-			disabledSkills: s?.settings?.disabledSkills ?? [],
-			disabledExtensions: s?.settings?.disabledExtensions ?? [],
-			terminalToolsEnabled: s?.settings?.terminalToolsEnabled ?? true,
-			terminalBash: s?.settings?.terminalBash ?? false,
-			terminalBashIdleMs: s?.settings?.terminalBashIdleMs ?? 15_000,
-			thinkingWrap: s?.settings?.thinkingWrap ?? false,
-			toolsWrap: s?.settings?.toolsWrap ?? true,
-			visionBridgeEnabled: s?.settings?.visionBridgeEnabled ?? true,
-			visionBridgeModel: s?.settings?.visionBridgeModel ?? null,
-			visionBridgePromptMode: s?.settings?.visionBridgePromptMode === "replace" ? "replace" : "append",
-			visionBridgePrompt: s?.settings?.visionBridgePrompt ?? "",
-			reviewPrompt: s?.settings?.reviewPrompt ?? "",
-			reviewDisabledSkills: s?.settings?.reviewDisabledSkills ?? [],
-			disabledPlugins: s?.settings?.disabledPlugins ?? [],
+			promptMode: stored?.promptMode === "replace" ? "replace" : "append",
+			customSystemPrompt: stored?.customSystemPrompt ?? "",
+			promptTemplate,
+			promptOverrides,
+			disabledSkills: stored?.disabledSkills ?? [],
+			disabledExtensions: stored?.disabledExtensions ?? [],
+			disabledAgentTools: legacyToDisabled(stored ?? {}),
+			// 新字段已存在时遗留三开关以它为准推导（旧文件才读遗留值），保证两边一致。
+			terminalToolsEnabled:
+				stored?.disabledAgentTools !== undefined
+					? deriveLegacy(legacyToDisabled(stored)).terminalToolsEnabled
+					: (stored?.terminalToolsEnabled ?? false),
+			terminalBash: stored?.terminalBash ?? false,
+			terminalBashIdleMs: stored?.terminalBashIdleMs ?? 15_000,
+			editSoftEnabled:
+				stored?.disabledAgentTools !== undefined
+					? deriveLegacy(legacyToDisabled(stored)).editSoftEnabled
+					: (stored?.editSoftEnabled ?? false),
+			questionnaireEnabled:
+				stored?.disabledAgentTools !== undefined
+					? deriveLegacy(legacyToDisabled(stored)).questionnaireEnabled
+					: (stored?.questionnaireEnabled ?? true),
+			goalModeEnabled: stored?.goalModeEnabled ?? true,
+			thinkingWrap: stored?.thinkingWrap ?? false,
+			toolsWrap: stored?.toolsWrap ?? true,
+			skillsFullText: normalizeSkillList(stored?.skillsFullText),
+			visionBridgeEnabled: stored?.visionBridgeEnabled ?? true,
+			visionBridgeModel: stored?.visionBridgeModel ?? null,
+			visionBridgePromptMode: stored?.visionBridgePromptMode === "replace" ? "replace" : "append",
+			visionBridgePrompt: stored?.visionBridgePrompt ?? "",
+			subagentDefaultModel: stored?.subagentDefaultModel ?? null,
+			retryMaxAttempts: normalizeRetryMaxAttempts(stored?.retryMaxAttempts),
+			quickPhrases: stored?.quickPhrases ?? [],
+			quickPhrasesEnabled: stored?.quickPhrasesEnabled ?? true,
+			reviewPrompt: stored?.reviewPrompt ?? "",
+			reviewDisabledSkills: stored?.reviewDisabledSkills ?? [],
+			disabledPlugins: stored?.disabledPlugins ?? [],
 		};
 	}
 
-	/** Persist the client's settings-panel state (partial merge). */
-	saveSettings(clientId: string, settings: Partial<ClientSettings>): void {
+	/** Persist the settings-panel state (partial merge) — global shared config. */
+	saveSettings(_clientId: string, settings: Partial<ClientSettings>): void {
 		const all = this.load();
-		const state = (all[clientId] ??= { projects: [] });
+		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
 		const cur = state.settings ?? ({} as ClientSettings);
 		state.settings = {
 			promptMode: settings.promptMode ?? cur.promptMode ?? "append",
 			customSystemPrompt: settings.customSystemPrompt ?? cur.customSystemPrompt ?? "",
+			promptTemplate: settings.promptTemplate ?? cur.promptTemplate ?? "",
+			promptOverrides: { ...(settings.promptOverrides ?? cur.promptOverrides) },
 			disabledSkills: settings.disabledSkills ?? cur.disabledSkills ?? [],
 			disabledExtensions: settings.disabledExtensions ?? cur.disabledExtensions ?? [],
-			terminalToolsEnabled: settings.terminalToolsEnabled ?? cur.terminalToolsEnabled ?? true,
+			disabledAgentTools: normalizeDisabledAgentTools(settings.disabledAgentTools ?? cur.disabledAgentTools),
+			terminalToolsEnabled: settings.terminalToolsEnabled ?? cur.terminalToolsEnabled ?? false,
 			terminalBash: settings.terminalBash ?? cur.terminalBash ?? false,
 			terminalBashIdleMs: settings.terminalBashIdleMs ?? cur.terminalBashIdleMs ?? 15_000,
+			editSoftEnabled: settings.editSoftEnabled ?? cur.editSoftEnabled ?? false,
+			questionnaireEnabled: settings.questionnaireEnabled ?? cur.questionnaireEnabled ?? true,
+			goalModeEnabled: settings.goalModeEnabled ?? cur.goalModeEnabled ?? true,
 			thinkingWrap: settings.thinkingWrap ?? cur.thinkingWrap ?? false,
 			toolsWrap: settings.toolsWrap ?? cur.toolsWrap ?? true,
+			skillsFullText: normalizeSkillList(settings.skillsFullText ?? cur.skillsFullText),
 			visionBridgeEnabled: settings.visionBridgeEnabled ?? cur.visionBridgeEnabled ?? true,
 			visionBridgeModel: settings.visionBridgeModel ?? cur.visionBridgeModel ?? null,
+			subagentDefaultModel: settings.subagentDefaultModel ?? cur.subagentDefaultModel ?? null,
+			retryMaxAttempts: normalizeRetryMaxAttempts(
+				settings.retryMaxAttempts ?? cur.retryMaxAttempts ?? DEFAULT_RETRY_MAX_ATTEMPTS,
+			),
 			visionBridgePromptMode: settings.visionBridgePromptMode ?? cur.visionBridgePromptMode ?? "append",
 			visionBridgePrompt: settings.visionBridgePrompt ?? cur.visionBridgePrompt ?? "",
 			reviewPrompt: settings.reviewPrompt ?? cur.reviewPrompt ?? "",
 			reviewDisabledSkills: settings.reviewDisabledSkills ?? cur.reviewDisabledSkills ?? [],
 			disabledPlugins: settings.disabledPlugins ?? cur.disabledPlugins ?? [],
+			quickPhrases: settings.quickPhrases ?? cur.quickPhrases ?? [],
+			quickPhrasesEnabled: settings.quickPhrasesEnabled ?? cur.quickPhrasesEnabled ?? true,
 		};
 		this.save();
 	}
 
-	/** Named settings presets for a client (empty if never saved). */
-	getPresets(clientId: string): SettingsPreset[] {
-		return (this.load()[clientId]?.presets ?? []).map((p) => ({
+	/** Named settings presets for a client (empty if never saved) — global shared. */
+	getPresets(_clientId: string): SettingsPreset[] {
+		return (this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.presets ?? []).map((p) => ({
 			...p,
 			// Older client-state files predate review settings.
 			reviewPrompt: p.reviewPrompt ?? "",
 			reviewDisabledSkills: p.reviewDisabledSkills ?? [],
+			// Older presets predate the configurable retry count.
+			retryMaxAttempts: normalizeRetryMaxAttempts(p.retryMaxAttempts),
 		}));
 	}
 
-	/** Persist the client's named settings presets. */
-	savePresets(clientId: string, presets: SettingsPreset[]): void {
+	/** Persist the named settings presets — global shared config. */
+	savePresets(_clientId: string, presets: SettingsPreset[]): void {
 		const all = this.load();
-		const state = (all[clientId] ??= { projects: [] });
+		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
 		state.presets = presets;
 		this.save();
 	}
@@ -395,6 +526,54 @@ export class ClientStateStore {
 		this.save();
 	}
 
+	/** Remove one provider from EVERY project's saved keys (all clients, all
+	 *  cwds) — e.g. the provider was cleared and returned to unconfigured.
+	 *  Returns the number of entries removed. */
+	deleteProviderEverywhere(provider: string): number {
+		const all = this.load();
+		let removed = 0;
+		for (const state of Object.values(all)) {
+			const map = state.projectProviderKeys;
+			if (!map) continue;
+			for (const [cwd, inner] of Object.entries(map)) {
+				if (inner && provider in inner) {
+					delete inner[provider];
+					removed++;
+					if (Object.keys(inner).length === 0) delete map[cwd];
+				}
+			}
+			if (map && Object.keys(map).length === 0) delete state.projectProviderKeys;
+		}
+		if (removed > 0) this.save();
+		return removed;
+	}
+
+	/** Fix every project that still references a deleted key: point it at the
+	 *  key that took over (`newActive`), or drop the reference when the
+	 *  provider has no keys left (`newActive` null). A key deletion made in
+	 *  one project must not keep haunting every other project that once used
+	 *  the same key on every project switch. Returns entries touched. */
+	repointDeletedKeyEverywhere(provider: string, deletedKeyName: string, newActive: string | null): number {
+		const all = this.load();
+		let touched = 0;
+		for (const state of Object.values(all)) {
+			const map = state.projectProviderKeys;
+			if (!map) continue;
+			for (const [cwd, inner] of Object.entries(map)) {
+				if (inner?.[provider] !== deletedKeyName) continue;
+				if (newActive) inner[provider] = newActive;
+				else {
+					delete inner[provider];
+					if (Object.keys(inner).length === 0) delete map[cwd];
+				}
+				touched++;
+			}
+			if (map && Object.keys(map).length === 0) delete state.projectProviderKeys;
+		}
+		if (touched > 0) this.save();
+		return touched;
+	}
+
 	/** Get the model the user last selected in a project, or undefined. */
 	getProjectModel(clientId: string, cwd: string): string | undefined {
 		return this.load()[clientId]?.projectModels?.[cwd];
@@ -416,6 +595,49 @@ export class ClientStateStore {
 		if (!map || !(cwd in map)) return;
 		delete map[cwd];
 		if (Object.keys(map).length === 0) delete all[clientId]!.projectModels;
+		this.save();
+	}
+
+	/** 全局「快捷短语已 seed」标记（非 per-clientId）。
+	 *
+	 * 为什么全局：clientId 存 sessionStorage（每标签页独立、关浏览器即失），按
+	 * clientId 记 seed 会在每次新会话生成新 clientId 时误判为「从未 seed」，导致
+	 * 用户删掉的默认短语又被填回默认。seed 只需一次（首次见空列表），之后即为用户
+	 * 数据，增删改/恢复默认/关闭都走设置面板。存服务端而非浏览器 localStorage，
+	 * 任何浏览器/标签页/清缓存都不受影响。 */
+	getQuickPhrasesSeeded(): boolean {
+		const meta = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY] as { quickPhrasesSeeded?: boolean } | undefined;
+		return !!meta?.quickPhrasesSeeded;
+	}
+
+	markQuickPhrasesSeeded(): void {
+		const all = this.load();
+		const meta = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] }) as {
+			projects: unknown[];
+			quickPhrasesSeeded?: boolean;
+		};
+		if (meta.quickPhrasesSeeded) return;
+		meta.quickPhrasesSeeded = true;
+		this.save();
+	}
+
+	/** 内置标记工具开关（全局共享同一套 + 按 marker 禁用）。 */
+	getMarkerSettings(_clientId: string): MarkerSettings {
+		const s = this.load()[ClientStateStore.GLOBAL_SETTINGS_KEY]?.markers;
+		return {
+			markersEnabled: s?.markersEnabled ?? true,
+			disabledMarkers: s?.disabledMarkers ?? [],
+		};
+	}
+
+	saveMarkerSettings(_clientId: string, settings: Partial<MarkerSettings>): void {
+		const all = this.load();
+		const state = (all[ClientStateStore.GLOBAL_SETTINGS_KEY] ??= { projects: [] });
+		const cur = state.markers ?? { markersEnabled: true, disabledMarkers: [] };
+		state.markers = {
+			markersEnabled: settings.markersEnabled ?? cur.markersEnabled ?? true,
+			disabledMarkers: settings.disabledMarkers ?? cur.disabledMarkers ?? [],
+		};
 		this.save();
 	}
 }

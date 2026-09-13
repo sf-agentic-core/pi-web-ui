@@ -64,6 +64,10 @@ export interface UiMessage {
 	customType?: string;
 	/** Extension-provided metadata (e.g. attachment file name/path). */
 	details?: unknown;
+	/** Present on compactionSummary messages: context size (tokens) before
+	 *  compaction — the card header renders "compacted from N tokens" like
+	 *  the pi CLI. Absent on older snapshots. */
+	tokensBefore?: number;
 }
 
 export interface UiModelInfo {
@@ -72,6 +76,22 @@ export interface UiModelInfo {
 	provider: string;
 	/** Whether the model accepts image input (SDK `input` includes "image"). */
 	vision: boolean;
+}
+
+/** Platform service manager supervising this instance: someone restarts the
+ *  process after it exits. Detected at boot by server/launch-origin.ts. */
+export type ServiceSupervisor = "launchd" | "systemd" | "windows-watchdog";
+
+/** How this instance was launched, when a supervisor manages it.
+ *
+ *  `pi-web-ui server start|install` registers a service (launchd / systemd /
+ *  Windows watchdog launcher); the browser uses this to offer "restart
+ *  service" in the UPDATE panel — meaningless for a foreground `pi-web-ui`
+ *  or `npm run dev` instance, whose process would simply be gone. */
+export interface UiServiceInfo {
+	/** Service name (`server install --name`, default "pi-web-ui"). */
+	name: string;
+	supervisor: ServiceSupervisor;
 }
 
 export interface UiState {
@@ -107,6 +127,42 @@ export interface UiState {
 	 *  as pending user bubbles in the real message list. */
 	queue: { steering: string[]; followUp: string[] };
 	errorMessage?: string;
+	/**
+	 * Transient LLM auto-retry state — set while the SDK backs off and retries
+	 *  a failed API call (agent_end willRetry → auto_retry_start → auto_retry_end).
+	 *  While present the trailing stopReason=error assistant message is withheld
+	 *  from `messages` (it only turns red permanently once retries are exhausted),
+	 *  and the UI shows a calm "retrying…" hint instead of a flashing red error.
+	 *  Absent/null when idle or on final failure.
+	 */
+	retry?: {
+		/** 1-based attempt about to run (0 = announced by agent_end willRetry, details follow). */
+		attempt: number;
+		maxAttempts: number;
+		delayMs: number;
+		errorMessage: string;
+	} | null;
+	/**
+	 * Context compaction in progress (compaction_start arrived, compaction_end
+	 *  not yet). While present the UI shows a persistent "compacting…"
+	 *  progress banner with elapsed time (a toast would auto-dismiss while
+	 *  the summarization LLM call is still running). Absent/null when idle.
+	 */
+	compaction?: {
+		/** Why compaction started: manual (/compact), threshold or overflow. */
+		reason: string;
+		/** Server-side start timestamp (ms) — drives the elapsed timer. */
+		startedAt: number;
+	} | null;
+	/**
+	 * 待用户回答的模型提问（ask_user_question）——对话框的服务端事实源。
+	 *  `question_pending` 只在提问发生的那一刻推给「当时在线」的连接；刷新页面 /
+	 *  WS 重连 / 新标签页接入后客户端拿不到那条历史消息，本字段让快照把对话框
+	 *  恢复出来（见 web/src/use-chat.ts 的 syncPendingQuestion）。
+	 *  只携带当前对话的提问（切回原对话会重推快照，对话框随之回来）。
+	 *  null / 缺省 = 当前对话没有待答提问。
+	 */
+	pendingQuestion?: UiPendingQuestion | null;
 	tools: string[];
 	/** Monotonic snapshot sequence — clients can use it to drop stale snapshots. */
 	version: number;
@@ -137,6 +193,9 @@ export interface UiState {
 			tokens: number | null;
 			contextWindow: number;
 			percent: number | null;
+			/** true = 压缩后 SDK 暂报 null（下轮模型响应前不可信），此处用
+			 *  compaction_end 的 estimatedTokensAfter 回填的约数，UI 加 `~` 标识。 */
+			estimated?: boolean;
 		};
 	};
 }
@@ -188,11 +247,17 @@ export interface SlashCommandInfo {
 }
 
 /** Attachment spec shared by "prompt" and "edit_message" client messages:
- *  workspace-path attachments (inline/reference/lines), raw pasted/dropped
- *  images (imageData) and raw uploaded files (fileData). */
+ *  workspace-path attachments (inline/reference/lines), an already-granted web
+ *  page (page), raw pasted/dropped images (imageData) and raw uploaded files
+ *  (fileData). */
 export interface PromptAttachment {
+	/** Workspace path — except for mode "page", where it is the page's origin
+	 *  (e.g. "https://example.com"), which is also the browser_page `target`. */
 	path: string;
-	mode?: "inline" | "reference" | "lines";
+	/** "page" = a web page granted to the AI via the page-picker extension:
+	 *  the server never stats/reads it — it only tells the model which
+	 *  browser_page target to use. `name` carries the page title. */
+	mode?: "inline" | "reference" | "lines" | "page";
 	/** 1-based inclusive line range (mode "lines" only). */
 	lines?: { start: number; end: number };
 	/**
@@ -227,7 +292,12 @@ export interface PromptAttachment {
 }
 
 export type ClientMessage =
-	| { type: "hello"; clientId: string; protocolVersion?: number }
+	| { type: "hello"; clientId: string; protocolVersion?: number; locale?: string }
+	/** Browser UI language changed (or first report after hello) — server
+	 *  persists it per client and uses it for tool return values / AI-facing
+	 *  prompts. "zh" (zh-CN/…) → Chinese; anything else → English
+	 *  (English default, issue #91). */
+	| { type: "set_locale"; locale: string }
 	/** Re-request the slash-command catalog (also pushed on attach / cwd change). */
 	| { type: "get_commands" }
 	| {
@@ -269,6 +339,7 @@ export type ClientMessage =
 	| { type: "terminal_input"; terminalId: string; data: string; conversationId?: string }
 	| { type: "terminal_resize"; terminalId: string; cols: number; rows: number; conversationId?: string }
 	| { type: "terminal_kill"; terminalId: string; conversationId?: string }
+	| { type: "rename_terminal"; terminalId: string; title: string; conversationId?: string }
 	// Runs a command in a new shell; if the terminal already exists it is
 	// RESTARTED in place (current process killed, fresh shell runs it again).
 	| {
@@ -289,6 +360,11 @@ export type ClientMessage =
 	| { type: "abort" }
 	/** Kill only the running bash command(s) — the agent run itself continues. */
 	| { type: "abort_bash" }
+	/** Manually retry the last failed model call after the auto-retry budget
+	 *  (settings retryMaxAttempts) ran out: the turn ended with a red error
+	 *  and is idle. Server re-triggers one LLM turn without adding a new user
+	 *  message; refused while streaming. */
+	| { type: "retry_last" }
 	// -- background tasks (AI-started servers) ------------------------------
 	/** Kill ONE background server the agent started (by listening port). */
 	| { type: "kill_background_server"; port?: number; taskId?: string }
@@ -338,6 +414,9 @@ export type ClientMessage =
 	| { type: "switch_conversation"; id: string }
 	| { type: "list_projects" }
 	| { type: "list_files"; path?: string }
+	/** 列目录：path 省略 = 工作区根；也接受工作区外绝对路径（Windows "C:/…"、
+	 *  posix "/…"）与机器根 "@root"（盘符列表，见 files-service.ts MACHINE_ROOT）。
+	 *  机器浏览时返回的 entry.path 为绝对 wire 路径，可直接再用于列目录/预览/附件。 */
 	/** Read a workspace file for the preview panel (size-capped, binary-safe). */
 	| { type: "read_file"; path: string }
 	/** Save text edited in the file preview panel. */
@@ -354,11 +433,19 @@ export type ClientMessage =
 	| { type: "set_thinking"; level: string }
 	| { type: "set_cwd"; path: string }
 	| { type: "complete_path"; path: string }
+	/** Create a folder for the cwd picker (absolute, ~- or session-relative).
+	 *  The server answers with a notice (success/failure) — the picker
+	 *  refreshes its own listing afterwards. */
+	| { type: "make_dir"; path: string }
 	| { type: "dialog_response"; id: number; value: string | boolean | null }
 	// -- self-update ----------------------------------------------------------
 	/** Check the npm registry for a newer pi-web-ui version. */
 	| { type: "check_update" }
 	| { type: "check_updates_all"; force?: true } // webui + direct pi extensions (manifest)
+	/** Restart the supervised service (same effect as `pi-web-ui server restart`:
+	 *  this process exits and its supervisor brings it back). The server refuses
+	 *  when no supervisor manages this instance (foreground / dev / Docker). */
+	| { type: "restart_service" }
 	// -- pi agent setup ------------------------------------------------------
 	/** Auto-install the pi agent (mkdir config dir + npm i -g the CLI). */
 	| { type: "install_pi_agent" }
@@ -390,6 +477,10 @@ export type ClientMessage =
 	| { type: "remove_provider_key"; provider: string; keyName: string }
 	// -- custom model config (agentDir/models.json) ---------------------------
 	| { type: "list_models_config" }
+	/** Re-read models.json from disk into the model runtime and repush the
+	 *  model list — for edits made outside the UI (hand edits, scripts).
+	 *  Same refresh tail that save_model_config runs. */
+	| { type: "reload_models_config" }
 	/** Upsert one provider (api/baseUrl/apiKey + its models) into models.json. */
 	| { type: "save_model_config"; providerId: string; config: UiProviderConfig }
 	/** Remove a provider from models.json. */
@@ -448,15 +539,21 @@ export type ClientMessage =
 	// -- settings (system prompt / skills / extensions / presets) ------------
 	/** Request the current settings state (also pushed automatically on attach). */
 	| { type: "get_settings" }
-	/** Apply a partial settings update: main-session prompt/toggles or isolated
-	 *  reviewer prompt/skill toggles. Each change is persisted per client; main
-	 *  session changes reload the runtime, while review changes affect the next review. */
+	/** Apply a partial settings update: compose template / per-source overrides or
+	 *  skill/extension toggles. Each change is persisted per client; prompt
+	 *  template changes reload the runtime, while review changes affect the next review. */
 	| {
 			type: "set_settings";
 			promptMode?: "append" | "replace";
 			customSystemPrompt?: string;
+			/** 组合模板文本（{{token}} 自由拼装，空 = 默认模板，见 prompt-composer）。 */
+			promptTemplate?: string;
+			/** 各来源 token 的独立覆盖（空 = 用自动内容）。 */
+			promptOverrides?: Record<string, string>;
 			disabledSkills?: string[];
 			disabledExtensions?: string[];
+			/** 统一 Agent 工具禁用名单（见 server/tool-manager.ts；live 生效无需 reload）。 */
+			disabledAgentTools?: string[];
 			/** Installed UI plugins hidden in the settings panel (UI-only toggle,
 			 *  never triggers a runtime reload). */
 			disabledPlugins?: string[];
@@ -467,10 +564,22 @@ export type ClientMessage =
 			/** 终端接管 bash 开关 + 静默解阻阈值毫秒（0 = 一直等到命令结束）。 */
 			terminalBash?: boolean;
 			terminalBashIdleMs?: number;
+			/** edit_soft 工具开关（默认关）。开 → AI 可用不严格要求缩进的 edit_soft 工具。 */
+			editSoftEnabled?: boolean;
+			/** 问卷提问（ask_user_question）开关（默认开）。关 → 模型不再弹问卷。 */
+			questionnaireEnabled?: boolean;
+			/** 目标模式（目标条 + 调研向导 + 审查循环）总开关（默认开）。关 → 目标条
+			 *  隐藏、无法设目标/启动调研/触发审查。纯运行开关，无需 reload。 */
+			goalModeEnabled?: boolean;
 			/** 思考文本是否换行（默认开）。纯 UI 偏好，不需要 reload runtime。 */
 			thinkingWrap?: boolean;
 			/** 工具调用是否默认展开（默认开）。纯 UI 偏好，不需要 reload runtime。 */
 			toolsWrap?: boolean;
+			/** skill 全文注入名单（默认空 = 名录模式）。名单里的技能 {{skills}} 展开正文。 */
+			skillsFullText?: string[];
+			/** 子代理默认模型（"provider/id"；null/未设 = 子代理跟随主对话当前模型）。
+			 * 不改主会话模型，只在派生子代理时生效。 */
+			subagentDefaultModel?: string | null;
 			/** Vision bridge on/off + preferred "provider/id" model (null = auto). */
 			visionBridgeEnabled?: boolean;
 			visionBridgeModel?: string | null;
@@ -481,6 +590,17 @@ export type ClientMessage =
 			/** Extra instructions and independently disabled skills for review. */
 			reviewPrompt?: string;
 			reviewDisabledSkills?: string[];
+			/** 大模型 API 出错自动重试次数（默认 6；0 = 失败即停）。即时生效，无需 reload。 */
+			retryMaxAttempts?: number;
+			/** 内置标记总开关 + 按 marker 禁用（markersEnabled=false 时全部停用）。 */
+			markersEnabled?: boolean;
+			disabledMarkers?: string[];
+			/** 输入框上方的快捷短语（点击即发送）。纯 UI 偏好，不需要 reload runtime。 */
+			quickPhrases?: string[];
+			quickPhrasesEnabled?: boolean;
+			/** 上报「已 seed 一次默认快捷短语」（首次见空列表时客户端按语言填一批默认并置位；
+			 *  服务端存全局标记，跨会话/跨浏览器生效，避免删除默认后又被填回）。 */
+			quickPhrasesSeeded?: boolean;
 	  }
 	// -- plugins (<dataDir>/plugins) -----------------------------------------
 	/** App-level message from a plugin's client bundle to its server side.
@@ -501,6 +621,18 @@ export type ClientMessage =
 	 *  The host validates against the schema, persists to storage.json and
 	 *  notifies the plugin (host.onSettingsChanged). */
 	| { type: "plugin_settings"; pluginId: string; values: Record<string, unknown> }
+	/** Add a third-party plugin to the user's installable-plugin list
+	 *  (<dataDir>/plugin-catalog.json). `source` is required
+	 *  (owner/repo or owner/repo/subdir[#ref]); id/name/description/icon are
+	 *  optional — the server normalizes defaults (id falls back to the CLI's
+	 *  repo/subdir naming, name falls back to id). */
+	| {
+			type: "plugin_catalog_add";
+			entry: { source: string; id?: string; name?: string; description?: string; icon?: string };
+	  }
+	/** Remove a user-added plugin from the installable-plugin list (builtin
+	 *  entries from the shipped catalog can't be removed via the UI). */
+	| { type: "plugin_catalog_remove"; id: string }
 	// -- DSH engine user patches (<dataDir>/dsh-patches) ---------------------
 	/** List <dataDir>/dsh-patches/*.yml (DSH engine only; pi engine ignores). */
 	| { type: "dsh_patches_list" }
@@ -512,8 +644,19 @@ export type ClientMessage =
 	| {
 			type: "question_answer";
 			id: string;
-			answers: { id: string; selected: string[]; custom?: string }[];
+			answers: QuestionAnswer[];
 			cancelled?: boolean;
+	  }
+	/** Answer to page_request (id echoes page_request.id). `ok:false` carries a
+	 *  human-readable `error` — no browser/extension, page not allowed, or the
+	 *  action itself failed. The server never inspects `result`'s shape; it is
+	 *  handed to the model as-is (JSON). */
+	| {
+			type: "page_response";
+			id: string;
+			ok: boolean;
+			result?: unknown;
+			error?: string;
 	  }
 	/** Replace the current settings with the named preset and apply it. */
 	| { type: "apply_preset"; name: string }
@@ -524,10 +667,26 @@ export type ClientMessage =
 	| { type: "remove_project"; path: string }
 	/** Permanently delete a persisted session transcript file (history list). */
 	| { type: "delete_session"; path: string }
+	/** Append a session_info name entry to a persisted session transcript (history rename). */
+	| { type: "rename_session"; path: string; name: string }
+	/** Rename a live conversation: retitle + persist a session_info entry so History matches. */
+	| { type: "rename_conversation"; id: string; name: string }
 	/** Dismiss a running conversation from the left-panel list (frees its runtime
 	 *  but keeps the persisted transcript in history). Only non-streaming
-	 *  conversations can be dismissed; streaming ones refuse with a notice. */
-	| { type: "dismiss_conversation"; id: string };
+	 *  conversations can be dismissed; streaming ones refuse with a notice.
+	 *  withFinishedSubagents = 连带关闭该对话下已结束的子代理（传递后代；运行
+	 *  中的子代理仍会阻止关闭，绝不连带 abort）。不传 + 存在已结束子代理后代
+	 *  时拒绝并提示（避免静默 orphan，由前端确认框先问用户）。
+	 *  force = 强行关闭：中止自身运行（如在跑）+ 中止全部子代理后代
+	 *  （运行中的也停）再整体移出；终端/审查/后台唤醒等保留态一并放行。
+	 *  active 对话也可关闭（后端自动切到其他对话或新建后再移）。 */
+	| { type: "dismiss_conversation"; id: string; withFinishedSubagents?: boolean; force?: boolean }
+	/** Bulk-dismiss FINISHED subagents from the running list (right-click menu).
+	 *  parentId omitted = all finished subagents; given = the transitive
+	 *  subagent descendants of that conversation (children, grandchildren, …),
+	 *  plus the parent itself when it is a finished subagent. Running
+	 *  (streaming/retained) subagents are never touched. */
+	| { type: "dismiss_finished_subagents"; parentId?: string };
 
 // ---------------------------------------------------------------------------
 // Server -> Client
@@ -568,6 +727,46 @@ export interface ProjectSummary {
 	lastUsed: number;
 }
 
+/** 一个可选项：模型的 ask_user_question 问卷选项。preview 为选项被选中后
+ *  在右侧展开的富文本（model 自选 markdown 或 HTML，前端走 Markdown(rawHtml)）。 */
+export interface UiQuestionOption {
+	label: string;
+	description?: string;
+	preview?: string;
+}
+
+/** 模型 ask_user_question 的一道题。question/detail/header 允许 markdown/HTML
+ *  混排（前端走 Markdown(rawHtml)），由模型自选、信任模型。 */
+export interface UiQuestion {
+	id: string;
+	question: string;
+	detail?: string;
+	header?: string;
+	options?: UiQuestionOption[];
+	multiSelect?: boolean;
+}
+
+/** 一道题的用户回答（question_answer 回传）。selected 为选中的选项 label
+ *  列表；custom 为用户在「Type something」里填的额外文本（可选）。 */
+export interface QuestionAnswer {
+	id: string;
+	selected: string[];
+	custom?: string;
+}
+
+/** 待用户回答的模型提问（ask_user_question）——服务端侧的事实源。
+ *  `question_pending` 是即时通道（模型刚提问时推一次）；本类型同时挂在
+ *  UiState.pendingQuestion 上，让重连/刷新/第二个标签页的客户端从快照里把
+ *  对话框恢复出来（否则问卷只在「当时在线的那条连接」上可见）。 */
+export interface UiPendingQuestion {
+	/** 提问 id，question_answer 回传时原样带回。 */
+	id: string;
+	questions: UiQuestion[];
+	/** 服务端超时时间戳（epoch ms）——前端显示倒计时，归零自动取消。
+	 *  缺省 = 不限时（标准 pi 引擎：等人回答不设上限）。 */
+	deadline?: number;
+}
+
 /** A background server the agent left running (listening-port diff around a
  *  bash tool run). Keyed by port. Managed from the 后台任务 panel: each entry
  *  can be stopped individually or all at once, and the list persists even
@@ -602,7 +801,8 @@ export interface FileSearchResult {
 }
 export interface FileEntry {
 	name: string;
-	/** Path relative to the workspace root ('' for the root itself). */
+	/** Path relative to the workspace root ('' for the root itself); in machine
+	 *  browse mode (files.absolute) this carries the absolute wire path. */
 	path: string;
 	type: "file" | "dir";
 	/**
@@ -787,6 +987,45 @@ export interface UiPluginInfo {
 	 *  the original spec the user typed (owner/repo, URL or local path). The
 	 *  settings panel offers an Update button only when this exists. */
 	source?: string;
+	/** Fenced-code languages this plugin can render (manifest "renderers"). The
+	 *  frontend builds a language→plugin map and lazily loads the plugin's
+	 *  bundle the first time such a fence actually renders in a message. */
+	renderers?: string[];
+	/** Whether the plugin exposes a standalone view tab (manifest "view",
+	 *  default true). Renderer-only plugins set false so the frontend skips
+	 *  eagerly loading their bundle for the tab and only loads it on demand. */
+	view?: boolean;
+}
+
+/** One installable plugin in the "plugin list / marketplace" (see
+ *  server/plugin-catalog.ts). Unlike {@link UiPluginInfo} (an INSTALLED
+ *  plugin), a catalog entry is a one-click install candidate shown in the
+ *  settings panel. Two sources are merged:
+ *    - builtin : <pkgRoot>/plugins/catalog.json shipped with pi-web-ui (the
+ *      maintained list — plugin authors contribute by adding an entry + PR)
+ *    - custom  : <dataDir>/plugin-catalog.json, user-added entries (anyone
+ *      can drop a third-party plugin into the list via the settings UI)
+ *  Custom entries override a builtin entry of the same id (so users can
+ *  adjust the maintained defaults). */
+export interface UiPluginCatalogEntry {
+	/** Install id — the plugin lands in <dataDir>/plugins/<id>. Must match
+	 *  ^[A-Za-z0-9_-]+$. Installing always runs `pi-web-ui install <source>
+	 *  --name <id>` so the on-disk dir name matches this id (this is what the
+	 *  settings panel uses to detect installed/not-installed state). */
+	id: string;
+	/** Display name (falls back to id). */
+	name: string;
+	description?: string;
+	descriptionEn?: string;
+	/** Optional emoji/single-char icon. */
+	icon?: string;
+	/** Install source for the CLI: owner/repo[/subdir][#ref]. */
+	source: string;
+	/** true = from the shipped catalog; false = user added in the UI
+	 *  (only custom entries can be removed). */
+	builtin: boolean;
+	/** Optional project/homepage URL. */
+	homepage?: string;
 }
 
 /** One of pi's built-in providers, with whether auth is configured. */
@@ -812,10 +1051,12 @@ export interface ProviderKeyInfo {
 }
 /** ONE RUNNING conversation (each runs its own session in parallel). The
  *  list is GLOBAL across projects — a background run from another workspace
- *  stays visible until it is opened and left without continuing — and only
- *  contains conversations that were displaced to the background while still
- *  streaming; background-finish keeps them listed, opening-and-leaving-
- *  without-continuing removes them. cwd lets the client group by project. */
+ *  stays visible until it is opened and left without continuing — and holds
+ *  every conversation displaced to the background while still streaming
+ *  (background-finish keeps them listed, opening-and-leaving-without-
+ *  continuing removes them), PLUS the ACTIVE conversation once it has content
+ *  (issue #140: the chat you are looking at must not be missing from the list;
+ *  a blank new chat stays out). cwd lets the client group by project. */
 export interface ConversationSummary {
 	id: string;
 	/** Display title: first user prompt (truncated) or the default. */
@@ -825,6 +1066,12 @@ export interface ConversationSummary {
 	isStreaming: boolean;
 	/** 这是子代理对话（左栏带「子代理」徽标；可点开查看/补充/中止）。 */
 	isSubagent: boolean;
+	/** 子代理最近一次运行报错（左栏红点；普通对话不带）。 */
+	error?: string;
+	/** 子代理最近一次运行被中止。 */
+	canceled?: boolean;
+	/** 父对话 id（Running 面板嵌套展示用）。 */
+	parentId?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -852,12 +1099,15 @@ export interface UiExtensionInfo {
 	enabled: boolean;
 }
 
-/** A named combination of prompt mode/text + disabled skills/extensions that
- *  the user can re-apply in one click. Persisted per client. */
+/** A named combination of prompt (compose template + per-source overrides) +
+ *  disabled skills/extensions that the user can re-apply in one click. Persisted
+ *  per client. promptMode/customSystemPrompt 是遗留字段（旧预设）。 */
 export interface UiSettingsPreset {
 	name: string;
 	promptMode: "append" | "replace";
 	customSystemPrompt: string;
+	promptTemplate: string;
+	promptOverrides: Record<string, string>;
 	disabledSkills: string[];
 	disabledExtensions: string[];
 	/** Extra instructions and skill toggles for the isolated goal-reviewer. */
@@ -874,13 +1124,24 @@ export interface UiSubagentTemplate {
 	name: string;
 	/** 给 AI / 设置面板看的简介（选模板时判断适用场景）。 */
 	description: string;
+	/** English variant of description (missing/empty = fall back to description;
+	 *  server seeds both, panel edits the active UI language's field). */
+	descriptionEn?: string;
 	promptMode: "append" | "replace";
 	/** 模板系统提示词（replace 模式必填；append 模式可空 = 只用白名单限定）。 */
 	systemPrompt: string;
+	/** English variant of systemPrompt (missing/empty = fall back to
+	 *  systemPrompt; subagent_spawn picks by caller language). */
+	systemPromptEn?: string;
 	/** 技能白名单：非空 → 子代理只启用这些；空 → 跟随主会话技能开关。 */
 	enabledSkills: string[];
 	/** 扩展白名单（npm:<pkg> / 入口路径）：非空 → 只加载这些；空 → 跟随主会话。 */
 	enabledExtensions: string[];
+	/** 子代理模型 "provider/id"；空 = 跟随主对话当前模型。 */
+	model: string;
+	/** 子代理思考强度（"off"…"max"）；空 = 跟随主对话当前思考强度。模型不支持的
+	 *  挡位由 SDK 自动收敛（如非推理模型只会是 "off"）。 */
+	thinkingLevel: string;
 	/** false = 停用（对 AI 不可见）。 */
 	enabled: boolean;
 }
@@ -893,23 +1154,44 @@ export interface UiVisionBridgeModel {
 	label: string;
 }
 
+export interface UiMarkerInfo {
+	name: string;
+	enabled: boolean;
+	guidance: string[];
+}
+
 /** Full settings state pushed to the browser (settings_state). */
 export interface UiSettingsState {
 	promptMode: "append" | "replace";
 	customSystemPrompt: string;
+	/** 组合模板 + 各来源覆盖（见 server/prompt-composer.ts）。主会话系统提示词
+	 *  = 模板里 {{token}} 展开各来源提示词；覆盖优先于自动内容。 */
+	promptTemplate: string;
+	promptOverrides: Record<string, string>;
 	disabledSkills: string[];
 	disabledExtensions: string[];
-	/** Persistent-terminal tools on/off (default on). Off → terminal_* tools are
-	 *  removed from the active set and the guidance prompt is not injected. */
+	/** 统一 Agent 工具禁用名单（单源；live 生效无需 reload）。 */
+	disabledAgentTools: string[];
+	/** @deprecated 遗留别名（由 disabledAgentTools 推导）：全开才算开。Off → terminal_*
+	 *  tools are removed from the active set and the guidance prompt is not injected. */
 	terminalToolsEnabled: boolean;
 	/** 终端接管 bash（默认关）：bash 执行体改为持久终端（可见/保留状态/静默转后台）。 */
 	terminalBash: boolean;
 	/** 接管模式下 bash 的静默解阻阈值毫秒数（0 = 一直等到命令结束）。 */
 	terminalBashIdleMs: number;
+	/** @deprecated 遗留别名（由 disabledAgentTools 推导）。开 → AI 可用不严格要求缩进的 edit_soft 工具。 */
+	editSoftEnabled: boolean;
+	/** 问卷提问开关（默认开）。关 → 模型不再弹问卷对话框。 */
+	questionnaireEnabled: boolean;
+	/** 目标模式（目标条 + 调研向导 + 审查循环）总开关（默认开）。关 → 目标条
+	 *  隐藏、无法设目标/启动调研/触发审查。纯运行开关，无需 reload。 */
+	goalModeEnabled: boolean;
 	/** 思考文本是否换行（默认开 = pre-wrap；关 = 长行横向滚动）。 */
 	thinkingWrap: boolean;
 	/** 工具调用是否默认展开（默认开 = 展开；关 = 折叠）。 */
 	toolsWrap: boolean;
+	/** skill 全文注入名单（默认空 = 名录模式）：名单里的技能 {{skills}} 展开正文。 */
+	skillsFullText: string[];
 	/** Vision bridge on/off (default on). Off → images are sent as-is. */
 	visionBridgeEnabled: boolean;
 	/** Preferred vision model as "provider/id", or null = auto-detect first. */
@@ -926,15 +1208,19 @@ export interface UiSettingsState {
 	/** Installed UI plugins the user hid in the settings panel (UI-only:
 	 *  hidden tabs/views; server-side handlers stay reachable). */
 	disabledPlugins: string[];
-	/** The built-in default system prompt (what replace mode would otherwise
-	 *  replace) — prefill source for the replace-mode editor. Empty until the
-	 *  resource-loader has run at least once. */
-	defaultSystemPrompt: string;
 	/** The FULL system prompt actually in effect for the active conversation
-	 *  (custom append/replace text + project context + skills + tool guidance).
-	 *  Read-only view source for the settings panel; empty until the session
-	 *  is ready. */
+	 *  (compose render: template + per-source overrides + project context +
+	 *  skills + tool guidance). Read-only view source for the settings panel;
+	 *  empty until the session is ready. */
 	effectiveSystemPrompt: string;
+	/** 每个来源 token 当前的默认（自动）内容 —— {{token}} 未覆盖时展开成的文本
+	 *  （设置面板「各来源」行只读预览用；键 = prompt-composer token，空串 =
+	 *  该来源目前无自动内容；会话未就绪时为空对象）。 */
+	promptSourceDefaults: Record<string, string>;
+	/** 发给模型的 function-calling 工具定义（name + description + parameters
+	 *  JSON Schema）只读文本 —— 设置面板「查看当前完整提示词」里与系统提示词
+	 *  正文并排展示，方便看到完整初始上下文；会话未就绪时为空串。 */
+	toolsSchema: string;
 	/** The built-in default vision-bridge transcription prompt. */
 	visionBridgeDefaultPrompt: string;
 	/** Vision-capable configured models available on this machine. */
@@ -944,8 +1230,24 @@ export interface UiSettingsState {
 	reviewSkills: UiSkillInfo[];
 	extensions: UiExtensionInfo[];
 	presets: UiSettingsPreset[];
+	/** 内置标记工具开关（全局 + 按 marker）。 */
+	markersEnabled: boolean;
+	disabledMarkers: string[];
+	markers: UiMarkerInfo[];
 	/** 子代理模板（含停用的；面板据此渲染开关，AI 只在 enabled 的里选）。 */
 	subagentTemplates: UiSubagentTemplate[];
+	/** 子代理默认模型（"provider/id"；null = 跟随主对话当前模型）。 */
+	subagentDefaultModel: string | null;
+	/** 大模型 API 出错自动重试次数（默认 6；0 = 失败即停）。 */
+	retryMaxAttempts: number;
+	/** 输入框上方的快捷短语（点击即发送；空 = 不显示）。 */
+	quickPhrases: string[];
+	/** 快捷短语总开关（默认开；关 = 输入框上方不显示）。 */
+	quickPhrasesEnabled: boolean;
+	/** 是否已在服务端 seed 过一次默认快捷短语（跨会话/跨浏览器，用于避免删除后被填回默认）。 */
+	quickPhrasesSeeded: boolean;
+	/** 已配置鉴权的全部模型（子代理默认模型/模板模型选择器）。 */
+	subagentModels: UiVisionBridgeModel[];
 	/** 内置默认模板名（settings_state 里供面板标「默认」徽标；用户文件为准时可能
 	 *  已删除/改名，长度可与 subagentTemplates 不同）。 */
 	subagentDefaultTemplates: string[];
@@ -961,6 +1263,23 @@ export type ServerMessage =
 			 *  compares it against its own copy — a mismatch means the page was
 			 *  loaded before an app update and must be refreshed. */
 			protocolVersion?: number;
+			/** This package's own version (`serverVersion` is the pi SDK's). The
+			 *  client used to learn it from the update check, which a managed
+			 *  instance never runs. */
+			appVersion?: string;
+			/** PI_WEB_MANAGED=1 — updates come from outside, so the client hides
+			 *  the update badge, the UPDATE panel and the plugin market. The
+			 *  server refuses those messages anyway (server/managed.ts). */
+			managed?: boolean;
+			/** PI_WEB_TABS — the tabs this instance offers; absent means all of
+			 *  them. The client does not draw the others and the server refuses
+			 *  their messages (server/tabs.ts). */
+			tabs?: string[];
+			/** Supervising service manager, when this instance was started by
+			 *  `pi-web-ui server start|install` (server/launch-origin.ts). Absent =
+			 *  foreground/dev/Docker: no supervisor, so the client hides the
+			 *  "restart service" action and the server refuses restart_service. */
+			service?: UiServiceInfo;
 	  }
 	| { type: "snapshot"; state: UiState }
 	| {
@@ -983,8 +1302,10 @@ export type ServerMessage =
 	  }
 	| {
 			// Global running-conversation list (see ConversationSummary): all
-			// listed conversations across every project. activeId is the active
-			// conversation even when it isn't listed (fresh chat).
+			// listed conversations across every project, plus the active one once
+			// it has content (#140). activeId is the active conversation — the
+			// client marks that row as “current” (it is absent from the list only
+			// while it is still a blank chat).
 			type: "conversations";
 			conversations: ConversationSummary[];
 			activeId: string;
@@ -1085,6 +1406,12 @@ export type ServerMessage =
 			 * posix: 500) — the list was cut short. UI shows a hint when true.
 			 */
 			truncated: boolean;
+			/**
+			 * true = 机器浏览模式：path/entries 为绝对路径（盘符根 "C:"、"@root"
+			 *  机器根，或 "/" 开头的 posix 路径），允许越过工作区根导航到别的盘。
+			 *  false/缺省 = 工作区相对视图（原语义）。
+			 */
+			absolute?: boolean;
 	  }
 	/** Content of a workspace file for the preview panel. */
 	/** The server fs.watches the currently-listed directory and pushes this on
@@ -1240,6 +1567,12 @@ export type ServerMessage =
 	 *  reload; the frontend uses it as an import-cache buster so changed
 	 *  bundles are actually re-fetched. */
 	| { type: "plugins"; plugins: UiPluginInfo[]; epoch: number }
+	/** Installable-plugin list (marketplace). Pushed on attach and after every
+	 *  plugin_catalog_add/remove. Merges the shipped catalog
+	 *  (<pkgRoot>/plugins/catalog.json) with user-added entries
+	 *  (<dataDir>/plugin-catalog.json). `epoch` increments on every add/remove
+	 *  so the frontend can re-render. */
+	| { type: "plugin_catalog"; entries: UiPluginCatalogEntry[]; epoch: number }
 	/** App-level message from a plugin's server side to its client bundles.
 	 *  Broadcast to every connected socket (plugins have no per-client state
 	 *  in v1); the frontend fans it out to the matching loaded view. */
@@ -1249,22 +1582,40 @@ export type ServerMessage =
 	 *  never emits it). Pushed on request (dsh_patches_list) and after a
 	 *  rescan (dsh_patches_rescan). */
 	| { type: "dsh_patches"; patchDir: string; files: { name: string; path: string; size: number; mtimeMs: number }[] }
-	/** DSH engine: the model asked the user (ask_user_question tool). The
-	 *  frontend shows a dialog and answers via question_answer. One pending
+	/** The model asked the user (ask_user_question tool) — both engines
+	 *  (DSH via goal-rpc userQuestions provider, standard pi via the
+	 *  pi-web-ui ask_user_question customTool) forward here. The frontend
+	 *  shows a dialog and answers via question_answer. One pending
 	 *  question at a time per client (the runtime blocks the agent loop). */
 	| {
 			type: "question_pending";
 			id: string;
 			/** 服务端超时时间戳（epoch ms，P0-6）；前端显示倒计时，归零自动取消。 */
 			deadline?: number;
-			questions: {
-				id: string;
-				question: string;
-				detail?: string;
-				header?: string;
-				options?: { label: string; description?: string }[];
-				multiSelect?: boolean;
-			}[];
+			questions: UiQuestion[];
+	  }
+	// -- browser page control (browser_page tool) ---------------------------
+	/** The model wants to act on a page in the user's browser
+	 *  (`browser_page` customTool; implemented by the page-picker browser
+	 *  extension — see plugins/page-picker/README.md「AI 操作页面」).
+	 *
+	 *  The frontend forwards this to the extension via
+	 *  `window.__piWebUiHost.pageCall()` and answers with page_response.
+	 *  `op` is the **extension-side** action name (`read` / `click` / `type` /
+	 *  `scroll` / `goto` / `wait` / `eval` / `pages`); the server never
+	 *  interprets it, so the op vocabulary lives with the extension.
+	 *
+	 *  Not stored in the snapshot: unlike a question there is nothing for the
+	 *  user to answer, and a reload mid-action just fails the tool call. */
+	| {
+			type: "page_request";
+			id: string;
+			op: string;
+			args?: Record<string, unknown>;
+			/** Target page origin (required when several pages are allowed). */
+			target?: string;
+			/** How long the server waits for the browser before failing the tool. */
+			timeoutMs: number;
 	  }
 	// -- background tasks ---------------------------------------------------
 	/** The background-server list (servers the agent left running, detected via

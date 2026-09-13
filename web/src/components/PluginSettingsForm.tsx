@@ -1,13 +1,14 @@
 import { useState } from "react";
-import type { ClientMessage, UiPluginInfo } from "../types";
+import type { UiPluginInfo } from "../types";
 import { useT } from "../i18n";
+import { appSend } from "../app-globals";
 
 /**
  * 插件声明式设置表单（manifest "settings" schema → 自动渲染）。
  * 值保存在 storage.json 的 "settings" 键（宿主统一管理），保存时发
  * plugin_settings，服务端校验 + 持久化 + 通知插件（onSettingsChanged）。
  */
-export function PluginSettingsForm({ plugin, send }: { plugin: UiPluginInfo; send: (msg: ClientMessage) => boolean }) {
+export function PluginSettingsForm({ plugin }: { plugin: UiPluginInfo }) {
 	const t = useT();
 	const schema = plugin.settingsSchema ?? [];
 	const [draft, setDraft] = useState<Record<string, unknown>>(
@@ -22,7 +23,7 @@ export function PluginSettingsForm({ plugin, send }: { plugin: UiPluginInfo; sen
 
 	const save = () => {
 		setSaving(true);
-		send({ type: "plugin_settings", pluginId: plugin.id, values: draft });
+		appSend({ type: "plugin_settings", pluginId: plugin.id, values: draft });
 		setTimeout(() => setSaving(false), 800);
 	};
 

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
-import type { ClientMessage } from "../types";
 import { useT } from "../i18n";
+import { appSend } from "../app-globals";
+import { Markdown } from "./Markdown";
 
 interface DialogProps {
 	dialog: {
@@ -9,7 +10,6 @@ interface DialogProps {
 		title: string;
 		args: unknown[];
 	};
-	send: (msg: ClientMessage) => boolean;
 }
 
 /**
@@ -17,13 +17,13 @@ interface DialogProps {
  * rendered above the chat input (non-modal — the conversation stays visible).
  * Resolves via dialog_response; cancel/Esc resolves with null.
  */
-export function Dialog({ dialog, send }: DialogProps) {
+export function Dialog({ dialog }: DialogProps) {
 	const t = useT();
 	const [inputValue, setInputValue] = useState("");
 	const [sel, setSel] = useState(0);
 
 	const respond = (value: string | boolean | null) => {
-		send({ type: "dialog_response", id: dialog.id, value });
+		appSend({ type: "dialog_response", id: dialog.id, value });
 	};
 
 	useEffect(() => {
@@ -60,7 +60,7 @@ export function Dialog({ dialog, send }: DialogProps) {
 							onMouseEnter={() => setSel(i)}
 							onClick={() => respond(opt)}
 						>
-							{opt}
+							<Markdown text={opt} rawHtml />
 						</button>
 					))}
 					{options.length === 0 && <div className="dialog-hint">{t("noOptions")}</div>}
@@ -69,7 +69,7 @@ export function Dialog({ dialog, send }: DialogProps) {
 
 			{dialog.kind === "confirm" && (
 				<div className="dialog-body">
-					<p>{message}</p>
+					<Markdown text={message} rawHtml />
 					<div className="dialog-actions">
 						<button type="button" className="btn" onClick={() => respond(false)}>
 							{t("cancel")}

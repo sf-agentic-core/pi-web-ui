@@ -108,6 +108,28 @@ describe("PluginManager", () => {
 		expect(g.__toolSeen).toEqual(["start", "start"]);
 	});
 
+	it("emitConversationChanged fans out; throwing handler is isolated", async () => {
+		makePlugin(
+			"convwatch",
+			`
+			globalThis.__convSeen = [];
+			export default {
+				activate(h) {
+					const offBad = h.onConversationChanged(() => { throw new Error("bad"); });
+					const off = h.onConversationChanged(() => { globalThis.__convSeen.push(1); });
+					const offRun = h.onRunEvent(() => {});
+					if (typeof h.getActiveConversation !== "function") throw new Error("missing getActiveConversation");
+					return () => { off(); offBad(); offRun(); };
+				},
+			};`,
+		);
+		await mgr.ensureLoaded();
+		mgr.emitConversationChanged();
+		mgr.emitConversationChanged();
+		const g = globalThis as { __convSeen?: number[] };
+		expect(g.__convSeen).toEqual([1, 1]);
+	});
+
 	it("notifyAll broadcasts a notice; sendTo targets one socket only", async () => {
 		makePlugin("echo3", ECHO_PLUGIN);
 		await mgr.ensureLoaded();
@@ -152,6 +174,45 @@ describe("PluginManager", () => {
 		makePlugin("broken", THROW_PLUGIN);
 		const third = await mgr.ensureLoaded();
 		expect(third.find((p) => p.id === "broken")?.error).toContain("boom");
+	});
+
+	/** 回归：`pi-web-ui install --force` 会先 rm 再 cp，插件目录在安装窗口内不存在。
+	 *  撞上窗口期的一次扫描会把插件反激活；目录回来后必须能重新激活（否则插件的
+	 *  HTTP 路由在本进程内永远不会再注册 → 前端只看到「代理请求失败 404」）。 */
+	it("目录短暂消失（install --force 的 rm→cp 窗口）后，下次扫描重新激活并恢复路由", async () => {
+		const code = `export default {
+			activate(h) {
+				h.route("GET", "/ping", (req, res) => res.end("pong"));
+			},
+		};`;
+		makePlugin("hotswap", code);
+		const fake = () => {
+			const res = {
+				status: () => res,
+				end: (body?: string) => void (res.body = body),
+				body: undefined as string | undefined,
+			};
+			return res;
+		};
+		await mgr.ensureLoaded();
+		let res = fake();
+		mgr.handleHttp("hotswap", "GET", "/ping", {} as never, res as never);
+		expect(res.body).toBe("pong");
+
+		// 安装窗口期：目录被删掉的一次扫描 → 反激活
+		rmSync(join(dir, "plugins", "hotswap"), { recursive: true, force: true });
+		expect(await mgr.ensureLoaded()).toEqual([]);
+		res = fake();
+		mgr.handleHttp("hotswap", "GET", "/ping", {} as never, res as never);
+		expect(res.body).toBe("not found");
+
+		// 安装完成，目录（新代码）回来 → 必须重新激活、路由恢复
+		makePlugin("hotswap", code.replace("pong", "pong2"));
+		const list = await mgr.ensureLoaded();
+		expect(list.map((x) => x.id)).toEqual(["hotswap"]);
+		res = fake();
+		mgr.handleHttp("hotswap", "GET", "/ping", {} as never, res as never);
+		expect(res.body).toBe("pong2"); // 必须拿到磁盘上的新代码（模块缓存被击穿）
 	});
 
 	it("manifest icon/description surface in the catalog", async () => {

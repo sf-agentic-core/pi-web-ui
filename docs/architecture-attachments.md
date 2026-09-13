@@ -18,7 +18,7 @@
 
 ## 图片问答（无工作区路径）
 
-粘贴（Ctrl+V）/ 拖入输入框（**整个窗口都是拖放目标**，issue #19：`.app` 根节点接文件 dragover/drop + 全屏 `.app-drop-overlay` 高亮；输入条与编辑器自身 handler stopPropagation 保优先级）/ 🖼 上传的图片带 `attachments[].imageData`（base64）+ `mimeType` + `name` 发送——服务端直接作为 image content 附加，不走文件路径（`path` 忽略）。浏览器端（`web/src/image-paste.ts`）先把图片等比缩到 ≤1568px、按需转 PNG/JPEG，保证 payload 在服务端 2MB 上限内（`MAX_PASTED_IMAGE_BYTES`）。当前模型不支持识图（`model.vision`）时前端提示警告。
+粘贴（Ctrl+V）/ 拖入输入框（**整个窗口都是拖放目标**，issue #19：`.app` 根节点接文件 dragover/drop + 全屏 `.app-drop-overlay` 高亮（唯一提示，输入条不叠局部遮罩）；输入条与编辑器自身 handler 在 drop 上 stopPropagation 保优先级，因此 App 另在 window 捕获阶段监听 drop 复位遮罩——否则落点在输入条时全屏遮罩会常驻）/ 🖼 上传的图片带 `attachments[].imageData`（base64）+ `mimeType` + `name` 发送——服务端直接作为 image content 附加，不走文件路径（`path` 忽略）。浏览器端（`web/src/image-paste.ts`）先把图片等比缩到 ≤1568px、按需转 PNG/JPEG，保证 payload 在服务端 2MB 上限内（`MAX_PASTED_IMAGE_BYTES`）。当前模型不支持识图（`model.vision`）时前端提示警告。
 
 ## 视觉桥
 
@@ -52,6 +52,7 @@
 - 客户端发 `{ type: "read_file", path }` → 服务端回 `{ type: "file_content", path, name, text, truncated, binary, lines, size }`。
 - 只读文件前 **512KB**（`MAX_PREVIEW_BYTES`）；**内容嗅探决定文本还是二进制**：无 NUL、控制字符占比 < 2% 即按文本预览（`looksLikeText`）——未知/无扩展名文件（jsonl、.log.1 等）也能打开；**文本解码带 GBK 回退**（`decodeText`：严格 UTF-8 失败 → GBK → latin1，预览/内联附件/行附件都用它），Windows 老中文文件不再乱码；二进制返回 `binary: true`，`text` 为前 4KB 的**十六进制视图**（`hexDump`，前端 `.fp-hex` 渲染，可下载完整文件）。路径经 `resolve + relative` 校验，`..` 越界直接拒。
 - **媒体预览走 HTTP**：image/video 经 `/api/file?clientId=…&path=…` 流式返回（`sendFile` 支持 Range），路径按**该客户端的会话 cwd**（打开的项目）解析，而非服务启动目录——两者可能不一致；`clientId` 缺失或会话不存在时回退到服务启动 `CWD`。路径校验统一走 `workspacePath()`（agent-service 导出）。
+- **HTML 渲染走目录映射的 HTTP**：`/api/preview/<工作区相对路径>`（机器浏览的绝对路径加 `__abs__/` 前缀，各段 URI 编码），iframe 文档 URL 自带文件所在目录，页面里的相对引用（`<link href="../web/src/styles.css">`、`./app.js`、图片…）按浏览器正常语义解析加载，无需改写 HTML；HTML 文档带沙箱 CSP（`sandbox`，`?allowJs=1` 时 `sandbox allow-scripts`，永不加 `allow-same-origin`），其余子资源按真实 content-type 直送；`..` 越界由 `workspacePath()` 拒绝（路由层归一化兜底则落进 SPA 404，不会泄露文件）。
 - 行号语义：**尾随换行不产生空行**（`countLines` 已修正），前后端 split 逻辑必须一致。
 
 ### 下载

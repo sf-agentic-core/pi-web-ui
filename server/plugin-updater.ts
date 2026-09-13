@@ -11,6 +11,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, cpSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { execFile } from "node:child_process";
+import { pick, type ServerLang } from "./i18n.js";
 
 const PLUGIN_ID_RE = /^[A-Za-z0-9_-]+$/;
 /** 保留的备份份数（超出删除最旧的）。 */
@@ -157,7 +158,13 @@ export interface PluginUpdateInfo {
 }
 
 /** 扫描全部已装插件，对比本地 sha 与远端 sha，报告更新状态。 */
-export async function checkPluginUpdates(dataDir: string, exec: Exec = execGit): Promise<PluginUpdateInfo[]> {
+export async function checkPluginUpdates(
+	dataDir: string,
+	exec: Exec = execGit,
+	/** error 字段文案语言（默认英文）；调用方可传 () => getLang() 实现跟随。 */
+	lang?: () => ServerLang,
+): Promise<PluginUpdateInfo[]> {
+	const l = lang?.() ?? "en";
 	const pluginsDir = join(dataDir, "plugins");
 	let names: string[] = [];
 	try {
@@ -187,7 +194,13 @@ export async function checkPluginUpdates(dataDir: string, exec: Exec = execGit):
 				error = err instanceof Error ? err.message : String(err);
 				remoteSha = null;
 			}
-			if (!remoteSha && !error) error = "无法检查（非 git 源或 git 不可用）";
+			if (!remoteSha && !error)
+				error = pick(
+					l,
+					"无法检查（非 git 源或 git 不可用）",
+					"Cannot check (non-git source or git unavailable)",
+					"pluginupdate.cannot.check",
+				);
 			let name: string | undefined;
 			let version: string | undefined;
 			try {

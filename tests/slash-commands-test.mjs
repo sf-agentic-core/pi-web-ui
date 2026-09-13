@@ -180,6 +180,18 @@ async function main() {
 	}
 	console.log(`[7] /new → active conversation ${newChat.activeId.slice(0, 8)}…`);
 
+	// --- 7b. /new <prompt>：参数被当作新对话的首条提示投递 ---
+	// 首条用 `/cwd`（服务端拦截、零 token）当探针：参数若被丢掉（旧行为）就没有
+	// 任何回执，回执出现即证明首条真的进了新对话的 prompt 通道。
+	c.send({ type: "prompt", text: "/new /cwd" });
+	const firstNotice = await c
+		.wait((m) => m.type === "notice" && m.text.includes("当前工作目录"), 8000)
+		.catch(() => null);
+	if (!firstNotice) {
+		throw new Error("FAIL: /new <prompt> did not deliver the first prompt");
+	}
+	console.log(`[7b] /new /cwd → first prompt delivered (${firstNotice.text.split("。")[0]})`);
+
 	// --- 8. /reload re-discovers resources and re-pushes the catalog ---
 	c.send({ type: "prompt", text: "/reload" });
 	const catReloaded = await c.wait((m) => m.type === "slash_commands", 20000);

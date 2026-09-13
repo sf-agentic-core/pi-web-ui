@@ -12,6 +12,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { zstdDecompressSync } from "node:zlib";
+import { pick, type ServerLang } from "../i18n.js";
 
 export interface SessionHeader {
 	id?: string;
@@ -170,7 +171,17 @@ export function findSessionFiles(root: string): string[] {
 		}
 	};
 	walk(root);
-	return out.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+	return out.sort(sessionFileNewest);
+}
+
+/** 排序比较器：文件在扫描与排序之间被删除/改名时 statSync 会抛 ENOENT
+ *  （issue #74 同类：列表刷新不能因一次正常的删除把服务进程打死）。 */
+function sessionFileNewest(a: string, b: string): number {
+	try {
+		return statSync(b).mtimeMs - statSync(a).mtimeMs;
+	} catch {
+		return 0;
+	}
 }
 
 /** 一个工作区的会话文件：官方布局（root/--<cwd>--）+ 旧版 per-cwd 布局。 */
@@ -178,11 +189,11 @@ export function findSessionFilesForCwd(sessionRoot: string, cwd: string): string
 	const dirs = [join(sessionRoot, projectKey(cwd)), join(sessionRoot, encodeURIComponent(cwd), projectKey(cwd))];
 	const out: string[] = [];
 	for (const d of dirs) out.push(...findSessionFiles(d));
-	return out.sort((a, b) => statSync(b).mtimeMs - statSync(a).mtimeMs);
+	return out.sort(sessionFileNewest);
 }
 
-/** 第一个用户文本（会话标题素材）。 */
-export function firstUserText(events: SessionLog["events"]): string {
+/** 第一个用户文本（会话标题素材）。无用户文本时回退默认标题（issue #91：lang 缺省英文）。 */
+export function firstUserText(events: SessionLog["events"], lang: ServerLang = "en"): string {
 	for (const ev of events) {
 		if (ev.type === "user/message") {
 			const blocks = ev.data?.content;
@@ -197,7 +208,7 @@ export function firstUserText(events: SessionLog["events"]): string {
 			}
 		}
 	}
-	return "新对话";
+	return pick(lang, "新对话", "New chat", "dsh.sessions.untitled");
 }
 
 /** 从事件流重建 UiMessage 列表（回放用）：user/assistant/tool-result 顺序落地。 */

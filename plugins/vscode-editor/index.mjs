@@ -853,17 +853,22 @@ export default {
 		function sweepUploads() {
 			const now = Date.now();
 			for (const [, u] of uploads) {
-				if (now - u.last > UPLOAD_STALE_MS) abortUploadEntry(u);
+				if (now - u.last > UPLOAD_STALE_MS) void abortUploadEntry(u);
 			}
 		}
 
-		/** 中止并清理一个上传会话（关句柄 / 删临时文件 / 丢弃内存分片） */
-		function abortUploadEntry(u) {
+		/** 中止并清理一个上传会话（关句柄 / 删临时文件 / 丢弃内存分片）。
+		 *  返回 Promise：Windows 上句柄还没关就 unlink 会 EBUSY/EPERM，
+		 *  旧写法 void close() 后立即 unlink 并把错误吞掉，`.part` 就残留在目标目录里
+		 *  （upload_abort 之后客户端会立刻核验目录，必须在返回响应前删干净）。 */
+		async function abortUploadEntry(u) {
 			if (!u) return;
 			uploads.delete(u.key);
-			if (u.fh) { try { void u.fh.close(); } catch {} }
-			if (u.tmp) fs.unlink(u.tmp).catch(() => {});
+			const fh = u.fh;
+			u.fh = null;
 			u.bufs = [];
+			if (fh) { try { await fh.close(); } catch {} }
+			if (u.tmp) { try { await fs.unlink(u.tmp); } catch {} }
 		}
 
 		/** 开局：校验目标目录/文件名/大小，探测目标是否存在（供客户端覆盖确认）；
@@ -1021,7 +1026,7 @@ export default {
 					}
 					case "upload_abort": { // 中止会话（客户端遇到错误/用户取消覆盖时清理临时文件）
 						const u = uploads.get(`${clientId}:${msg.uploadId}`);
-						if (u) abortUploadEntry(u);
+						if (u) await abortUploadEntry(u);
 						host.sendTo(clientId, { res: true, reqId, ok: true, action });
 						break;
 					}
@@ -1224,7 +1229,7 @@ export default {
 			for (const c of sshConns.values()) {
 				try { c.client.end(); } catch {}
 			}
-			for (const [, u] of uploads) abortUploadEntry(u);
+			for (const [, u] of uploads) void abortUploadEntry(u);
 			uploads.clear();
 			sshConns.clear();
 			host.log("deactivated");

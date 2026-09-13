@@ -8,7 +8,8 @@
  *   3. list_sessions → sessions（空 dataDir 下应为空列表）
  *   4. list_models → models（本地表 + 运行时动态目录合并）
  *   5. get/set_settings → settings_state 回显 + 重连持久化
- *   6. slash 命令拦截（/model 无匹配、/cwd 无效路径 → notice，不发模型）
+ *   6. slash 命令拦截（/model 无匹配、/cwd 无效路径 → notice，不发模型；
+ *      /new <首条提示> 把参数当新对话的首条投递）
  *   7. terminal create/input/output（echo TERM_OK 回显）
  *   8. scm_status → scm_data（在 git 仓库中返回 status）
  *
@@ -220,6 +221,14 @@ async function main() {
 	c2.send({ type: "prompt", text: "/cwd /nonexistent-zzz" });
 	const cwdBad = await c2.wait((m) => m.type === "notice", 10000);
 	check("slash /cwd 无效路径 → notice", cwdBad.text.includes("切换工作目录失败"), cwdBad.text);
+
+	// /new <prompt>：首条提示必须落进新对话（NATIVE_COMMANDS 是两个引擎共用的，
+	// 行为必须一致）。探针用「/cwd」无参数形态——只回显、不发模型。
+	c2.send({ type: "prompt", text: "/new /cwd" });
+	const firstNotice = await c2
+		.wait((m) => m.type === "notice" && m.text.includes("当前工作目录"), 10000)
+		.catch(() => null);
+	check("slash /new <首条提示> 投递到新对话", !!firstNotice, firstNotice?.text ?? "timeout");
 
 	// --- 7. terminal create/input/output ---
 	const termId = "smoke-term";

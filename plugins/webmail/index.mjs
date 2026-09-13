@@ -54,8 +54,8 @@ async function loadConfig(dir) {
 		return {
 			...structuredClone(DEFAULT_CONFIG),
 			...parsed,
-			imap: { ...DEFAULT_CONFIG.imap, ...(parsed.imap ?? {}) },
-			smtp: { ...DEFAULT_CONFIG.smtp, ...(parsed.smtp ?? {}) },
+			imap: { ...DEFAULT_CONFIG.imap, ...parsed.imap },
+			smtp: { ...DEFAULT_CONFIG.smtp, ...parsed.smtp },
 		};
 	} catch {
 		return structuredClone(DEFAULT_CONFIG);
@@ -100,13 +100,41 @@ export default {
 		// ------------------------------------------------------------------
 		// 配置与状态
 		// ------------------------------------------------------------------
-		// 机密存储：密码走宿主 host.secrets（AES-256-GCM 加密，明文绝不落盘）；
-		// 旧版宿主无此设施时回退旧的明文 config.json 行为。首次启动把历史
-		// 明文密码一次性迁入机密并从文件剥离。
+		// 机密存储：密码优先走宿主 host.secrets（AES-256-GCM 加密）；旧版宿主无此
+		// 设施、或写入失败（目录只读 / 磁盘满）时回退旧的明文 config.json 行为。
+		// 关键不变式：密码只要没确认存进机密，就绝不从内存/配置文件里抹掉——
+		// 否则会出现“保存后密码消失、IMAP 报 No password configured”。
 		const sec = host.secrets;
+		/** 机密写入是否降级到明文（只提示一次，不刷屏）。 */
+		let secretsDegradedWarned = false;
 
-		/** 从 config.json 读非敏感字段后：剥离文件里的历史明文密码入机密、
-		 *  再用机密回填内存副本（内存需要真实密码供 IMAP/SMTP 连接）。 */
+		/** 写机密并回读校验：宿主的 set() 写盘失败时只记日志不抛错，
+		 *  只有回读到相同值才能确认真的存住了。失败返回 false → 调用方保留明文。 */
+		function storeSecret(name, value) {
+			if (!sec?.set || !value) return false;
+			try {
+				sec.set(name, String(value));
+				return sec.get?.(name) === String(value);
+			} catch (err) {
+				host.log(`机密写入失败 ${name}:`, err?.message ?? err);
+				return false;
+			}
+		}
+
+		/** 机密不可用时提醒一次：密码仍会保存，但是明文存在 config.json。 */
+		function warnSecretsDegraded() {
+			if (secretsDegradedWarned) return;
+			secretsDegradedWarned = true;
+			host.log("加密存储不可用，密码以明文保存在 config.json");
+			host.notify(
+				"warning",
+				"📬 邮件插件：加密存储不可用，密码已以明文保存在 config.json（功能不受影响）",
+				"Webmail: encrypted storage unavailable — the password was saved as plain text in config.json (functionality unaffected)",
+			);
+		}
+
+		/** 从 config.json 读非敏感字段后：把历史明文密码迁入机密（确认成功才从
+		 *  文件里剥离），再用机密回填内存副本（内存需要真实密码供 IMAP/SMTP 连接）。 */
 		async function loadConfigSecure() {
 			const cfg = await loadConfig(host.dir);
 			if (sec?.set) {
@@ -116,10 +144,13 @@ export default {
 					["smtp", "smtp_pass"],
 				]) {
 					const legacy = cfg?.[sect]?.pass;
-					if (legacy) {
-						try { sec.set(secretName, String(legacy)); } catch {}
+					if (!legacy) continue;
+					// 校验通过才能剥离明文，否则迁移会把唯一的密码删掉。
+					if (storeSecret(secretName, legacy)) {
 						cfg[sect].pass = "";
 						migrated = true;
+					} else {
+						warnSecretsDegraded();
 					}
 				}
 				if (migrated) {
@@ -179,24 +210,25 @@ export default {
 		}
 
 		async function applyConfig(next) {
-			if (sec?.set) {
-				// 密码语义：留空(undefined/"") = 沿用已存；有值 = 更新。配置文件
-				// 与notice均不落明文——机密只进 host.secrets。
-				if (next.imap.pass) {
-					try { sec.set("imap_pass", String(next.imap.pass)); } catch {}
-					next.imap.pass = "";
-				}
-				if (next.smtp.pass) {
-					try { sec.set("smtp_pass", String(next.smtp.pass)); } catch {}
-					next.smtp.pass = "";
-				}
-			} else {
-				// 旧宿主兜底：沿用旧明文行为（留空沿用已存值）
-				next.imap.pass = next.imap.pass || st.config?.imap?.pass || "";
-				next.smtp.pass = next.smtp.pass || st.config?.smtp?.pass || "";
+			// 1) 密码语义：留空(undefined/"") = 沿用已存（内存 → 机密）；有值 = 更新。
+			next.imap.pass = next.imap.pass || st.config?.imap?.pass || sec?.get?.("imap_pass") || "";
+			next.smtp.pass = next.smtp.pass || st.config?.smtp?.pass || sec?.get?.("smtp_pass") || "";
+			// 2) 落盘副本：确认写进机密的密码才从 config.json 剥离；机密不可用/写失败
+			//    时保留明文（旧宿主行为）——宁可明文，不能丢密码。
+			const onDisk = structuredClone(next);
+			let degraded = false;
+			for (const [sect, secretName] of [
+				["imap", "imap_pass"],
+				["smtp", "smtp_pass"],
+			]) {
+				if (!next[sect].pass) continue;
+				if (storeSecret(secretName, next[sect].pass)) onDisk[sect].pass = "";
+				else degraded = true;
 			}
-			st.config = await rehydrate(next);
-			await saveConfig(host.dir, next);
+			if (degraded && sec?.set) warnSecretsDegraded();
+			// 3) 内存副本始终持有真实密码（IMAP/SMTP 连接靠它）。
+			st.config = next;
+			await saveConfig(host.dir, onDisk);
 			if (!st.depsOk && next.imap?.host) installDeps(true); // 刚配置好账号但缺依赖 → 自动补装
 			restartPoller();
 			await refreshAiTools();
@@ -728,8 +760,8 @@ export default {
 							await applyConfig({
 								...structuredClone(DEFAULT_CONFIG),
 								...msg.config,
-								imap: { ...DEFAULT_CONFIG.imap, ...(msg.config?.imap ?? {}) },
-								smtp: { ...DEFAULT_CONFIG.smtp, ...(msg.config?.smtp ?? {}) },
+								imap: { ...DEFAULT_CONFIG.imap, ...msg.config?.imap },
+								smtp: { ...DEFAULT_CONFIG.smtp, ...msg.config?.smtp },
 							});
 							host.sendTo(from, { kind: "result", ok: true, action: "save_config" });
 							host.notify("info", "📬 邮箱配置已保存并生效");

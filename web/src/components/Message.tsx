@@ -1,5 +1,17 @@
 import { memo, useState } from "react";
-import { FiChevronDown, FiBookOpen, FiChevronRight, FiChevronUp, FiEdit3, FiImage, FiX } from "react-icons/fi";
+import {
+	FiArchive,
+	FiBookOpen,
+	FiCheckCircle,
+	FiChevronDown,
+	FiChevronRight,
+	FiChevronUp,
+	FiCopy,
+	FiEdit3,
+	FiImage,
+	FiRefreshCw,
+	FiX,
+} from "react-icons/fi";
 import type {
 	PromptAttachment,
 	ToolStatus,
@@ -76,6 +88,7 @@ function editAttLabel(att: PromptAttachment, t: Translate): string {
 			start: att.lines.start,
 			end: att.lines.end,
 		});
+	if (att.mode === "page") return t("attachPage", { name: att.name ?? att.path });
 	if (att.mode === "reference") return t("refOnly", { path: base });
 	return t("attachContent", { path: base });
 }
@@ -102,6 +115,9 @@ interface MessageProps {
 	questionAttachments?: PromptAttachment[];
 	/** Kill the running bash command from its tool card (agent run continues). */
 	onKillBash?: () => void;
+	/** Manually retry the last failed model call (red error on the LAST message
+	 *  while idle). Wired to the server `retry_last` message. */
+	onRetry?: () => void;
 	/** When set, shows a collapse button (message was expanded from the collapsed view). */
 	onCollapse?: (messageId: string) => void;
 
@@ -116,6 +132,9 @@ interface MessageProps {
 	/** 会话内搜索打开：强制展开思考/工具卡/附件卡/技能卡——折叠内容不在
 	 *  DOM，折叠层搜索索引搜到的词会“展开后看不到”。不改变用户折叠状态。 */
 	searchActive?: boolean;
+	/** 新插入的压缩摘要卡：首次渲染即自动展开一次，之后用户可手动收起
+	 *  （收起后不再自动打开）。 */
+	autoExpand?: boolean;
 }
 
 export const Message = memo(function Message({
@@ -127,6 +146,7 @@ export const Message = memo(function Message({
 	isLast,
 	onEdit,
 	onKillBash,
+	onRetry,
 	onCollapse,
 	questionAttachments,
 
@@ -136,6 +156,7 @@ export const Message = memo(function Message({
 	thinkingWrap,
 	toolsWrap,
 	searchActive,
+	autoExpand,
 }: MessageProps) {
 	const t = useT();
 	// Inline edit-and-re-ask editor (user messages only).
@@ -158,6 +179,12 @@ export const Message = memo(function Message({
 	// toolResult content is rendered inside its toolCall card — never standalone
 	// (otherwise the same output shows twice: formatted card + plain text).
 	if (message.role === "toolResult") return null;
+	// Compaction summaries get a distinct collapsible card (the CLI's
+	// CompactionSummaryMessageComponent counterpart): a long summary dumped as
+	// a plain bubble buries what the compaction actually produced.
+	if (message.role === "compactionSummary") {
+		return <CompactionCard message={message} forceOpen={searchActive} autoExpand={autoExpand} />;
+	}
 	// Attached files are rendered as their own collapsible card, separate from
 	// the user message text.
 	const isFileAttachment = message.role === "custom" && message.customType === "file";
@@ -346,7 +373,13 @@ export const Message = memo(function Message({
 											) : (
 												<span className="msg-editor-file">
 													<span className="msg-editor-file-icon">
-														{kind === "path" ? (att.mode === "reference" ? "🔗" : "📎") : "📄"}
+														{kind === "path"
+															? att.mode === "page"
+																? "🌐"
+																: att.mode === "reference"
+																	? "🔗"
+																	: "📎"
+															: "📄"}
 													</span>
 													<span className="msg-editor-file-name">{att.name ?? att.path?.split("/").pop()}</span>
 												</span>
@@ -413,7 +446,18 @@ export const Message = memo(function Message({
 					</div>
 				) : (
 					<>
-						{message.errorMessage && <div className="msg-error">{message.errorMessage}</div>}
+						{message.errorMessage && (
+							<div className="msg-error">
+								<span className="msg-error-text">{message.errorMessage}</span>
+								{/* 最后一轮报错且已停止：给一个手动重试入口
+									（自动重试次数用完，服务端 retry_last 续跑一轮） */}
+								{isLast && !streaming && onRetry && (
+									<button type="button" className="msg-retry-btn" title={t("retryLastTip")} onClick={onRetry}>
+										<FiRefreshCw /> {t("retryNow")}
+									</button>
+								)}
+							</div>
+						)}
 						{isFileAttachment ? (
 							<AttachmentCard message={message} forceOpen={searchActive} />
 						) : skillBlock ? (
@@ -421,7 +465,7 @@ export const Message = memo(function Message({
 								<SkillCard block={skillBlock} forceOpen={searchActive} />
 								{skillBlock.userMessage && (
 									<div className="msg-text">
-										<Markdown text={skillBlock.userMessage} />
+										<Markdown text={skillBlock.userMessage} hardBreaks />
 									</div>
 								)}
 								{message.content.map((block, i) =>
@@ -438,6 +482,7 @@ export const Message = memo(function Message({
 											toolsWrap={toolsWrap}
 											thinkingWrap={thinkingWrap}
 											searchActive={searchActive}
+											role={message.role}
 										/>
 									),
 								)}
@@ -456,6 +501,7 @@ export const Message = memo(function Message({
 									toolsWrap={toolsWrap}
 									thinkingWrap={thinkingWrap}
 									searchActive={searchActive}
+									role={message.role}
 								/>
 							))
 						)}
@@ -484,12 +530,13 @@ export const Message = memo(function Message({
 function AttachmentCard({ message, forceOpen = false }: { message: UiMessage; forceOpen?: boolean }) {
 	const t = useT();
 	const [open, setOpen] = useState(false);
+	const [copied, setCopied] = useState(false);
 	// 搜索期间 forceOpen 只是“视口展开”：内容进 DOM 让搜索高亮/定位可用
 	const shown = open || forceOpen;
 	const details = (message.details ?? {}) as {
 		name?: string;
 		path?: string;
-		mode?: "inline" | "reference" | "lines" | "image" | "bridged";
+		mode?: "inline" | "reference" | "lines" | "image" | "bridged" | "page";
 		size?: number;
 		lines?: number;
 		startLine?: number;
@@ -500,6 +547,7 @@ function AttachmentCard({ message, forceOpen = false }: { message: UiMessage; fo
 	const isFolder = details.type === "folder";
 	const isReference = details.mode === "reference";
 	const isBridged = details.mode === "bridged";
+	const isPage = details.mode === "page";
 
 	const text = message.content
 		.filter((b): b is { type: "text"; text: string } => b.type === "text")
@@ -508,33 +556,75 @@ function AttachmentCard({ message, forceOpen = false }: { message: UiMessage; fo
 	const clean = stripFileWrapper(text);
 	const image = message.content.find((b) => b.type === "image") as { type: "image"; dataUrl?: string } | undefined;
 	const lines = clean.split("\n").length;
+	const canCopy = !isReference && !isPage && clean.length > 0;
 
 	return (
-		<div className={`attachcard ${isReference ? "reference" : ""}`}>
-			<button type="button" className="attachcard-head" onClick={() => setOpen((v) => (forceOpen ? true : !v))}>
-				<span className="attachcard-icon">{isFolder ? "📁" : "📎"}</span>
-				<span className="attachcard-name">{name}</span>
-				{details.path && <span className="attachcard-path">{details.path}</span>}
+		<div className={`attachcard ${isReference ? "reference" : ""}${isPage ? " page" : ""}`}>
+			<div
+				className="chead attachcard-head"
+				role="button"
+				tabIndex={0}
+				aria-expanded={shown}
+				title={shown ? t("collapseMsg") : t("expandMsg")}
+				onClick={() => setOpen((v) => (forceOpen ? true : !v))}
+				onKeyDown={(e) => {
+					if (e.target !== e.currentTarget) return;
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						setOpen((v) => (forceOpen ? true : !v));
+					}
+				}}
+			>
+				{!isReference && !isPage && (
+					<span className="chead-toggle">{shown ? <FiChevronDown /> : <FiChevronRight />}</span>
+				)}
+				<span className="chead-icon attachcard-icon">{isFolder ? "📁" : isPage ? "🌐" : "📎"}</span>
+				<span className="chead-title attachcard-name">{name}</span>
+				{details.path &&
+					(isPage ? (
+						<a className="attachcard-path attachcard-link" href={details.path} target="_blank" rel="noreferrer">
+							{details.path}
+						</a>
+					) : (
+						<span className="attachcard-path">{details.path}</span>
+					))}
 				<span
-					className={`attachcard-mode ${details.mode === "lines" ? "lines" : isReference ? "ref" : isBridged ? "bridged" : "inline"}`}
+					className={`attachcard-mode ${details.mode === "lines" ? "lines" : isReference ? "ref" : isPage ? "page" : isBridged ? "bridged" : "inline"}`}
 				>
-					{isReference
-						? isFolder
-							? t("folderRefShort")
-							: `${t("refOnlyShort")} · ${formatSize(details.size)}`
-						: isBridged
-							? t("bridgedVision")
-							: image
-								? t("image")
-								: details.mode === "lines"
-									? t("inlineLinesRange", {
-											start: details.startLine ?? 1,
-											end: details.endLine ?? details.lines ?? 1,
-										})
-									: t("inlineLines", { n: details.lines ?? lines })}
+					{isPage
+						? t("attachPageShort")
+						: isReference
+							? isFolder
+								? t("folderRefShort")
+								: `${t("refOnlyShort")} · ${formatSize(details.size)}`
+							: isBridged
+								? t("bridgedVision")
+								: image
+									? t("image")
+									: details.mode === "lines"
+										? t("inlineLinesRange", {
+												start: details.startLine ?? 1,
+												end: details.endLine ?? details.lines ?? 1,
+											})
+										: t("inlineLines", { n: details.lines ?? lines })}
 				</span>
-				{!isReference && (shown ? <FiChevronDown /> : <FiChevronRight />)}
-			</button>
+				{canCopy && (
+					<button
+						type="button"
+						className="chead-copy"
+						title={copied ? t("copied") : t("copyMessage")}
+						aria-label={t("copyMessage")}
+						onClick={(e) => {
+							e.stopPropagation();
+							void navigator.clipboard.writeText(clean);
+							setCopied(true);
+							window.setTimeout(() => setCopied(false), 1200);
+						}}
+					>
+						{copied ? <FiCheckCircle /> : <FiCopy />}
+					</button>
+				)}
+			</div>
 			{!isReference &&
 				shown &&
 				(isBridged ? (
@@ -580,6 +670,94 @@ function stripFileWrapper(text: string): string {
 }
 
 /**
+ * Collapsible card for a compaction summary — the web counterpart of the
+ * CLI's CompactionSummaryMessageComponent. Collapsed shows "compacted from
+ * N tokens" + expand affordance; expanded shows the full summary markdown
+ * plus a hint that only recent messages stay in context.
+ */
+function CompactionCard({
+	message,
+	forceOpen = false,
+	autoExpand = false,
+}: {
+	message: UiMessage;
+	forceOpen?: boolean;
+	autoExpand?: boolean;
+}) {
+	const t = useT();
+	const [expanded, setExpanded] = useState(false);
+	const [copied, setCopied] = useState(false);
+	// 新摘要到达自动展开一次：render 期间同步（仅上升沿开一次是受支持的
+	// React 模式），之后用户手动收起不再打扰。
+	const [prevAuto, setPrevAuto] = useState(autoExpand);
+	if (autoExpand !== prevAuto) {
+		setPrevAuto(autoExpand);
+		if (autoExpand) setExpanded(true);
+	}
+	const shown = expanded || forceOpen;
+	const text = message.content
+		.map((b) => asText(b)?.text ?? "")
+		.filter(Boolean)
+		.join("\n");
+	const tokens = typeof message.tokensBefore === "number" ? message.tokensBefore.toLocaleString() : null;
+	return (
+		<div className="msg msg-compactionSummary" data-role={message.role} data-msg-id={message.id}>
+			<div className="msg-meta">
+				<span className="msg-role">{t("role.compaction")}</span>
+				{message.timestamp && <span className="msg-time">{formatTime(message.timestamp)}</span>}
+			</div>
+			<div className={`compaction-card${expanded ? " expanded" : ""}`}>
+				<div
+					className="chead compaction-head"
+					role="button"
+					tabIndex={0}
+					aria-expanded={shown}
+					title={shown ? t("collapseMsg") : t("expandMsg")}
+					onClick={() => setExpanded((v) => (forceOpen ? true : !v))}
+					onKeyDown={(e) => {
+						if (e.target !== e.currentTarget) return;
+						if (e.key === "Enter" || e.key === " ") {
+							e.preventDefault();
+							setExpanded((v) => (forceOpen ? true : !v));
+						}
+					}}
+				>
+					<span className="chead-toggle">{shown ? <FiChevronDown /> : <FiChevronRight />}</span>
+					<span className="chead-icon compaction-icon">
+						<FiArchive />
+					</span>
+					<span className="chead-title compaction-title">
+						{tokens ? t("compactionFrom", { tokens }) : t("role.compaction")}
+					</span>
+					{text && (
+						<button
+							type="button"
+							className="chead-copy"
+							title={copied ? t("copied") : t("copyMessage")}
+							aria-label={t("copyMessage")}
+							onClick={(e) => {
+								e.stopPropagation();
+								void navigator.clipboard.writeText(text);
+								setCopied(true);
+								window.setTimeout(() => setCopied(false), 1200);
+							}}
+						>
+							{copied ? <FiCheckCircle /> : <FiCopy />}
+						</button>
+					)}
+				</div>
+				{shown && (
+					<div className="compaction-body">
+						<Markdown text={text} />
+						<div className="compaction-hint">{t("compactionKeptHint")}</div>
+					</div>
+				)}
+			</div>
+		</div>
+	);
+}
+
+/**
  * Compact collapsible card for a skill invocation (the SDK's /skill:name
  * expansion) — the web counterpart of the CLI's SkillInvocationMessageComponent.
  * Collapsed shows a book icon + skill name + file path, expanded shows the
@@ -588,25 +766,46 @@ function stripFileWrapper(text: string): string {
 function SkillCard({ block, forceOpen = false }: { block: SkillBlock; forceOpen?: boolean }) {
 	const t = useT();
 	const [expanded, setExpanded] = useState(false);
+	const [copied, setCopied] = useState(false);
 	const shown = expanded || forceOpen;
 	return (
 		<div className={`skillcard${expanded ? " expanded" : ""}`}>
-			<button
-				type="button"
-				className="skillcard-head"
-				onClick={() => setExpanded((v) => (forceOpen ? true : !v))}
+			<div
+				className="chead skillcard-head"
+				role="button"
+				tabIndex={0}
+				aria-expanded={shown}
 				title={block.location}
+				onClick={() => setExpanded((v) => (forceOpen ? true : !v))}
+				onKeyDown={(e) => {
+					if (e.target !== e.currentTarget) return;
+					if (e.key === "Enter" || e.key === " ") {
+						e.preventDefault();
+						setExpanded((v) => (forceOpen ? true : !v));
+					}
+				}}
 			>
-				<span className="skillcard-icon">
+				<span className="chead-toggle">{shown ? <FiChevronDown /> : <FiChevronRight />}</span>
+				<span className="chead-icon skillcard-icon">
 					<FiBookOpen />
 				</span>
-				<span className="skillcard-name">{block.name}</span>
+				<span className="chead-title skillcard-name">{block.name}</span>
 				<span className="skillcard-path">{block.location}</span>
-				<span className="skillcard-action">
-					{shown ? <FiChevronUp /> : <FiChevronDown />}
-					{shown ? t("collapseMsg") : t("expandMsg")}
-				</span>
-			</button>
+				<button
+					type="button"
+					className="chead-copy"
+					title={copied ? t("copied") : t("copyMessage")}
+					aria-label={t("copyMessage")}
+					onClick={(e) => {
+						e.stopPropagation();
+						void navigator.clipboard.writeText(block.content);
+						setCopied(true);
+						window.setTimeout(() => setCopied(false), 1200);
+					}}
+				>
+					{copied ? <FiCheckCircle /> : <FiCopy />}
+				</button>
+			</div>
 			{shown && (
 				<div className="skillcard-body">
 					<Markdown text={block.content} />
@@ -627,6 +826,7 @@ function Block({
 	thinkingWrap,
 	toolsWrap,
 	searchActive,
+	role,
 }: {
 	block: UiContentBlock;
 	toolResults: ReadonlyMap<string, UiMessage>;
@@ -641,15 +841,53 @@ function Block({
 	toolsWrap?: boolean;
 	/** 会话内搜索打开：强制展开思考/工具卡。 */
 	searchActive?: boolean;
+	/** 消息角色 — assistant/user 的纯文本块显示复制按钮。 */
+	role?: UiMessage["role"];
 }) {
 	const t = useT();
+	const [copied, setCopied] = useState(false);
 	const text = asText(block);
 	if (text) {
 		const live = streaming && isLast;
+		// 单行消息：复制键不再用绝对定位压住文字，改成行内 flex 右键——与各 head
+		// 同样的 6px 间距、垂直居中、28px 尺寸。多行仍用右上浮层。
+		const copyable = role === "assistant" || role === "user";
+		const oneLiner = copyable && !text.text.includes("\n") && !text.truncated;
+		const body =
+			role === "user" ? (
+				// 用户自己的气泡：保留输入/粘贴时的单个换行（CommonMark 软换行会把
+				// 多行纯文本折叠成连续文字）。助手消息仍走标准 markdown 段落语义。
+				<Markdown text={text.text} hardBreaks />
+			) : live ? (
+				<StreamMarkdown text={text.text} />
+			) : (
+				<Markdown text={text.text} />
+			);
 		return (
-			<div className="msg-text">
-				{live ? <StreamMarkdown text={text.text} /> : <Markdown text={text.text} />}
-				{text.truncated && <div className="trunc-note">{t("truncated")}</div>}
+			<div className={`msg-text${oneLiner ? " single" : ""}`}>
+				{oneLiner ? (
+					<div className="msg-text-main">{body}</div>
+				) : (
+					<>
+						{body}
+						{text.truncated && <div className="trunc-note">{t("truncated")}</div>}
+					</>
+				)}
+				{copyable ? (
+					<button
+						type="button"
+						className="msg-text-copy"
+						title={copied ? t("copied") : t("copyMessage")}
+						aria-label={t("copyMessage")}
+						onClick={() => {
+							void navigator.clipboard.writeText(text.text);
+							setCopied(true);
+							window.setTimeout(() => setCopied(false), 1200);
+						}}
+					>
+						{copied ? <FiCheckCircle /> : <FiCopy />}
+					</button>
+				) : null}
 			</div>
 		);
 	}

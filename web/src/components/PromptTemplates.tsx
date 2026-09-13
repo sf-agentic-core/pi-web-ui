@@ -1,8 +1,9 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FiEdit2, FiPlus, FiRotateCcw, FiSend, FiTrash2, FiX } from "react-icons/fi";
 import { useT, type Translate } from "../i18n";
-import type { ClientMessage } from "../types";
 import { randomUuid } from "../uuid";
+import { appSend } from "../app-globals";
+import { recordModelUsage } from "../model-usage";
 
 /* ------------------------------------------------------------------ */
 /* 提示词模板（prompt templates）                                        */
@@ -299,12 +300,13 @@ export function useTemplates(): TemplateApi {
 /* ------------------------------------------------------------------ */
 
 export function TemplateProvider({
-	send,
 	children,
+	currentModelId,
 }: {
 	/** 发送消息（来自 useChat；socket 未就绪时返回 false）。 */
-	send: (msg: ClientMessage) => boolean;
 	children: ReactNode;
+	/** 当前模型的 "provider/id" 复合键（模板编辑弹窗直接发送时记一次使用次数）。 */
+	currentModelId: string | null;
 }) {
 	const t = useT();
 	/** 持久化的自定义 / 内置覆盖 / 内置移出标记。 */
@@ -514,7 +516,11 @@ export function TemplateProvider({
 					}}
 					onSend={() => {
 						const text = editing.prompt.trim();
-						if (text && send({ type: "prompt", text, queue: false })) closeAll();
+						// 模板直发同样算一次当前模型的使用（下拉按次数排序）。
+						if (text && appSend({ type: "prompt", text, queue: false })) {
+							if (currentModelId) recordModelUsage(currentModelId);
+							closeAll();
+						}
 					}}
 					onClose={closeAll}
 				/>
@@ -640,33 +646,39 @@ function PickerModal({
 	return (
 		<div className="modal-backdrop" onClick={onClose}>
 			<div className="modal template-picker" onClick={(e) => e.stopPropagation()}>
-				<div className="template-picker-head">
-					<span className="template-picker-title">{t("tpl.pickerTitle")}</span>
-					<button type="button" className="btn template-modal-close" title={t("close")} onClick={onClose}>
-						<FiX />
-					</button>
+				{/* 顶栏（标题 + 关闭）固定，不随卡片列表滚动 */}
+				<div className="template-picker-top">
+					<div className="template-picker-head">
+						<span className="template-picker-title">{t("tpl.pickerTitle")}</span>
+						<button type="button" className="btn template-modal-close" title={t("close")} onClick={onClose}>
+							<FiX />
+						</button>
+					</div>
+					<div className="template-picker-hint">{t("tpl.pickerHint")}</div>
 				</div>
-				<div className="template-picker-hint">{t("tpl.pickerHint")}</div>
-				<div className="template-picker-grid">
-					{templates.map((tpl) => (
-						<TemplateCard
-							key={tpl.id}
-							tpl={tpl}
-							title={t("tpl.clickCard")}
-							onFill={() => onFill(tpl)}
-							onEdit={() => onEditTpl(tpl)}
-							editTitle={t("tpl.editTpl")}
-						/>
-					))}
-					<button type="button" className="empty-template add" onClick={onNew} title={t("tpl.add")}>
-						<span className="empty-template-icon">
-							<FiPlus />
-						</span>
-						<span className="empty-template-main">
-							<span className="empty-template-title">{t("tpl.add")}</span>
-							<span className="empty-template-desc">{t("tpl.addDesc")}</span>
-						</span>
-					</button>
+				{/* 只有卡片列表滚动 */}
+				<div className="template-picker-scroll">
+					<div className="template-picker-grid">
+						{templates.map((tpl) => (
+							<TemplateCard
+								key={tpl.id}
+								tpl={tpl}
+								title={t("tpl.clickCard")}
+								onFill={() => onFill(tpl)}
+								onEdit={() => onEditTpl(tpl)}
+								editTitle={t("tpl.editTpl")}
+							/>
+						))}
+						<button type="button" className="empty-template add" onClick={onNew} title={t("tpl.add")}>
+							<span className="empty-template-icon">
+								<FiPlus />
+							</span>
+							<span className="empty-template-main">
+								<span className="empty-template-title">{t("tpl.add")}</span>
+								<span className="empty-template-desc">{t("tpl.addDesc")}</span>
+							</span>
+						</button>
+					</div>
 				</div>
 				<div className="template-picker-foot">
 					<button type="button" className="empty-templates-reset" onClick={onResetToggle}>
@@ -758,46 +770,49 @@ function EditModal({
 					</button>
 				</div>
 
-				<label className="template-field">
-					<span className="template-field-label">{t("tpl.fieldIcon")}</span>
-					<input
-						className="template-field-input icon"
-						value={editing.icon}
-						maxLength={4}
-						onChange={(e) => onDraft({ ...editing, icon: e.target.value })}
-					/>
-				</label>
+				{/* 字段区可滚动，头（标题）/ 尾（操作）固定 */}
+				<div className="template-modal-body">
+					<label className="template-field">
+						<span className="template-field-label">{t("tpl.fieldIcon")}</span>
+						<input
+							className="template-field-input icon"
+							value={editing.icon}
+							maxLength={4}
+							onChange={(e) => onDraft({ ...editing, icon: e.target.value })}
+						/>
+					</label>
 
-				<label className="template-field">
-					<span className="template-field-label">{t("tpl.fieldTitle")}</span>
-					<input
-						className="template-field-input"
-						value={editing.title}
-						placeholder={t("tpl.fieldTitlePh")}
-						onChange={(e) => onDraft({ ...editing, title: e.target.value })}
-					/>
-				</label>
+					<label className="template-field">
+						<span className="template-field-label">{t("tpl.fieldTitle")}</span>
+						<input
+							className="template-field-input"
+							value={editing.title}
+							placeholder={t("tpl.fieldTitlePh")}
+							onChange={(e) => onDraft({ ...editing, title: e.target.value })}
+						/>
+					</label>
 
-				<label className="template-field">
-					<span className="template-field-label">{t("tpl.fieldDesc")}</span>
-					<input
-						className="template-field-input"
-						value={editing.desc}
-						placeholder={t("tpl.fieldDescPh")}
-						onChange={(e) => onDraft({ ...editing, desc: e.target.value })}
-					/>
-				</label>
+					<label className="template-field">
+						<span className="template-field-label">{t("tpl.fieldDesc")}</span>
+						<input
+							className="template-field-input"
+							value={editing.desc}
+							placeholder={t("tpl.fieldDescPh")}
+							onChange={(e) => onDraft({ ...editing, desc: e.target.value })}
+						/>
+					</label>
 
-				<label className="template-field">
-					<span className="template-field-label">{t("tpl.fieldPrompt")}</span>
-					<textarea
-						ref={taRef}
-						className="template-field-prompt"
-						value={editing.prompt}
-						placeholder={t("tpl.fieldPromptPh")}
-						onChange={(e) => onDraft({ ...editing, prompt: e.target.value })}
-					/>
-				</label>
+					<label className="template-field">
+						<span className="template-field-label">{t("tpl.fieldPrompt")}</span>
+						<textarea
+							ref={taRef}
+							className="template-field-prompt"
+							value={editing.prompt}
+							placeholder={t("tpl.fieldPromptPh")}
+							onChange={(e) => onDraft({ ...editing, prompt: e.target.value })}
+						/>
+					</label>
+				</div>
 
 				{editing.error && <div className="template-error">{editing.error}</div>}
 

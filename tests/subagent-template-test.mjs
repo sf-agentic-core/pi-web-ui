@@ -2,7 +2,8 @@
 //
 // Verifies the wire path for the Settings → Subagent templates panel:
 //   - settings_state carries subagentTemplates (empty initially, global file);
-//   - save_subagent_template upserts (promptMode / whitelists / enabled),
+//   - save_subagent_template upserts (promptMode / whitelists / enabled / thinkingLevel),
+//     and an unknown thinking level normalizes to "" (= follow main conversation);
 //   - disabled templates stay listed with enabled:false (panel keeps them),
 //   - delete_subagent_template removes,
 //   - templates persist to <dataDir>/subagent-templates.json on disk.
@@ -130,6 +131,8 @@ async function main() {
 				systemPrompt: "你是一名严格的代码审查者。",
 				enabledSkills: ["code-review"],
 				enabledExtensions: ["npm:pi-scm"],
+				model: "anthropic/claude-opus-4-5",
+				thinkingLevel: "high",
 				enabled: true,
 			},
 		});
@@ -139,13 +142,19 @@ async function main() {
 		const tpl = s.settings.subagentTemplates.find((t) => t.name === "reviewer");
 		check("保存后列表含新模板", !!tpl);
 		check(
-			"promptMode / 白名单 / 简介 完整",
+			"promptMode / 白名单 / 模型 / 思考强度 / 简介 完整",
 			tpl?.promptMode === "replace" &&
 				tpl?.enabledSkills[0] === "code-review" &&
 				tpl?.enabledExtensions[0] === "npm:pi-scm" &&
+				tpl?.model === "anthropic/claude-opus-4-5" &&
+				tpl?.thinkingLevel === "high" &&
 				tpl?.description === "只读审查子代理",
 		);
 		check("默认 enabled=true", tpl?.enabled === true);
+		check(
+			"内置模板不预设思考强度（空 = 跟随主对话）",
+			s.settings.subagentTemplates.find((t) => t.name === "review")?.thinkingLevel === "",
+		);
 	}
 
 	// 3. 同名覆盖 + 停用（enabled=false 仍留在列表，对 AI 不可见由 unit 测试覆盖）。
@@ -168,6 +177,33 @@ async function main() {
 		const tpl = s.settings.subagentTemplates.find((t) => t.name === "reviewer");
 		check("同名校验：停用后仍保留在面板", !!tpl && tpl?.enabled === false);
 		check("覆盖生效（append + 空白名单）", tpl?.promptMode === "append" && tpl?.enabledSkills.length === 0);
+		check("覆盖时未传模型 → 归一为空串（跟随主对话）", tpl?.model === "");
+		check("覆盖时未传思考强度 → 归一为空串（跟随主对话）", tpl?.thinkingLevel === "");
+	}
+
+	// 3.5 非法思考强度（面板旧数据 / 手改文件）→ 归一为空串，不报错也不污染列表。
+	{
+		c.send({
+			type: "save_subagent_template",
+			template: {
+				name: "badthink",
+				description: "非法强度",
+				promptMode: "append",
+				systemPrompt: "x",
+				enabledSkills: [],
+				enabledExtensions: [],
+				thinkingLevel: "ultra",
+				enabled: true,
+			},
+		});
+		const s = await c.waitFor("settings_state", 8000, (m) =>
+			m.settings.subagentTemplates.some((t) => t.name === "badthink"),
+		);
+		check(
+			"未知档位归一为空串（不报错、不猜，回落跟随主对话）",
+			s.settings.subagentTemplates.find((t) => t.name === "badthink")?.thinkingLevel === "",
+		);
+		c.send({ type: "delete_subagent_template", name: "badthink" });
 	}
 
 	// 4. 磁盘持久化（全局共享文件，含默认模板 + 用户改动）。
@@ -177,7 +213,9 @@ async function main() {
 			"模板持久化到 <dataDir>/subagent-templates.json（默认 + 用户）",
 			Array.isArray(onDisk) &&
 				onDisk.some((t) => t.name === "review") &&
-				onDisk.some((t) => t.name === "reviewer" && t.enabled === false),
+				onDisk.some((t) => t.name === "reviewer" && t.enabled === false) &&
+				// 未传的 thinkingLevel 也会带上归一值写入（老文件读入同样归一）
+				onDisk.find((t) => t.name === "reviewer")?.thinkingLevel === "",
 			JSON.stringify(onDisk?.map?.((t) => t.name)),
 		);
 	}
@@ -201,6 +239,22 @@ async function main() {
 			Array.isArray(onDisk) && !onDisk.some((t) => t.name === "reviewer"),
 			JSON.stringify(onDisk?.map?.((t) => t.name)),
 		);
+	}
+
+	// 6.5 子代理默认模型设置（跟随主对话 ⇄ 显式模型）走通 wire + 持久化。
+	{
+		c.send({ type: "get_settings" });
+		const s0 = await c.waitFor("settings_state", 8000, (m) => m.settings.subagentDefaultModel !== undefined);
+		check("默认模型初始为 null（跟随主对话）", s0.settings.subagentDefaultModel === null);
+		check("subagentModels 字段存在（零模型环境为空数组）", Array.isArray(s0.settings.subagentModels));
+		// 设置一个显式默认模型（wire 只校验透传，不校验存在性）。
+		c.send({ type: "set_settings", subagentDefaultModel: "dashscope/qwen-max" });
+		const s1 = await c.waitFor("settings_state", 8000, (m) => m.settings.subagentDefaultModel === "dashscope/qwen-max");
+		check("set_settings 更新 subagentDefaultModel", s1.settings.subagentDefaultModel === "dashscope/qwen-max");
+		// 再切回跟随主对话（null）。
+		c.send({ type: "set_settings", subagentDefaultModel: null });
+		const s2 = await c.waitFor("settings_state", 8000, (m) => m.settings.subagentDefaultModel === null);
+		check("置空恢复跟随主对话", s2.settings.subagentDefaultModel === null);
 	}
 
 	// 6. 非法保存（空名）→ 列表不变 + 错误 notice。

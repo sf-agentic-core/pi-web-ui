@@ -1,15 +1,14 @@
 import { useCallback, useDeferredValue, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { FiFileText, FiFolder, FiMessageSquare, FiSearch, FiX } from "react-icons/fi";
-import type { ClientMessage, FileSearchResult, MessageAnchor, ProjectSummary, SessionSearchResult } from "../types";
+import type { FileSearchResult, MessageAnchor, ProjectSummary, SessionSearchResult } from "../types";
 import { useT } from "../i18n";
+import { appSend, useAppField } from "../app-globals";
 
 interface GlobalSearchModalProps {
 	/** 常驻挂载：open=false 时隐藏但仍保留查询词与结果，下次打开直接恢复 */
 	open: boolean;
-	send: (msg: ClientMessage) => boolean;
 	/** Recent projects (lazy — requested on open). */
 	projects: ProjectSummary[];
-	cwd: string;
 	fileSearch: {
 		reqId: number;
 		ok: boolean;
@@ -51,9 +50,7 @@ function matches(text: string, q: string): boolean {
  */
 export function GlobalSearchModal({
 	open,
-	send,
 	projects,
-	cwd,
 	fileSearch,
 	sessionSearch,
 	onClose,
@@ -62,6 +59,9 @@ export function GlobalSearchModal({
 	onPreviewFile,
 }: GlobalSearchModalProps) {
 	const t = useT();
+	// 当前工作目录：走全局（web/src/app-globals.ts），不再从 App 传（项目行的
+	// 「当前」标记与 cwd 变化重探测都靠它）。
+	const cwd = useAppField("cwd");
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [query, setQuery] = useState("");
 	const deferredQuery = useDeferredValue(query);
@@ -78,15 +78,15 @@ export function GlobalSearchModal({
 	// 重开要的是新鲜结果；新 reqId 会遮蔽仓库里携带旧 reqId 的结果。
 	useEffect(() => {
 		if (!open) return;
-		send({ type: "list_sessions" });
-		send({ type: "list_projects" });
+		appSend({ type: "list_sessions" });
+		appSend({ type: "list_projects" });
 		const qq = query.trim();
 		if (qq) {
 			const reqId = ++reqIdRef.current;
 			lastReqRef.current = reqId;
 			setSearchPending(true);
-			send({ type: "search_files", reqId, query: qq });
-			send({ type: "search_sessions", reqId, query: qq });
+			appSend({ type: "search_files", reqId, query: qq });
+			appSend({ type: "search_sessions", reqId, query: qq });
 		}
 		requestAnimationFrame(() => inputRef.current?.select());
 		// eslint-disable-next-line react-hooks/exhaustive-deps -- open 触发即可，query 变更走 debounce effect
@@ -109,8 +109,8 @@ export function GlobalSearchModal({
 			const reqId = ++reqIdRef.current;
 			lastReqRef.current = reqId;
 			setSearchPending(true);
-			send({ type: "search_files", reqId, query: q });
-			send({ type: "search_sessions", reqId, query: q });
+			appSend({ type: "search_files", reqId, query: q });
+			appSend({ type: "search_sessions", reqId, query: q });
 		}, 300);
 		return () => {
 			if (debounceRef.current) clearTimeout(debounceRef.current);
@@ -178,21 +178,21 @@ export function GlobalSearchModal({
 			} else if (item.kind === "project") {
 				onSwitchProject(item.path);
 				// 工作区已切换：重发探测，让结果跟随新 cwd（会话全文 + 文件走查）
-				send({ type: "list_sessions" });
-				send({ type: "list_projects" });
+				appSend({ type: "list_sessions" });
+				appSend({ type: "list_projects" });
 				const qq = deferredQuery.trim();
 				if (qq) {
 					const reqId = ++reqIdRef.current;
 					lastReqRef.current = reqId;
 					setSearchPending(true);
-					send({ type: "search_files", reqId, query: qq });
-					send({ type: "search_sessions", reqId, query: qq });
+					appSend({ type: "search_files", reqId, query: qq });
+					appSend({ type: "search_sessions", reqId, query: qq });
 				}
 			} else onPreviewFile(item.path, item.name);
 			// 项目/文件点击不关面板：结果继续保持，可直接点下一条；
 			// 会话点击已在上方收起（为让跳转可见），搜索状态仍保留、重开即恢复。
 		},
-		[onSwitchSession, onSwitchProject, onPreviewFile, send, deferredQuery],
+		[onSwitchSession, onSwitchProject, onPreviewFile, deferredQuery],
 	);
 
 	// Esc closes; ↑/↓ + Enter navigate. (仅面板打开时挂键盘监听——组件常驻，

@@ -7,8 +7,10 @@
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage } from "./protocol.js";
+import type { ServerLang } from "./i18n.js";
 import { countLines, decodeText, looksLikeText, sniffImageMime } from "./text-sniff.js";
 import { saveUpload, uploadsRoot } from "./uploads.js";
+import { isAbsoluteWirePath, wireToAbs } from "./files-service.js";
 import { buildVisionBridgePrompt, findVisionModels, transcribeImages } from "./vision-bridge.js";
 import type { ClientSettings } from "./client-state.js";
 
@@ -37,6 +39,17 @@ export interface AttachmentContext {
 	emit: (msg: ServerMessage) => void;
 	settings: ClientSettings;
 	session: AgentSession;
+	/**
+	 * 服务端语言（issue #91，可选）：当前推 UI 的 notice 已全是 text+textEn
+	 * 双字段、无需 pick；此钩子为未来单字段返回文本预留，避免接口反复 churn。
+	 * 缺省英文。agent-service 接线 getLang: () => this.getLang()。
+	 */
+	getLang?: () => ServerLang;
+}
+
+/** XML attribute escaping — page titles can contain quotes/brackets. */
+function attr(value: string): string {
+	return value.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 export async function buildAttachmentMessages(
@@ -44,7 +57,7 @@ export async function buildAttachmentMessages(
 	attachments:
 		| {
 				path: string;
-				mode?: "inline" | "reference" | "lines";
+				mode?: "inline" | "reference" | "lines" | "page";
 				lines?: { start: number; end: number };
 				/** Raw pasted/dropped/uploaded image (base64) — bypasses workspace path. */
 				imageData?: string;
@@ -171,9 +184,11 @@ export async function buildAttachmentMessages(
 		if (att.fileData || !att.path) continue;
 		const ext = extname(att.path).toLowerCase();
 		if (!IMAGE_EXT.has(ext) || ext === ".svg") continue;
-		const abs = resolve(root, att.path);
-		const rawRel = relative(root, abs);
-		if (rawRel.startsWith("..") || rawRel.includes(`${sep}..`)) continue;
+		// 机器浏览的绝对路径（盘符 / posix "/"）允许在工作区之外。
+		const absPath = isAbsoluteWirePath(att.path);
+		const abs = absPath ? wireToAbs(att.path) : resolve(root, att.path);
+		const rawRel = absPath ? null : relative(root, abs);
+		if (!absPath && (rawRel!.startsWith("..") || rawRel!.includes(`${sep}..`))) continue;
 		let st: { size: number; isFile(): boolean } | undefined;
 		try {
 			st = await fs.stat(abs);
@@ -231,13 +246,17 @@ export async function buildAttachmentMessages(
 			} else {
 				// Batch hash so re-sending identical images (edit & re-ask) reuses
 				// the transcript instead of re-burning tokens on the vision API.
+				// issue #91：转写提示词按客户端 UI 语言选用（英文默认），语言进缓存键。
+				const vLang = ctx.getLang?.() ?? "en";
 				// The active transcription prompt is part of the key: changing
 				// the custom prompt must invalidate cached transcripts made with
 				// the old prompt.
 				const batchHash =
 					bridgedImages.map((b) => `${b.att.name ?? "img"}:${b.raw.slice(0, 48)}`).join("|") +
 					"::" +
-					buildVisionBridgePrompt(ctx.settings.visionBridgePromptMode, ctx.settings.visionBridgePrompt);
+					buildVisionBridgePrompt(ctx.settings.visionBridgePromptMode, ctx.settings.visionBridgePrompt, vLang) +
+					"::" +
+					vLang;
 				let transcript = visionBridgeCache.get(batchHash);
 				if (transcript === undefined) {
 					ctx.emit({
@@ -260,7 +279,9 @@ export async function buildAttachmentMessages(
 								systemPrompt: buildVisionBridgePrompt(
 									ctx.settings.visionBridgePromptMode,
 									ctx.settings.visionBridgePrompt,
+									vLang,
 								),
+								lang: vLang,
 							},
 						);
 						visionBridgeCache.set(batchHash, transcript);
@@ -288,6 +309,38 @@ export async function buildAttachmentMessages(
 	const MAX_LINES_READ_BYTES = 2 * 1024 * 1024;
 
 	for (const [idx, att] of attachments.entries()) {
+		// Granted web page (page-picker extension): `path` is the page origin,
+		// NOT a workspace path — never stat/read it. The model gets the exact
+		// browser_page target plus the fact that this page is already granted,
+		// so it doesn't have to guess an origin out of the prose.
+		if (att.mode === "page") {
+			const url = att.path;
+			let target = url;
+			try {
+				// The extension matches pages by origin — keep the hint in the same
+				// shape as `browser_page`'s `target` (sub-paths are not part of it).
+				target = new URL(url).origin;
+			} catch {
+				// Not a full URL (hand-written string) → pass it through as-is and
+				// let the extension decide.
+			}
+			const pageTitle = att.name ?? url;
+			out.push({
+				message: {
+					customType: "file",
+					content: [
+						{
+							type: "text",
+							text: `\n<browser-page url="${attr(url)}" title="${attr(pageTitle)}">\nThe user attached this web page; it is already granted to the AI through the browser extension. Use the browser_page tool with target="${attr(target)}" to read or act on it — do not fetch it over the network.\n</browser-page>`,
+						},
+					],
+					display: true,
+					details: { name: pageTitle, path: url, mode: "page" },
+				},
+			});
+			continue;
+		}
+
 		// Raw pasted/dropped/uploaded image — no workspace path involved (the
 		// browser downscales client-side; this guard only prevents abuse).
 		if (att.imageData) {
@@ -436,9 +489,10 @@ export async function buildAttachmentMessages(
 			continue;
 		}
 
-		const abs = resolve(root, att.path);
-		const rawRel = relative(root, abs);
-		if (rawRel.startsWith("..") || rawRel.includes(`${sep}..`)) {
+		const absPath = isAbsoluteWirePath(att.path);
+		const abs = absPath ? wireToAbs(att.path) : resolve(root, att.path);
+		const rawRel = absPath ? null : relative(root, abs);
+		if (!absPath && (rawRel!.startsWith("..") || rawRel!.includes(`${sep}..`))) {
 			ctx.emit({
 				type: "notice",
 				level: "warning",
@@ -448,8 +502,9 @@ export async function buildAttachmentMessages(
 			continue;
 		}
 		// Normalize to forward slashes (relative() returns "\\" on Windows);
-		// <file path> and details.path must use the wire format.
-		const rel = rawRel.split(sep).join("/");
+		// <file path> and details.path must use the wire format. 机器浏览的绝对
+		// 路径直接按绝对路径引用（SDK 读文件工具接受绝对路径，与上传文件一致）。
+		const rel = absPath ? abs.split(sep).join("/") : rawRel!.split(sep).join("/");
 		let stat: { size: number; isFile(): boolean; isDirectory(): boolean } | undefined;
 		try {
 			stat = await fs.stat(abs);

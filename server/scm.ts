@@ -8,6 +8,7 @@
  */
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
+import { pick, type ServerLang } from "./i18n.js";
 
 const exec = promisify(execFile);
 
@@ -55,7 +56,8 @@ export interface ScmStatusData {
 }
 
 /** Run one git command; throws Error with a readable message on failure. */
-async function git(cwd: string, args: string[]): Promise<string> {
+async function git(cwd: string, args: string[], lang?: () => ServerLang): Promise<string> {
+	const l = lang?.() ?? "en";
 	try {
 		const { stdout } = await exec("git", ["-c", "core.quotepath=false", ...args], {
 			cwd,
@@ -66,10 +68,18 @@ async function git(cwd: string, args: string[]): Promise<string> {
 		return stdout;
 	} catch (err) {
 		const e = err as { message?: string; stderr?: string; killed?: boolean; code?: string };
-		if (e.code === "ENOENT") throw new Error("未找到 git 命令——请确认已安装 Git 并在 PATH 中");
-		if (e.killed) throw new Error("git 命令超时");
+		if (e.code === "ENOENT")
+			throw new Error(
+				pick(
+					l,
+					"未找到 git 命令——请确认已安装 Git 并在 PATH 中",
+					"git command not found — make sure Git is installed and on PATH",
+					"scm.git.not.found",
+				),
+			);
+		if (e.killed) throw new Error(pick(l, "git 命令超时", "git command timed out", "scm.git.timeout"));
 		const detail = (e.stderr ?? e.message ?? "").trim().split("\n")[0];
-		throw new Error(detail || "git 命令失败");
+		throw new Error(detail || pick(l, "git 命令失败", "git command failed", "scm.git.failed"));
 	}
 }
 
@@ -283,17 +293,17 @@ const HISTORY_ARGS = [
 
 /** Commit graph for the history tab — fetched lazily so the common
  *  "changes" view never pays for it on huge repos. */
-export async function scmHistory(cwd: string): Promise<ScmCommitEntry[]> {
-	return parseCommitHistory(await git(cwd, HISTORY_ARGS));
+export async function scmHistory(cwd: string, lang?: () => ServerLang): Promise<ScmCommitEntry[]> {
+	return parseCommitHistory(await git(cwd, HISTORY_ARGS, lang));
 }
 
 /** Status refresh payload (status + branches + numstat) — parallel. */
-export async function scmStatus(cwd: string): Promise<Omit<ScmStatusData, "history">> {
+export async function scmStatus(cwd: string, lang?: () => ServerLang): Promise<Omit<ScmStatusData, "history">> {
 	const [statusText, branchText, statText, cachedStatText] = await Promise.all([
-		git(cwd, ["status", "--porcelain=v1", "-b", "--find-renames"]),
-		git(cwd, ["for-each-ref", "refs/heads", "refs/remotes", "--format=%(refname)%09%(HEAD)"]),
-		git(cwd, ["diff", "--numstat"]),
-		git(cwd, ["diff", "--cached", "--numstat"]),
+		git(cwd, ["status", "--porcelain=v1", "-b", "--find-renames"], lang),
+		git(cwd, ["for-each-ref", "refs/heads", "refs/remotes", "--format=%(refname)%09%(HEAD)"], lang),
+		git(cwd, ["diff", "--numstat"], lang),
+		git(cwd, ["diff", "--cached", "--numstat"], lang),
 	]);
 	const header = parseStatusHeader(
 		statusText
@@ -325,24 +335,23 @@ export async function scmStatus(cwd: string): Promise<Omit<ScmStatusData, "histo
 }
 
 /** Staged + worktree diffs for one file (empty strings when no diff). */
-export async function scmFileDiff(cwd: string, path: string): Promise<{ staged: string; worktree: string }> {
+export async function scmFileDiff(
+	cwd: string,
+	path: string,
+	lang?: () => ServerLang,
+): Promise<{ staged: string; worktree: string }> {
 	const [staged, worktree] = await Promise.all([
-		git(cwd, ["diff", "--cached", "--no-color", "--no-ext-diff", "--", path]).catch(() => ""),
-		git(cwd, ["diff", "--no-color", "--no-ext-diff", "--", path]).catch(() => ""),
+		git(cwd, ["diff", "--cached", "--no-color", "--no-ext-diff", "--", path], lang).catch(() => ""),
+		git(cwd, ["diff", "--no-color", "--no-ext-diff", "--", path], lang).catch(() => ""),
 	]);
 	return { staged, worktree };
 }
 
 /** Full patch of one commit (`git show`). */
-export async function scmCommitDetail(cwd: string, hash: string): Promise<string> {
-	return git(cwd, [
-		"show",
-		"--no-color",
-		"--no-ext-diff",
-		"--find-renames",
-		"--format=fuller",
-		"--stat",
-		"--patch",
-		hash,
-	]);
+export async function scmCommitDetail(cwd: string, hash: string, lang?: () => ServerLang): Promise<string> {
+	return git(
+		cwd,
+		["show", "--no-color", "--no-ext-diff", "--find-renames", "--format=fuller", "--stat", "--patch", hash],
+		lang,
+	);
 }

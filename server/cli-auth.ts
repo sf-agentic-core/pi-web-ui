@@ -24,7 +24,7 @@
  * 提问经 `question_pending`/`question_answer`（复用 DshQuestionDialog）。
  */
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, isAbsolute, join } from "node:path";
 import type { QuestionAnswer, UiQuestion } from "./protocol.js";
@@ -61,6 +61,22 @@ export interface KeyRecipe {
 	target?: string;
 }
 
+/** 在 PATH 里找一个可执行的二进制（不用 shell，避免注入）。 */
+export function findOnPath(bin: string, pathEnv = process.env.PATH ?? ""): string | undefined {
+	if (!/^[A-Za-z0-9._+-]+$/.test(bin)) return undefined;
+	for (const dir of pathEnv.split(":")) {
+		if (!dir) continue;
+		const p = join(dir, bin);
+		try {
+			const st = statSync(p);
+			if (st.isFile() && (st.mode & 0o111) !== 0) return p;
+		} catch {
+			/* sigue buscando */
+		}
+	}
+	return undefined;
+}
+
 /** `deviceCode`：CLI 自己打印 URL + 验证码。 */
 export interface DeviceCodeRecipe {
 	command: string;
@@ -84,6 +100,8 @@ export interface CliAuthRecipe {
 	manualCode?: ManualCodeRecipe;
 	/** 不需要显式登录（消费其他工具的凭据）。 */
 	note?: string;
+	/** 包名与二进制名不一致时，给出 mise 的包名（用于「装一下」的提示）。 */
+	install?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -225,7 +243,7 @@ interface RunResult {
  * 运行命令，可选地把一段输入写进 stdin，并可选地在输出里监听 pattern
  * （命中一次即回调，用于「拿到 URL/验证码就立刻推给前端」）。
  */
-function run(
+export function runCommand(
 	command: string,
 	opts: {
 		cwd: string;
@@ -330,6 +348,23 @@ export async function runCliAuth(tool: string, recipe: CliAuthRecipe, deps: CliA
 	const cwd = deps.cwd ?? home;
 	const { emit } = deps;
 
+	// 二进制守卫：工具没装就直说怎么装，而不是让命令以看不懂的方式失败。
+	// （第 2 阶段：/tool install 用 mise 装到持久化的 ~/.local）
+	const needsBinary = Boolean(recipe.key?.command || recipe.deviceCode || recipe.manualCode);
+	if (!findOnPath(tool)) {
+		const pkg = recipe.install ?? tool;
+		emit({
+			type: "notice",
+			level: "warning",
+			text: `\`${tool}\` 没有安装。先安装：\`/tool install ${pkg}\``,
+			textEn: `\`${tool}\` is not installed. Install it first: \`/tool install ${pkg}\``,
+		});
+		// 需要跑命令 → 停在这里，别让命令以看不懂的方式失败。
+		if (needsBinary) return false;
+		// note-only：继续往下走，好把说明也发给用户（警告 + 说明，两条都有用）。
+		// 而「既没机制也没说明」的坏菜谱也会继续走，让下面的配置错误暴露出来。
+	}
+
 	// --- note：不需要显式登录 ---------------------------------------------
 	if (recipe.note && !recipe.key && !recipe.deviceCode && !recipe.manualCode) {
 		emit({
@@ -366,7 +401,7 @@ export async function runCliAuth(tool: string, recipe: CliAuthRecipe, deps: CliA
 			writeFileSync(target, `${answer}\n`, { mode: 0o600 });
 		} else if (recipe.key.command) {
 			emit({ type: "auth_flow", state: "waiting", message: `${tool}…` });
-			const { done } = run(recipe.key.command, { cwd, stdin: answer });
+			const { done } = runCommand(recipe.key.command, { cwd, stdin: answer });
 			report(tool, recipe, await done, deps);
 			return true;
 		} else {
@@ -378,7 +413,7 @@ export async function runCliAuth(tool: string, recipe: CliAuthRecipe, deps: CliA
 
 	// --- deviceCode：CLI 自己打印 URL + 验证码 ----------------------------
 	if (recipe.deviceCode) {
-		const { done } = run(recipe.deviceCode.command, {
+		const { done } = runCommand(recipe.deviceCode.command, {
 			cwd,
 			watch: {
 				re: recipe.deviceCode.codePattern ?? DEFAULT_CODE,
@@ -400,7 +435,7 @@ export async function runCliAuth(tool: string, recipe: CliAuthRecipe, deps: CliA
 	// --- manualCode：CLI 打印 URL，用户把码贴回来 --------------------------
 	if (recipe.manualCode) {
 		let url: string | undefined;
-		const proc = run(recipe.manualCode.command, {
+		const proc = runCommand(recipe.manualCode.command, {
 			cwd,
 			keepStdin: true,
 			watch: {

@@ -2,6 +2,18 @@
 # pi-web-ui — multi-stage build. Builds the server (tsc) + frontend (vite),
 # then runs a slim runtime image. `docker compose up -d` = one-command deploy
 # with auto-restart on boot (`restart: unless-stopped`).
+# ------------------------------------------------------------------------------
+# Base compartida del agente
+# ------------------------------------------------------------------------------
+# ⚠️ El ARG va ANTES del primer FROM a propósito: un ARG declarado dentro de una
+# etapa NO es visible para el `FROM` de una etapa posterior. Declarado aquí, es
+# global y sí se puede usar en el `FROM` del runtime.
+#
+# El valor por defecto permite `docker build .` en local. En CI lo sobreescribe
+# el build-arg del workflow (que es el pin real).
+# ------------------------------------------------------------------------------
+ARG BASE_IMAGE=rg.fr-par.scw.cloud/sf-agentic-core/agent-base:5a5c5088b470bf6ab551e431c86dc597fca36328
+
 FROM node:22-bookworm-slim AS build
 WORKDIR /app
 RUN apt-get update \
@@ -12,62 +24,22 @@ RUN npm ci
 COPY . .
 RUN npm run build
 
-FROM node:22-bookworm-slim
+# --- Etapa de runtime: DERIVA de la base compartida del agente -----------
+#
+# Antes esta etapa duplicaba ~55 líneas de toolchain (apt, gh, gcloud,
+# azure-cli, kubectl, terraform, gh/helm/uv...) que YA viven en agent-base.
+# Esa duplicación es justo la deriva que se eliminó al separar la base:
+# la imagen del bot tenía MCPs y Chromium, y esta no.
+#
+# Ahora se hereda todo, así que añadir un MCP o actualizar el toolchain se
+# hace en UN sitio. La etapa `build` de arriba sigue usando node sin tocar,
+# porque ahí solo se compila TypeScript/Vite.
+FROM ${BASE_IMAGE}
+
+# La base deja WORKDIR en /home/tachikoma; aquí trabajamos en /app, que es
+# donde el stage `build` deja los artefactos y donde apunta el volumen.
 WORKDIR /app
 ENV NODE_ENV=production
-# node-pty falls back to node-gyp when no prebuilt binary matches — keep the
-# toolchain around so `npm ci` works on any platform.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip python3-venv make g++ curl wget git openssh-client ca-certificates jq unzip gnupg apt-transport-https lsb-release \
-    && rm -rf /var/lib/apt/lists/*
-
-# --- Platform CLI toolchain (mirrors the Discord tachikoma image) ---
-# git/terraform/pre-commit/gcloud/kubectl/gh/helm/uv etc. so the agent can work
-# across domains (MMS, GCP, K8s...) exactly like on Discord.
-RUN mkdir -p /etc/apt/keyrings && \
-    curl -fsSL https://cli.github.com/packages/githubcli-archive-keyring.gpg | dd of=/usr/share/keyrings/githubcli-archive-keyring.gpg && \
-    chmod go+r /usr/share/keyrings/githubcli-archive-keyring.gpg && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/usr/share/keyrings/githubcli-archive-keyring.gpg] https://cli.github.com/packages stable main" > /etc/apt/sources.list.d/github-cli.list && \
-    curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg | gpg --dearmor -o /usr/share/keyrings/cloud.google.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/cloud.google.gpg] https://packages.cloud.google.com/apt cloud-sdk main" >> /etc/apt/sources.list.d/google-cloud-sdk.list && \
-    curl -fsSL https://pkgs.k8s.io/core:/stable:/v1.29/deb/Release.key | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg && \
-    echo "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v1.29/deb/ /" > /etc/apt/sources.list.d/kubernetes.list && \
-    curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg && \
-    echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(. /etc/os-release && echo $VERSION_CODENAME) main" > /etc/apt/sources.list.d/hashicorp.list && \
-    apt-get update && \
-    apt-get install -y gh google-cloud-cli kubectl terraform && \
-    rm -rf /var/lib/apt/lists/* && \
-    curl -LsSf https://astral.sh/uv/install.sh | sh && \
-    mv /root/.local/bin/uv /usr/local/bin/uv && \
-    mv /root/.local/bin/uvx /usr/local/bin/uvx && \
-    pip3 install --no-cache-dir --break-system-packages pre-commit checkov
-
-# --- k9s (Kubernetes TUI) — pinned for reproducibility; same GitHub-release
-# pattern as argocd above. Runs fine over the browser terminal's real PTY
-# (TERM=xterm-256color) and picks up the mounted ~/.kube/config by default.
-RUN ARCH=$(dpkg --print-architecture) && \
-    curl -sSL -o /tmp/k9s.tar.gz \
-      https://github.com/derailed/k9s/releases/download/v0.51.0/k9s_Linux_${ARCH}.tar.gz && \
-    tar -xz -C /usr/local/bin -f /tmp/k9s.tar.gz k9s && \
-    chmod +x /usr/local/bin/k9s && \
-    rm /tmp/k9s.tar.gz
-
-# --- vim (in its OWN layer, separate from the heavy apt line above) ---
-# Keeping editor additions out of the big toolchain RUN preserves Docker layer
-# cache: editing editor packages never rebuilds the gh/gcloud/kubectl/terraform
-# chain (~10 min on ARM64).
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends vim && \
-    rm -rf /var/lib/apt/lists/*
-
-# --- gke-gcloud-auth-plugin (kubectl/k9s exec credential plugin for GKE) ---
-# kubectl GKE contexts authenticate via the exec plugin; without it k9s/kubectl
-# fail with "executable gke-gcloud-auth-plugin not found". The cloud-sdk apt
-# repo is already configured above, so this is a single small package. Own
-# layer so toolchain edits keep the Docker layer cache.
-RUN apt-get update && \
-    apt-get install -y --no-install-recommends google-cloud-cli-gke-gcloud-auth-plugin && \
-    rm -rf /var/lib/apt/lists/*
 
 # DSH engine (PI_WEB_ENGINE=dsh) needs the full @deepseek-ai/dsh runtime tree
 # (nested ~196 packages) as a subprocess — global install is the canonical way.
@@ -81,5 +53,6 @@ ENV PI_WEB_PORT=8787
 EXPOSE 8787
 # Session data (per-client chat history) lives here — mount a volume.
 VOLUME ["/app/.pi-web"]
-USER node
+# La base renombra el usuario `node` a `tachikoma` (mismo uid 1000).
+USER tachikoma
 CMD ["node", "dist/server/index.js"]

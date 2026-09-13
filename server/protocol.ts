@@ -744,6 +744,9 @@ export interface UiQuestion {
 	header?: string;
 	options?: UiQuestionOption[];
 	multiSelect?: boolean;
+	/** 敏感输入（API key / OAuth 设备码等）：前端以密码框渲染，不显示明文。
+	 *  服务端在 /login 的 prompt 回调里对 `type: "secret"` 的提问置位。 */
+	secret?: boolean;
 }
 
 /** 一道题的用户回答（question_answer 回传）。selected 为选中的选项 label

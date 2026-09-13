@@ -15,6 +15,7 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage, SlashCommandInfo, UiQuestionOption } from "./protocol.js";
 import { loadRecipes, runCliAuth as runCliAuthRecipe } from "./cli-auth.js";
+import { installTool, listTools } from "./tool-install.js";
 import type { PluginCommandDef } from "./plugins.js";
 
 /** 登录认证方式（与 SDK 的 AuthType 一致）。 */
@@ -150,6 +151,13 @@ export const NATIVE_COMMANDS: {
 		descriptionEn: "Sign out",
 		argumentHint: "[provider]",
 		argumentHintEn: "[provider]",
+	},
+	{
+		name: "tool",
+		description: "安装命令行工具（持久化）",
+		descriptionEn: "Install CLI tools (persisted)",
+		argumentHint: "install <nombre>[@version] | list",
+		argumentHintEn: "install <name>[@version] | list",
 	},
 	{
 		name: "cli_auth",
@@ -448,6 +456,12 @@ export class SlashCommandsService {
 				const kind = parts.find((x) => x === "oauth" || x === "api_key") as AuthKind | undefined;
 				const provider = parts.find((x) => x !== "oauth" && x !== "api_key");
 				void this.runLogin(provider, kind);
+				return true;
+			}
+			case "tool": {
+				// RFC 002 第 2 阶段：装到持久化的 ~/.local（mise）。
+				const parts = args.trim().split(/\s+/).filter(Boolean);
+				void this.runToolCommand(parts[0], parts.slice(1));
 				return true;
 			}
 			case "cli_auth": {
@@ -812,6 +826,57 @@ export class SlashCommandsService {
 				level: "error",
 				text: `CLI 登录失败：${message}`,
 				textEn: `CLI sign-in failed: ${message}`,
+			});
+		}
+	}
+
+	/** 安装工具（RFC 002 第 2 阶段）：`/tool install <nombre>[@version]`、`/tool list`。
+	 *
+	 *  装到 `~/.local`（PVC），`~/.local/bin` 已在 PATH 最前 → 装完立刻可用，
+	 *  而且重启 pod 后仍在。底层用 mise（版本管理器，不是清单）。 */
+	private async runToolCommand(sub?: string, rest: string[] = []): Promise<void> {
+		try {
+			const home = process.env.HOME || "/home/tachikoma";
+			const deps = { emit: (m: unknown) => this.host.emit(m as ServerMessage), home };
+			if (sub === "list") {
+				const tools = await listTools(deps);
+				this.host.emit({
+					type: "notice",
+					level: "info",
+					text: tools.length ? `已安装：${tools.join(", ")}` : "还没有安装任何工具",
+					textEn: tools.length ? `Installed: ${tools.join(", ")}` : "No tools installed yet",
+				});
+				return;
+			}
+			// `/tool <nombre>` es azúcar para `/tool install <nombre>`.
+			let spec = sub === "install" ? rest[0] : sub;
+			if (!spec) {
+				const picked = await this.askOne({
+					header: "Tool install",
+					question: "要安装哪个工具？/ Which tool?（如 tofu、awscli、gh@latest）",
+					detail: "装到 ~/.local（持久化）/ installed into ~/.local (persisted)",
+				});
+				if (picked === undefined || picked === "") {
+					this.emitCancelled("login");
+					return;
+				}
+				spec = picked;
+			}
+			this.host.emit({
+				type: "notice",
+				level: "info",
+				text: `正在安装 ${spec}…`,
+				textEn: `Installing ${spec}…`,
+			});
+			await installTool(spec, deps);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.host.emit({ type: "auth_flow", state: "error", message });
+			this.host.emit({
+				type: "notice",
+				level: "error",
+				text: `安装失败：${message}`,
+				textEn: `Install failed: ${message}`,
 			});
 		}
 	}

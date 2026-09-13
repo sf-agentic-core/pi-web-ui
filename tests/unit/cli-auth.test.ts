@@ -99,9 +99,10 @@ describe("loadRecipes", () => {
 describe("机制：note", () => {
 	it("只提示，不跑命令", async () => {
 		const h = harness(null);
+		// tofu no está instalado en el runner → primero el aviso del guard, luego la nota.
 		const done = await runCliAuth("tofu", { note: "usa credenciales de cloud" }, h.deps);
 		expect(done).toBe(true);
-		expect(h.notices[0].textEn).toContain("usa credenciales de cloud");
+		expect(h.notices.some((n) => n.textEn.includes("usa credenciales de cloud"))).toBe(true);
 		expect(h.deps.cwd).toBe(h.home);
 	});
 });
@@ -111,7 +112,7 @@ describe("机制：key", () => {
 		const h = harness(ok("sk-test-123"));
 		const out = join(h.home, "out.txt");
 		process.env.CLI_AUTH_TEST_OUT = out;
-		await runCliAuth("t", { key: { prompt: "Token", command: 'cat > "$CLI_AUTH_TEST_OUT"' } }, h.deps);
+		await runCliAuth("sh", { key: { prompt: "Token", command: 'cat > "$CLI_AUTH_TEST_OUT"' } }, h.deps);
 		expect(h.asks[0][0].secret).toBe(true);
 		expect(readFileSync(out, "utf8").trim()).toBe("sk-test-123");
 		delete process.env.CLI_AUTH_TEST_OUT;
@@ -119,7 +120,7 @@ describe("机制：key", () => {
 
 	it("key.target → 直接落文件，且权限 0600", async () => {
 		const h = harness(ok("tok"));
-		await runCliAuth("t", { key: { prompt: "T", target: ".config/t/creds" } }, h.deps);
+		await runCliAuth("sh", { key: { prompt: "T", target: ".config/t/creds" } }, h.deps);
 		const f = join(h.home, ".config", "t", "creds");
 		expect(existsSync(f)).toBe(true);
 		expect(readFileSync(f, "utf8").trim()).toBe("tok");
@@ -128,7 +129,7 @@ describe("机制：key", () => {
 
 	it("空提交 = 跳过（不是失败）", async () => {
 		const h = harness(ok(""));
-		const done = await runCliAuth("t", { key: { prompt: "T", command: "false" } }, h.deps);
+		const done = await runCliAuth("sh", { key: { prompt: "T", command: "false" } }, h.deps);
 		expect(done).toBe(true);
 		expect(h.notices.some((n) => n.textEn.includes("Skipped"))).toBe(true);
 		expect(h.flows).toEqual([]);
@@ -136,7 +137,7 @@ describe("机制：key", () => {
 
 	it("用户取消 → false", async () => {
 		const h = harness(null);
-		expect(await runCliAuth("t", { key: { prompt: "T", command: "true" } }, h.deps)).toBe(false);
+		expect(await runCliAuth("sh", { key: { prompt: "T", command: "true" } }, h.deps)).toBe(false);
 	});
 });
 
@@ -151,7 +152,7 @@ describe("机制：deviceCode", () => {
 				codePattern: "\\b[A-Z]{4}-[0-9]{4}\\b",
 			},
 		};
-		await runCliAuth("t", recipe, h.deps);
+		await runCliAuth("sh", recipe, h.deps);
 		const dc = h.flows.find((f) => f.state === "device_code");
 		expect(dc?.userCode).toBe("ABCD-1234");
 		expect(dc?.verificationUri).toBe("https://example.com/device");
@@ -160,7 +161,7 @@ describe("机制：deviceCode", () => {
 
 	it("命令失败 → error + 回显原因（不是静默成功）", async () => {
 		const h = harness(null);
-		await runCliAuth("t", { deviceCode: { command: "echo boom; exit 3" } }, h.deps);
+		await runCliAuth("sh", { deviceCode: { command: "echo boom; exit 3" } }, h.deps);
 		expect(h.flows.at(-1)?.state).toBe("error");
 		expect(h.flows.at(-1)?.message).toContain("boom");
 		expect(h.notices.at(-1)?.level).toBe("error");
@@ -168,7 +169,7 @@ describe("机制：deviceCode", () => {
 
 	it("命令成功但凭据不存在 → warning（不能说成功）", async () => {
 		const h = harness(null);
-		await runCliAuth("t", { creds: ["~/.config/definitely-not-there"], deviceCode: { command: "true" } }, h.deps);
+		await runCliAuth("sh", { creds: ["~/.config/definitely-not-there"], deviceCode: { command: "true" } }, h.deps);
 		expect(h.flows.at(-1)?.state).toBe("done");
 		expect(h.notices.at(-1)?.level).toBe("warning");
 		expect(h.notices.at(-1)?.textEn).toContain("verify the sign-in");
@@ -187,7 +188,7 @@ describe("机制：manualCode", () => {
 				urlPattern: "https://[^\\s]+",
 			},
 		};
-		const done = await runCliAuth("t", recipe, h.deps);
+		const done = await runCliAuth("sh", recipe, h.deps);
 		expect(done).toBe(true);
 		expect(h.flows.find((f) => f.state === "device_code")?.verificationUri).toBe(
 			"https://accounts.example.com/o/oauth?x=1",
@@ -198,7 +199,7 @@ describe("机制：manualCode", () => {
 
 	it("用户取消 → 杀掉进程并返回 false", async () => {
 		const h = harness(null);
-		const done = await runCliAuth("t", { manualCode: { command: "sleep 30", urlPattern: "https://x" } }, h.deps);
+		const done = await runCliAuth("sh", { manualCode: { command: "sleep 30", urlPattern: "https://x" } }, h.deps);
 		expect(done).toBe(false);
 	});
 });
@@ -206,6 +207,6 @@ describe("机制：manualCode", () => {
 describe("菜谱错误", () => {
 	it("没有任何可用机制 → 抛错（配置错误不该静默）", async () => {
 		const h = harness(null);
-		await expect(runCliAuth("t", { label: "vacío" }, h.deps)).rejects.toThrow(/no available sign-in/);
+		await expect(runCliAuth("sh", { label: "vacío" }, h.deps)).rejects.toThrow(/no available sign-in/);
 	});
 });

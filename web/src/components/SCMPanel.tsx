@@ -325,7 +325,7 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal }: ScmPane
 			if (!chat.ready || chat.status !== "open") return false;
 			const id = ++seqRef.current;
 
-			if (!send({ ...msg, repoPath: selectedRepo || undefined, reqId: id } as ClientMessage)) {
+			if (!appSend({ ...msg, repoPath: selectedRepo || undefined, reqId: id } as ClientMessage)) {
 				seqRef.current -= 1;
 				return false;
 			}
@@ -333,7 +333,7 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal }: ScmPane
 			return true;
 		},
 
-		[chat.ready, chat.status, send, selectedRepo],
+		[chat.ready, chat.status, appSend, selectedRepo],
 	);
 
 	/* ------------------------------------------------------------------ */
@@ -441,7 +441,7 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal }: ScmPane
 			onSwitchToTerminal();
 		},
 
-		[chat.ready, chat.state?.cwd, chat.terminals, onSwitchToTerminal, send, terminal, selectedRepo],
+		[chat.ready, chat.state?.cwd, chat.terminals, onSwitchToTerminal, appSend, terminal, selectedRepo],
 	);
 
 	const handleCommit = useCallback(() => {
@@ -630,7 +630,7 @@ export function ScmPanel({ chat, terminal, active, onSwitchToTerminal }: ScmPane
 								setTimeout(() => {
 									if (!chat.ready || chat.status !== "open") return;
 									const id = ++seqRef.current;
-									if (send({ type: "scm_status", repoPath: val || undefined, reqId: id } as ClientMessage)) {
+									if (appSend({ type: "scm_status", repoPath: val || undefined, reqId: id } as ClientMessage)) {
 										statusReqRef.current = id;
 										setBusy(true);
 									} else {

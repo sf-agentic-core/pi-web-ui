@@ -463,8 +463,22 @@ export class SlashCommandsService {
 		try {
 			const session = this.host.getSession();
 			await session.modelRuntime.login(providerId, "oauth", {
-				prompt: async () => {
-					throw new Error("Interactive auth prompt is not supported in pi-web-ui yet");
+				// The github-copilot flow asks once for a GitHub Enterprise domain;
+				// a blank answer means github.com (the common case). Relaying the
+				// prompt to the UI needs a request/response round-trip that is not
+				// wired yet, so answer blank for that question and surface it.
+				prompt: async (p: { type?: string; message?: string }) => {
+					const message = p?.message ?? "";
+					if (/enterprise/i.test(message)) {
+						this.host.emit({
+							type: "notice",
+							level: "info",
+							text: "使用 github.com（GitHub Enterprise 暂不支持）",
+							textEn: "Using github.com (GitHub Enterprise is not supported yet)",
+						});
+						return "";
+					}
+					throw new Error(`Unsupported auth prompt: ${message}`);
 				},
 				notify: (event) => {
 					const e = event as {

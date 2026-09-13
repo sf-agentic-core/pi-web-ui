@@ -1,9 +1,17 @@
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { findOnPath, type CliAuthEmit, runCliAuth } from "../../server/cli-auth.js";
-import { cleanMiseError, installTool, listTools, resolvePackageName, validSpec } from "../../server/tool-install.js";
+import {
+	bootstrapTools,
+	cleanMiseError,
+	installTool,
+	listTools,
+	readManifest,
+	resolvePackageName,
+	validSpec,
+} from "../../server/tool-install.js";
 import type { UiQuestion } from "../../server/protocol.js";
 
 /**
@@ -214,5 +222,34 @@ describe("cleanMiseError (no perder la causa entre el ruido de mise)", () => {
 		// el ruido no debe aparecer
 		expect(clean).not.toContain("installing 1 tool");
 		expect(clean).not.toContain("mise by @jdx");
+	});
+});
+
+describe("readManifest / bootstrapTools (RFC 002 fase 3)", () => {
+	it("readManifest filtra comentarios y líneas vacías", () => {
+		const home = tmp();
+		const f = join(home, "toolset.txt");
+		writeFileSync(f, "# cloud toolchain\ngcloud@latest\n\n  kubectl@1.29.0  \n# fin\n");
+		expect(readManifest(f)).toEqual(["gcloud@latest", "kubectl@1.29.0"]);
+		expect(readManifest(join(home, "no-existe"))).toEqual([]);
+	});
+
+	it("bootstrapTools instala cada spec del manifiesto (y avisa al final)", async () => {
+		const h = harness();
+		const mise = fakeMise(h.home);
+		const ok = await bootstrapTools({ ...h.deps, mise }, ["supertool@1.0.0", "othertool@2.0.0"]);
+		expect(ok).toEqual(["supertool@1.0.0", "othertool@2.0.0"]);
+		expect(h.notices.some((n) => n.textEn.includes("Toolset ready"))).toBe(true);
+		const log = readFileSync(join(h.home, "mise.log"), "utf8");
+		expect(log).toContain("supertool@1.0.0");
+		expect(log).toContain("othertool@2.0.0");
+	});
+
+	it("bootstrapTools salta entradas inválidas del manifiesto", async () => {
+		const h = harness();
+		const mise = fakeMise(h.home);
+		const ok = await bootstrapTools({ ...h.deps, mise }, ["supertool", "malo; rm -rf /"]);
+		expect(ok).toEqual(["supertool"]);
+		expect(h.notices.some((n) => n.textEn.includes("Invalid entry"))).toBe(true);
 	});
 });

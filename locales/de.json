@@ -612,6 +612,7 @@
     "scmTooManyFailures": "Git-Abfragen schlagen wiederholt fehl, klicken Sie auf Aktualisieren, um es erneut zu versuchen",
     "scmRunsInTerminal": "Commit / Branchwechsel / Push / Pull laufen im Terminal",
     "scmViewTerminal": "Zum Terminal",
+    "scmRepo": "Repository",
     "editProvider": "Provider bearbeiten",
     "builtinProviders": "Integrierte Provider",
     "hintKeyOnly": "Nur einen API-Schlüssel eingeben",

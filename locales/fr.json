@@ -612,6 +612,7 @@
     "scmTooManyFailures": "Échecs Git répétés, cliquez sur actualiser pour réessayer",
     "scmRunsInTerminal": "Validations / changements de branche / push / pull exécutés dans le terminal",
     "scmViewTerminal": "Aller au terminal",
+    "scmRepo": "Dépôt",
     "editProvider": "Modifier le fournisseur",
     "builtinProviders": "Fournisseurs intégrés",
     "hintKeyOnly": "Il suffit de saisir la clé API",

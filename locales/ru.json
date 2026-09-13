@@ -612,6 +612,7 @@
     "scmTooManyFailures": "Запросы Git постоянно завершаются ошибкой — нажмите «Обновить» чтобы повторить",
     "scmRunsInTerminal": "Commit / переключение ветки / push / pull выполняются в терминале",
     "scmViewTerminal": "Открыть терминал",
+    "scmRepo": "Репозиторий",
     "editProvider": "Изменить провайдера",
     "builtinProviders": "Встроенные провайдеры",
     "hintKeyOnly": "Достаточно ввести API-ключ",

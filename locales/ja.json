@@ -612,6 +612,7 @@
     "scmTooManyFailures": "Git の取得が連続して失敗しました。更新をクリックして再試行してください",
     "scmRunsInTerminal": "commit・ブランチ切り替え・push・pull はターミナルで実行します",
     "scmViewTerminal": "ターミナルへ",
+    "scmRepo": "現在のリポジトリ",
     "editProvider": "プロバイダーを編集",
     "builtinProviders": "組み込みプロバイダー",
     "hintKeyOnly": "API キーの入力だけで構いません",

@@ -612,6 +612,7 @@
     "scmTooManyFailures": "La consulta de Git ha fallado repetidamente; pulse actualizar para reintentar",
     "scmRunsInTerminal": "El commit / cambio de rama / push / pull se ejecutan en la terminal",
     "scmViewTerminal": "Ir a la terminal",
+    "scmRepo": "Repositorio",
     "editProvider": "Editar proveedor",
     "builtinProviders": "Proveedores integrados",
     "hintKeyOnly": "Solo debe introducir la clave de API",

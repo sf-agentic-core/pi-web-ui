@@ -612,6 +612,7 @@
     "scmTooManyFailures": "Falhas seguidas na consulta ao Git; clique em atualizar para tentar de novo",
     "scmRunsInTerminal": "Commit / troca de branch / push / pull são executados no terminal",
     "scmViewTerminal": "Ir para o terminal",
+    "scmRepo": "Repositório",
     "editProvider": "Editar provedor",
     "builtinProviders": "Provedores integrados",
     "hintKeyOnly": "Basta colar a chave da API",

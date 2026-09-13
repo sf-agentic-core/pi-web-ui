@@ -612,6 +612,7 @@
     "scmTooManyFailures": "Git 조회가 계속 실패해요. 새로 고침을 눌러 다시 시도해 주세요",
     "scmRunsInTerminal": "commit / 브랜치 전환 / push / pull은 터미널에서 실행해요",
     "scmViewTerminal": "터미널로 가기",
+    "scmRepo": "현재 리포지토리",
     "editProvider": "공급자 편집",
     "builtinProviders": "내장 공급자",
     "hintKeyOnly": "API 키만 입력하면 돼요",

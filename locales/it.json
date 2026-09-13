@@ -612,6 +612,7 @@
     "scmTooManyFailures": "Le interrogazioni git continuano a fallire — clicca aggiorna per riprovare",
     "scmRunsInTerminal": "Commit / cambio ramo / push / pull girano nel terminale",
     "scmViewTerminal": "Apri terminale",
+    "scmRepo": "Repository",
     "editProvider": "Modifica provider",
     "builtinProviders": "Provider integrati",
     "hintKeyOnly": "Inserisci solo una chiave API",

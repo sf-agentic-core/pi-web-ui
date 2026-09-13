@@ -14,6 +14,7 @@
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage, SlashCommandInfo, UiQuestionOption } from "./protocol.js";
+import { loadRecipes, runCliAuth as runCliAuthRecipe } from "./cli-auth.js";
 import type { PluginCommandDef } from "./plugins.js";
 
 /** 登录认证方式（与 SDK 的 AuthType 一致）。 */
@@ -149,6 +150,13 @@ export const NATIVE_COMMANDS: {
 		descriptionEn: "Sign out",
 		argumentHint: "[provider]",
 		argumentHintEn: "[provider]",
+	},
+	{
+		name: "cli_auth",
+		description: "登录命令行工具（gcloud、gh、az…）",
+		descriptionEn: "Sign in a CLI tool (gcloud, gh, az…)",
+		argumentHint: "[工具]",
+		argumentHintEn: "[tool]",
 	},
 	{ name: "help", description: "显示全部命令", descriptionEn: "Show all commands" },
 	{ name: "copy", description: "复制上一条助手回复", descriptionEn: "Copy last assistant reply" },
@@ -442,6 +450,11 @@ export class SlashCommandsService {
 				void this.runLogin(provider, kind);
 				return true;
 			}
+			case "cli_auth": {
+				// RFC 002 第 1 阶段：把 CLI 工具的登录搬进 UI（复用 /login 的机制）。
+				void this.runCliAuth(args.trim().split(/\s+/).filter(Boolean)[0]);
+				return true;
+			}
 			case "logout": {
 				// /logout [provider] —— 无参数时列出已保存的凭据让用户选。
 				void this.runLogout(args.trim().split(/\s+/).filter(Boolean)[0]);
@@ -730,5 +743,85 @@ export class SlashCommandsService {
 				textEn: `Sign-out failed: ${message}`,
 			});
 		}
+	}
+
+	/** CLI 工具登录（RFC 002 第 1 阶段）：/cli_auth [tool]。
+	 *
+	 *  菜谱是数据：内置常用工具 + 用户在 `~/.config/cli-auth/recipes.json` 的
+	 *  增补/覆盖。因此新增一个工具不需要改代码、不需要重建镜像、不需要新挂载。
+	 *  进度复用 /login 的 `auth_flow` 横幅，提问复用 question_pending 协议。 */
+	private async runCliAuth(toolArg?: string): Promise<void> {
+		try {
+			const home = process.env.HOME || "/home/tachikoma";
+			const { recipes, error, path } = loadRecipes(home);
+			if (error) {
+				// 坏菜谱文件不该让命令无法使用：回落到内置并说明原因。
+				this.host.emit({
+					type: "notice",
+					level: "warning",
+					text: `CLI 菜谱文件无法解析（已忽略）：${error}`,
+					textEn: `CLI recipe file could not be parsed (ignored): ${error}`,
+				});
+			}
+			const names = Object.keys(recipes).sort();
+			let tool = toolArg;
+			if (!tool || !recipes[tool]) {
+				if (tool) {
+					this.host.emit({
+						type: "notice",
+						level: "warning",
+						text: `没有 ${tool} 的菜谱，请从列表中选择`,
+						textEn: `No recipe for ${tool} — pick one from the list`,
+					});
+				}
+				if (names.length === 0) throw new Error("没有任何 CLI 菜谱");
+				const picked = await this.askOne({
+					header: "CLI auth",
+					question: "选择要登录的 CLI 工具 / Choose a CLI tool to authenticate",
+					detail: `菜谱：${path}`,
+					options: names.map((n) => ({
+						label: n,
+						description: [recipes[n].label, this.recipeKind(recipes[n])].filter(Boolean).join(" · "),
+					})),
+				});
+				if (picked === undefined) {
+					this.emitCancelled("login");
+					return;
+				}
+				tool = picked;
+			}
+			const recipe = recipes[tool];
+			this.host.emit({
+				type: "notice",
+				level: "info",
+				text: `正在为 ${tool} 启动登录…`,
+				textEn: `Starting ${tool} sign-in…`,
+			});
+			const done = await runCliAuthRecipe(tool, recipe, {
+				emit: (msg) => this.host.emit(msg as ServerMessage),
+				askUser: this.host.askUser,
+				cwd: home,
+				home,
+			});
+			if (!done) this.emitCancelled("login");
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.host.emit({ type: "auth_flow", state: "error", message });
+			this.host.emit({
+				type: "notice",
+				level: "error",
+				text: `CLI 登录失败：${message}`,
+				textEn: `CLI sign-in failed: ${message}`,
+			});
+		}
+	}
+
+	/** 选择器里的一句话描述：这个工具是哪种登录方式。 */
+	private recipeKind(r: { key?: unknown; deviceCode?: unknown; manualCode?: unknown; note?: unknown }): string {
+		if (r.key) return "API key / PAT";
+		if (r.deviceCode) return "device code";
+		if (r.manualCode) return "paste code";
+		if (r.note) return "no sign-in";
+		return "";
 	}
 }

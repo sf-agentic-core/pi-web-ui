@@ -39,7 +39,7 @@ env:
   REGISTRY: rg.fr-par.scw.cloud
   NAMESPACE: sf-agentic-core
   # Pin de la base compartida. Actualizar al adoptar una base nueva.
-  AGENT_BASE_TAG: "5a5c5088b470bf6ab551e431c86dc597fca36328"
+  AGENT_BASE_TAG: "7499be302fab9a9b5be4913ac41394b7938f874f"
   IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:

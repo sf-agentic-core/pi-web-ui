@@ -125,6 +125,8 @@ export const BUILTIN_RECIPES: Record<string, CliAuthRecipe> = {
 	},
 	az: {
 		label: "Azure",
+		// ⚠️ En el registro de mise el paquete es `azure-cli`, no `az`.
+		install: "azure-cli",
 		creds: ["~/.config/azure"],
 		deviceCode: {
 			command: "az login --use-device-code",
@@ -143,6 +145,7 @@ export const BUILTIN_RECIPES: Record<string, CliAuthRecipe> = {
 	},
 	aws: {
 		label: "AWS",
+		install: "awscli",
 		creds: ["~/.config/aws"],
 		note: "AWS 需要多段输入（keyID + secret + region），请在终端执行 `aws configure`（凭据会落在 ~/.config/aws，持久化）/ AWS needs several inputs: run `aws configure` in the terminal",
 	},
@@ -153,6 +156,9 @@ export const BUILTIN_RECIPES: Record<string, CliAuthRecipe> = {
 	},
 	tofu: {
 		label: "OpenTofu",
+		// ⚠️ El paquete en mise es `opentofu`: `tofu` no existe y mise lo
+		// resolvia a un `cargo:tfocus` inexistente (fallo real reportado).
+		install: "opentofu",
 		creds: ["~/.terraform.d"],
 		note: "OpenTofu 与 Terraform 同理：消费云凭据，本身不登录 / OpenTofu consumes cloud credentials",
 	},

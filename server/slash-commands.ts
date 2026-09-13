@@ -15,7 +15,7 @@
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import type { ServerMessage, SlashCommandInfo, UiQuestionOption } from "./protocol.js";
 import { loadRecipes, runCliAuth as runCliAuthRecipe } from "./cli-auth.js";
-import { installTool, listTools } from "./tool-install.js";
+import { installTool, listTools, searchTools } from "./tool-install.js";
 import type { PluginCommandDef } from "./plugins.js";
 
 /** 登录认证方式（与 SDK 的 AuthType 一致）。 */
@@ -156,8 +156,8 @@ export const NATIVE_COMMANDS: {
 		name: "tool",
 		description: "安装命令行工具（持久化）",
 		descriptionEn: "Install CLI tools (persisted)",
-		argumentHint: "install <nombre>[@version] | list",
-		argumentHintEn: "install <name>[@version] | list",
+		argumentHint: "install <nombre>[@version] | list | search <término>",
+		argumentHintEn: "install <name>[@version] | list | search <term>",
 	},
 	{
 		name: "cli_auth",
@@ -845,6 +845,34 @@ export class SlashCommandsService {
 					level: "info",
 					text: tools.length ? `已安装：${tools.join(", ")}` : "还没有安装任何工具",
 					textEn: tools.length ? `Installed: ${tools.join(", ")}` : "No tools installed yet",
+				});
+				return;
+			}
+			if (sub === "search") {
+				// Resuelve el problema real: "no sé cómo se llama el paquete".
+				let term = rest[0];
+				if (!term) {
+					const asked = await this.askOne({
+						header: "Tool search",
+						question: "Buscar en el registro de mise / Search the mise registry",
+						detail: "例如 opentofu、aws、kubectl",
+					});
+					if (asked === undefined || asked === "") {
+						this.emitCancelled("login");
+						return;
+					}
+					term = asked;
+				}
+				const hits = await searchTools(term, deps);
+				this.host.emit({
+					type: "notice",
+					level: hits.length ? "info" : "warning",
+					text: hits.length
+						? `找到 ${hits.length} 个：\n${hits.join("\n")}`
+						: `没有找到 ${term}。试试更短的关键词（如 tofu 而非 opentofu）`,
+					textEn: hits.length
+						? `Found ${hits.length}:\n${hits.join("\n")}`
+						: `Nothing found for ${term}. Try a shorter keyword`,
 				});
 				return;
 			}

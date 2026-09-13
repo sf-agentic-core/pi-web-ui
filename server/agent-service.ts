@@ -3063,6 +3063,7 @@ export class ClientSession {
 		questions: UiQuestion[],
 		sig: { aborted?: boolean },
 		conversationId?: string,
+		opts?: { force?: boolean },
 	): Promise<QuestionAnswer[] | null> {
 		return new Promise((resolve, reject) => {
 			if (sig?.aborted || this.disposed) {
@@ -3071,9 +3072,12 @@ export class ClientSession {
 			}
 			// 问卷开关（默认开）：关 → 不弹对话框，立即报错让模型得知已禁用。
 			// 与统一工具门控双保险：工具 tab 里单独关掉 ask_user_question 也一样拒收。
+			// opts.force：/login 等「用户主动发起」的交互提问绕过开关 —— 用户刚刚
+			// 敲了命令，显然期望弹出对话框；问卷开关管的是模型自发的提问。
 			if (
-				this.settingsSvc.current.questionnaireEnabled === false ||
-				(this.settingsSvc.current.disabledAgentTools ?? []).includes(ASK_USER_QUESTION_TOOL_NAME)
+				!opts?.force &&
+				(this.settingsSvc.current.questionnaireEnabled === false ||
+					(this.settingsSvc.current.disabledAgentTools ?? []).includes(ASK_USER_QUESTION_TOOL_NAME))
 			) {
 				reject(new Error("问卷功能已关闭，可在设置中重新开启"));
 				return;
@@ -3535,6 +3539,9 @@ export class ClientSession {
 		emit: (msg) => this.emit(msg),
 		cwd: () => this.cwd,
 		getSession: () => this.session,
+		// /login 的交互式提问（选 provider / 输入 API key）：复用 question_pending
+		// 协议 + 前端 DshQuestionDialog，但绕过问卷开关（用户主动敲的命令）。
+		askUser: (questions) => this.askUser(questions, { aborted: this.disposed }, undefined, { force: true }),
 		newChat: () => this.newChat(),
 		// /new <prompt>: deliver the text as the new session's first prompt.
 		prompt: (text) => this.prompt(text),

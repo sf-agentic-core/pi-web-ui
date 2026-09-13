@@ -17,6 +17,8 @@ interface DshQuestionDialogProps {
 			header?: string;
 			options?: { label: string; description?: string; preview?: string }[];
 			multiSelect?: boolean;
+			/** 敏感输入（API key 等）→ 密码框渲染。服务端 /login 的 prompt 回调置位。 */
+			secret?: boolean;
 		}[];
 	};
 }
@@ -193,6 +195,8 @@ export function DshQuestionDialog({ question }: DshQuestionDialogProps) {
 					</div>
 				)}
 				<input
+					type={q.secret ? "password" : "text"}
+					autoComplete="off"
 					className="set-prompt-input question-custom"
 					placeholder={t("modelQuestionCustom")}
 					value={customs[q.id] ?? ""}

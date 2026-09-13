@@ -13,8 +13,23 @@
  * 保留在目录里供选择器展示，exec 里吞掉防止 SDK 当文本。
  */
 import type { AgentSession } from "@earendil-works/pi-coding-agent";
-import type { ServerMessage, SlashCommandInfo } from "./protocol.js";
+import type { ServerMessage, SlashCommandInfo, UiQuestionOption } from "./protocol.js";
 import type { PluginCommandDef } from "./plugins.js";
+
+/** 登录认证方式（与 SDK 的 AuthType 一致）。 */
+type AuthKind = "oauth" | "api_key";
+
+/** 一个 provider 的一条登录路径（镜像 TUI 的 getLoginProviderOptions）。
+ *  同一 provider 可同时提供 OAuth 与 API key —— 各自是独立的一项。 */
+interface LoginProviderOption {
+	id: string;
+	name: string;
+	authType: AuthKind;
+	/** 当前保存的凭据是否属于这条路径。 */
+	configured: boolean;
+	/** 凭据来源说明（auth.json / 环境变量…）。 */
+	source?: string;
+}
 
 /** ClientSession 提供给本服务的宿主能力（窄接口，便于独立测试）。 */
 export interface SlashHost {
@@ -35,6 +50,12 @@ export interface SlashHost {
 	renameSession?: (name: string) => Promise<void> | void;
 	forkSession?: (newName?: string) => Promise<void> | void;
 	refreshSessions: () => Promise<void>;
+	/** 交互式提问（复用 question_pending/question_answer 协议，
+	 *  前端由 DshQuestionDialog 富渲染）。返回用户回答；取消时 null。
+	 *  /login 用它选 provider、认证方式、输入 API key。 */
+	askUser?: (
+		questions: import("./protocol.js").UiQuestion[],
+	) => Promise<import("./protocol.js").QuestionAnswer[] | null>;
 	/** supervisor 的优雅重启调度；返回 false 时 exec 兜底 process.exit(0)。 */
 	onQuit?: () => boolean;
 	/** session.reload() 之后的钩子（重放终端工具开关等设置门控）。 */
@@ -414,34 +435,16 @@ export class SlashCommandsService {
 				return true;
 			}
 			case "login": {
-				const providerId = args.trim().split(/\s+/)[0] || "github-copilot";
-				this.host.emit({
-					type: "notice",
-					level: "info",
-					text: `正在为 ${providerId} 启动登录…`,
-					textEn: `Starting login for ${providerId}…`,
-				});
-				void this.runLogin(providerId);
+				// /login [provider] [oauth|api_key] —— 两者皆可省略，缺什么问什么。
+				const parts = args.trim().split(/\s+/).filter(Boolean);
+				const kind = parts.find((x) => x === "oauth" || x === "api_key") as AuthKind | undefined;
+				const provider = parts.find((x) => x !== "oauth" && x !== "api_key");
+				void this.runLogin(provider, kind);
 				return true;
 			}
 			case "logout": {
-				const providerId = args.trim().split(/\s+/)[0] || "github-copilot";
-				try {
-					await this.host.getSession().modelRuntime.logout(providerId);
-					this.host.emit({
-						type: "notice",
-						level: "info",
-						text: `已退出 ${providerId}`,
-						textEn: `Signed out of ${providerId}`,
-					});
-				} catch (err) {
-					this.host.emit({
-						type: "notice",
-						level: "error",
-						text: `退出失败：${(err as Error).message}`,
-						textEn: `Sign out failed: ${(err as Error).message}`,
-					});
-				}
+				// /logout [provider] —— 无参数时列出已保存的凭据让用户选。
+				void this.runLogout(args.trim().split(/\s+/).filter(Boolean)[0]);
 				return true;
 			}
 			case "help":
@@ -455,30 +458,64 @@ export class SlashCommandsService {
 		}
 	}
 
-	/** OAuth device flow: streams progress to the client via `auth_flow`
-	 *  messages (persistent banner) and closes with a notice. Fire-and-forget:
-	 *  `exec` returns immediately; the user completes the flow in the browser.
-	 *  The device flow never calls `prompt` (no interactive round-trip needed). */
-	private async runLogin(providerId: string): Promise<void> {
+	/** 交互式登录（/login）：provider 与认证方式可由参数直给，缺省则弹对话框
+	 *  让用户选，随后交给 SDK 的 login() 驱动具体流程 —— OAuth 设备码或 API key
+	 *  输入，对任何 provider 都一致（不再写死 github-copilot）。
+	 *
+	 *  进度经 `auth_flow` 推给客户端（常驻横幅）；提问走 question_pending 协议
+	 *  （前端 DshQuestionDialog 富渲染）。Fire-and-forget：exec 立即返回，用户在
+	 *  浏览器里完成流程。 */
+	private async runLogin(providerArg?: string, kindArg?: AuthKind): Promise<void> {
 		try {
 			const session = this.host.getSession();
-			await session.modelRuntime.login(providerId, "oauth", {
-				// The github-copilot flow asks once for a GitHub Enterprise domain;
-				// a blank answer means github.com (the common case). Relaying the
-				// prompt to the UI needs a request/response round-trip that is not
-				// wired yet, so answer blank for that question and surface it.
-				prompt: async (p: { type?: string; message?: string }) => {
+			const providerId = providerArg ?? (await this.pickLoginProvider());
+			if (!providerId) {
+				this.emitCancelled("login");
+				return;
+			}
+			const authType = kindArg ?? (await this.pickLoginAuthType(providerId));
+			if (!authType) {
+				this.emitCancelled("login");
+				return;
+			}
+			this.host.emit({
+				type: "notice",
+				level: "info",
+				text: `正在为 ${providerId} 启动登录（${authType}）…`,
+				textEn: `Starting login for ${providerId} (${authType})…`,
+			});
+			await session.modelRuntime.login(providerId, authType, {
+				// 「prompt 通用入口」：SDK 借它索取 API key（secret）、GitHub
+				// Enterprise 域名（text，留空 = github.com）、OAuth manual_code
+				// 或 select。统一转成一道对话框题目 —— 实现这一处，所有 provider
+				// 的 API key 与 OAuth 就都通了。
+				prompt: async (p: {
+					type?: string;
+					message?: string;
+					placeholder?: string;
+					options?: readonly { id: string; label: string; description?: string }[];
+				}) => {
 					const message = p?.message ?? "";
-					if (/enterprise/i.test(message)) {
-						this.host.emit({
-							type: "notice",
-							level: "info",
-							text: "使用 github.com（GitHub Enterprise 暂不支持）",
-							textEn: "Using github.com (GitHub Enterprise is not supported yet)",
+					const enterprise = /enterprise/i.test(message);
+					if (p?.type === "select") {
+						const opts = p.options ?? [];
+						const picked = await this.askOne({
+							header: "Auth",
+							question: message,
+							options: opts.map((o) => ({ label: o.label, description: o.description })),
 						});
-						return "";
+						if (picked === undefined) throw new Error("Login cancelled");
+						// select 回传的是选项 id（前端给的是 label）——按 label 反查。
+						return opts.find((o) => o.label === picked)?.id ?? picked;
 					}
-					throw new Error(`Unsupported auth prompt: ${message}`);
+					const answer = await this.askOne({
+						header: enterprise ? "GitHub Enterprise" : "Auth",
+						question: message,
+						detail: enterprise ? "留空 = github.com / Leave blank for github.com" : undefined,
+						secret: p?.type === "secret",
+					});
+					if (answer === undefined) throw new Error("Login cancelled");
+					return answer;
 				},
 				notify: (event) => {
 					const e = event as {
@@ -534,6 +571,163 @@ export class SlashCommandsService {
 				level: "error",
 				text: `登录失败：${message}`,
 				textEn: `Login failed: ${message}`,
+			});
+		}
+	}
+
+	/** 弹一道题并等回答（question_pending 协议）。返回用户填写的文本或选中的
+	 *  选项 label；用户取消 → undefined。
+	 *
+	 *  必须区分「取消」与「提交空值」：前端取消发 `answers: []`，而提交空文本发
+	 *  `[{ selected: [] }]`（custom 省略）——「留空」在登录里是合法答案
+	 *  （例如 GitHub Enterprise 域名留空 = github.com）。 */
+	private async askOne(q: {
+		header?: string;
+		question: string;
+		detail?: string;
+		options?: UiQuestionOption[];
+		secret?: boolean;
+	}): Promise<string | undefined> {
+		const ask = this.host.askUser;
+		if (!ask) throw new Error("当前宿主不支持交互式提问（askUser 未接线）");
+		const answers = await ask([{ id: "auth", ...q }]);
+		if (!answers || answers.length === 0) return undefined;
+		const custom = answers[0]?.custom;
+		if (custom !== undefined) return custom.trim();
+		return answers[0]?.selected?.[0] ?? "";
+	}
+
+	/** 取消登录 / 退出：统一文案。 */
+	private emitCancelled(action: "login" | "logout"): void {
+		this.host.emit({
+			type: "notice",
+			level: "info",
+			text: action === "login" ? "已取消登录" : "已取消退出登录",
+			textEn: action === "login" ? "Login cancelled" : "Sign-out cancelled",
+		});
+	}
+
+	/** provider 候选（镜像 TUI 的 getLoginProviderOptions）。 */
+	private loginProviderOptions(authType?: AuthKind): LoginProviderOption[] {
+		const runtime = this.host.getSession().modelRuntime;
+		const providers = runtime.getProviders() as readonly {
+			id: string;
+			name: string;
+			auth?: { oauth?: unknown; apiKey?: unknown };
+		}[];
+		const out: LoginProviderOption[] = [];
+		for (const provider of providers) {
+			const status = runtime.getProviderAuthStatus(provider.id) as {
+				configured?: boolean;
+				label?: string;
+				source?: string;
+			};
+			const configured: AuthKind | undefined = status.configured
+				? runtime.isUsingOAuth(provider.id)
+					? "oauth"
+					: "api_key"
+				: undefined;
+			for (const type of ["oauth", "api_key"] as const) {
+				if (authType && authType !== type) continue;
+				const method = type === "oauth" ? provider.auth?.oauth : provider.auth?.apiKey;
+				if (!method) continue;
+				out.push({
+					id: provider.id,
+					name: provider.name,
+					authType: type,
+					configured: configured === type,
+					source: status.configured ? (status.label ?? status.source) : undefined,
+				});
+			}
+		}
+		return out.sort((a, b) => a.name.localeCompare(b.name));
+	}
+
+	/** 同一 provider 的两条登录路径合并成一行展示。 */
+	private describeProvider(group: LoginProviderOption[]): string {
+		const kinds = group.map((o) => (o.authType === "oauth" ? "OAuth" : "API key")).join(" / ");
+		const done = group.find((o) => o.configured);
+		return done ? `${kinds} · ✅ ${done.source ?? "configured"}` : kinds;
+	}
+
+	/** /login 无参数：弹对话框选 provider。返回 provider id；取消 → undefined。 */
+	private async pickLoginProvider(): Promise<string | undefined> {
+		const byId = new Map<string, LoginProviderOption[]>();
+		for (const o of this.loginProviderOptions()) byId.set(o.id, [...(byId.get(o.id) ?? []), o]);
+		const groups = [...byId.values()];
+		if (groups.length === 0) throw new Error("当前没有可登录的 provider");
+		const picked = await this.askOne({
+			header: "Provider",
+			question: "选择要登录的 provider / Choose a provider to sign in",
+			detail: "✅ = 已保存凭据 / already has saved credentials",
+			options: groups.map((g) => ({ label: g[0].name, description: this.describeProvider(g) })),
+		});
+		if (picked === undefined) return undefined;
+		return groups.find((g) => g[0].name === picked)?.[0].id;
+	}
+
+	/** /login 已知 provider：选认证方式；只有一条路径时直接用。 */
+	private async pickLoginAuthType(providerId: string): Promise<AuthKind | undefined> {
+		const opts = this.loginProviderOptions().filter((o) => o.id === providerId);
+		if (opts.length === 0) throw new Error(`provider 不存在或不支持登录：${providerId}`);
+		if (opts.length === 1) return opts[0].authType;
+		const label = (k: AuthKind): string =>
+			k === "oauth" ? "Sign in with an account (OAuth)" : "Sign in with an API key";
+		const picked = await this.askOne({
+			header: providerId,
+			question: "选择登录方式 / Choose how to sign in",
+			options: opts.map((o) => ({
+				label: label(o.authType),
+				description: o.configured ? `✅ ${o.source ?? "configured"}` : undefined,
+			})),
+		});
+		if (picked === undefined) return undefined;
+		return picked === label("oauth") ? "oauth" : "api_key";
+	}
+
+	/** /logout [provider]：无参数时列出已保存的凭据让用户选。 */
+	private async runLogout(providerArg?: string): Promise<void> {
+		try {
+			const session = this.host.getSession();
+			let target = providerArg;
+			if (!target) {
+				const creds = (await session.modelRuntime.listCredentials({
+					signal: AbortSignal.timeout(15_000),
+				})) as readonly { providerId: string; type?: string }[];
+				if (creds.length === 0) {
+					this.host.emit({
+						type: "notice",
+						level: "info",
+						text: "没有已保存的凭据",
+						textEn: "No saved credentials",
+					});
+					return;
+				}
+				const picked = await this.askOne({
+					header: "Logout",
+					question: "选择要退出的 provider / Choose a provider to sign out from",
+					options: creds.map((c) => ({ label: c.providerId, description: c.type })),
+				});
+				if (picked === undefined) {
+					this.emitCancelled("logout");
+					return;
+				}
+				target = picked;
+			}
+			await session.modelRuntime.logout(target);
+			this.host.emit({
+				type: "notice",
+				level: "info",
+				text: `已退出 ${target}`,
+				textEn: `Signed out of ${target}`,
+			});
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			this.host.emit({
+				type: "notice",
+				level: "error",
+				text: `退出失败：${message}`,
+				textEn: `Sign-out failed: ${message}`,
 			});
 		}
 	}

@@ -217,6 +217,10 @@ const zh = {
 	uploadToFolder: "上传文件到此文件夹",
 	uploadToCurrentDir: "上传文件到当前目录",
 	protocolMismatch: "页面版本与服务器不一致（应用刚更新过），请刷新页面以恢复全部功能。",
+	authLoginOpen: "打开链接并输入代码",
+	authLoginCode: "代码",
+	authLoginCopy: "复制",
+	authLoginWaiting: "等待授权中…",
 
 	/* file preview */
 	selectLinesHint: "点击选择行；拖拽或 Shift+点击选择范围",
@@ -1019,6 +1023,10 @@ const en: Record<keyof typeof zh, string> = {
 	uploadToCurrentDir: "Upload files to current directory",
 	protocolMismatch:
 		"Page version differs from the server (the app was just updated). Refresh the page to restore full functionality.",
+	authLoginOpen: "Open the link and enter the code",
+	authLoginCode: "Code",
+	authLoginCopy: "Copy",
+	authLoginWaiting: "Waiting for authorization…",
 
 	/* file preview */
 	selectLinesHint: "Click a line to select; drag or Shift+click for a range",

@@ -33,6 +33,10 @@ import { AgentService, workspacePath, QuiesceRejectedError } from "./agent-servi
 import { isAbsoluteWirePath, wireToAbs } from "./files-service.js";
 import { previewKind } from "./text-sniff.js";
 import { startControlServer } from "./control-socket.js";
+import { ClientStateStore } from "./client-state.js";
+import { scheduleServiceAnnouncement } from "./push/announce.js";
+import { registerPushRoutes } from "./push/routes.js";
+import { loadOrCreateVapidKeys, vapidSubject } from "./push/vapid.js";
 import { scheduleUploadCleanup } from "./uploads.js";
 import { ensureWindowsBash, windowsBashDir } from "./ensure-bash.js";
 import { listThemes, resolveThemeFile } from "./themes.js";
@@ -236,6 +240,29 @@ const TABS = parseTabs();
 app.get("/api/health", (_req, res) => {
 	res.json({ ok: true, piVersion: VERSION, cwd: CWD, pid: process.pid, engine: ENGINE });
 });
+
+// ---------------------------------------------------------------------------
+// Web Push (RFC 8291 / RFC 8292) — 可用性通知。
+//
+// 密钥在首次启动时生成并落在 <dataDir>/vapid.json，所以「一条命令跑起来」的
+// 部署不需要任何配置步骤；需要自己管密钥的运维方用 PI_WEB_VAPID_* 覆盖
+// （server/push/vapid.ts）。
+//
+// 这里额外建了一个 ClientStateStore 的**只读**实例，用来查每个设备的 UI 语言，
+// 让通知文案是读者自己的语言（它从不写入，所以不会覆盖 agent service 的那份）。
+// ---------------------------------------------------------------------------
+const vapidKeys = loadOrCreateVapidKeys(DATA_DIR, { warn: (m) => console.warn(`[push] ${m}`) });
+const pushClientState = new ClientStateStore(join(DATA_DIR, "client-state.json"));
+const pushDeps = {
+	dataDir: DATA_DIR,
+	keyPair: vapidKeys.keyPair,
+	subject: vapidSubject(),
+	version: appVersion(),
+	warn: (m: string) => console.warn(`[push] ${m}`),
+	log: (m: string) => console.log(`[push] ${m}`),
+	localeFor: (clientId: string) => pushClientState.get(clientId).locale,
+};
+registerPushRoutes(app, pushDeps);
 
 /**
  * Stream a workspace file over HTTP.
@@ -1568,6 +1595,12 @@ httpServer.listen(PORT, HOST, () => {
 
 // 上传文件保留期清理：启动扫一次 + 每 6 小时一次（best-effort，见 uploads.ts）
 scheduleUploadCleanup();
+
+/** 可用性通知：重启/更新后告诉已订阅的设备「我回来了」。
+ *
+ * 故意和启动流程解耦（延迟 + 不阻塞）：一个刚起来就崩的进程不应该宣布自己健康，
+ * 而推送失败也绝不能影响服务本身。见 server/push/announce.ts。 */
+scheduleServiceAnnouncement(pushDeps);
 
 /** RFC 002 第 3 阶段：启动时从清单（ConfigMap 挂载）引导工具集到持久卷。
  *  不阻塞启动：第一次可能要下载 mise（~100MB），在后台完成。每次启动都

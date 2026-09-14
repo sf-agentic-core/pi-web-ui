@@ -161,7 +161,7 @@ function readForm(): PickerSettings {
 function fillForm(s: PickerSettings): void {
 	fields.serverUrl.value = s.serverUrl;
 	fields.token.value = s.token;
-	fields.lang.value = s.lang;
+	fields.lang.value = s.lang ?? "auto";
 	fields.copyToClipboard.checked = s.copyToClipboard;
 	fields.screenshots.checked = s.screenshots;
 	fields.focusTarget.checked = s.focusTarget;

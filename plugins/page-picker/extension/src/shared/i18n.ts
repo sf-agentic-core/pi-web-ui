@@ -61,7 +61,7 @@ export function detectLang(): Lang {
 	if (raw) {
 		// 纯 Node 单测环境（vitest）没有真实的浏览器 UI 语言，navigator.language 在 Node 22 是 en-US；
 		// 只有在扩展上下文（有 chrome.i18n）或非 Node 环境下才认定为英文界面，避免单测被 Node 默认值带跑
-		const isNode = typeof process !== "undefined" && Boolean(process.versions?.node);
+		const isNode = typeof (globalThis as { process?: { versions?: { node?: unknown } } }).process?.versions?.node !== "undefined";
 		const hasChromeI18n = Boolean((globalThis as { chrome?: { i18n?: unknown } }).chrome?.i18n);
 		if (isNode && !hasChromeI18n) return "zh";
 		return "en";

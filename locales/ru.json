@@ -157,6 +157,8 @@
     "slashCopyEmpty": "Пока нет ответа ассистента для копирования",
     "recentProjects": "Недавние проекты",
     "runningConversations": "Активные диалоги",
+    "elsewhereBadge": "Другое место",
+    "elsewhereTip": "Диалог выполняется в другой вкладке/на другом устройстве (только чтение)",
     "subagentBadge": "Субагент",
     "convErrorBadge": "Ошибка субагента: {error}",
     "subagentTitle": "Субагент · {title}",

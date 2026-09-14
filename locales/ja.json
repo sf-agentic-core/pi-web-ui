@@ -157,6 +157,8 @@
     "slashCopyEmpty": "コピーできるアシスタントの返答はまだありません",
     "recentProjects": "最近のプロジェクト",
     "runningConversations": "実行中のチャット",
+    "elsewhereBadge": "他の場所",
+    "elsewhereTip": "他のタブ/デバイスで実行中の会話（読み取り専用）",
     "subagentBadge": "サブエージェント",
     "convErrorBadge": "サブエージェントの実行エラー：{error}",
     "subagentTitle": "サブエージェント ・ {title}",

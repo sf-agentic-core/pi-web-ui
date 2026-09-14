@@ -157,6 +157,8 @@
     "slashCopyEmpty": "Noch keine kopierbare Assistentenantwort vorhanden",
     "recentProjects": "Aktuelle Projekte",
     "runningConversations": "Laufende Chats",
+    "elsewhereBadge": "Anderswo",
+    "elsewhereTip": "Unterhaltung läuft in einem anderen Tab/Gerät (schreibgeschützt)",
     "subagentBadge": "Subagent",
     "convErrorBadge": "Subagent-Fehler: {error}",
     "subagentTitle": "Subagent · {title}",

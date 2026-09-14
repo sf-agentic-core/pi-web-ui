@@ -157,6 +157,8 @@
     "slashCopyEmpty": "Aún no hay ninguna respuesta del asistente para copiar",
     "recentProjects": "Proyectos recientes",
     "runningConversations": "Chats en ejecución",
+    "elsewhereBadge": "Otro lugar",
+    "elsewhereTip": "Conversación en ejecución en otra pestaña/dispositivo (solo lectura)",
     "subagentBadge": "Subagente",
     "convErrorBadge": "Error de ejecución del subagente: {error}",
     "subagentTitle": "Subagente · {title}",

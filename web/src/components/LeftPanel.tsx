@@ -10,7 +10,7 @@ import {
 	FiTrash2,
 	FiX,
 } from "react-icons/fi";
-import type { ConversationSummary, ProjectSummary, SessionSummary } from "../types";
+import type { ConversationSummary, ElsewhereRunning, ProjectSummary, SessionSummary } from "../types";
 import { useT } from "../i18n";
 import { useAppField } from "../app-globals";
 import { applySashDrag, parseWeights } from "../panel-sash";
@@ -24,6 +24,8 @@ import { groupConversations } from "../conv-groups";
 interface LeftPanelProps {
 	sessionFile: string | null;
 	conversations: ConversationSummary[];
+	/** issue #145：其他客户端正在跑的对话（只读，不可点）。 */
+	elsewhere: ElsewhereRunning[];
 	sessions: SessionSummary[];
 	projects: ProjectSummary[];
 	activeConversationId: string;
@@ -108,6 +110,7 @@ function loadLpWeights(): LpWeights {
 export const LeftPanel = memo(function LeftPanel({
 	sessionFile,
 	conversations,
+	elsewhere,
 	sessions,
 	projects,
 	activeConversationId,
@@ -233,6 +236,8 @@ export const LeftPanel = memo(function LeftPanel({
 		return list.filter((c) => c.isSubagent && c.isStreaming && inScope(c)).length;
 	}, []);
 
+	/** issue #145 行类型：运行的对话 = 本客户端 + 其他标签页/设备（elsewhere 只读行，标“另一处”）。 */
+	type RowConv = ConversationSummary & { elsewhere?: boolean };
 	const panelRef = useRef<HTMLElement>(null);
 	const [weights, setWeights] = useState<LpWeights>(() => loadLpWeights());
 	useEffect(() => {
@@ -241,6 +246,19 @@ export const LeftPanel = memo(function LeftPanel({
 		} catch {}
 	}, [weights]);
 
+	/** issue #145：运行的对话 = 本客户端会话 + 其他标签页/设备的运行（后者只读行）。 */
+	const runningAll: RowConv[] = [
+		...conversations,
+		...elsewhere.map((w, i) => ({
+			id: `elsewhere:${w.cwd}:${w.title}:${i}`,
+			title: w.title,
+			cwd: w.cwd,
+			messageCount: 0,
+			isStreaming: w.isStreaming,
+			isSubagent: false as const,
+			elsewhere: true as const,
+		})),
+	];
 	const createSashHandler = useCallback(
 		(aboveKey: keyof LpWeights, belowKey: keyof LpWeights) => (e: React.PointerEvent<HTMLDivElement>) => {
 			e.preventDefault();
@@ -251,7 +269,7 @@ export const LeftPanel = memo(function LeftPanel({
 			if (!panel) return;
 			const visibleMeta = [
 				{ key: "projects" as const, visible: projects.length > 0, collapsed: collapseProjects },
-				{ key: "convs" as const, visible: conversations.length > 0, collapsed: collapseConvs },
+				{ key: "convs" as const, visible: runningAll.length > 0, collapsed: collapseConvs },
 				{ key: "sessions" as const, visible: true, collapsed: collapseSessions },
 			].filter((s) => s.visible);
 			const collapsedCount = visibleMeta.filter((s) => s.collapsed).length;
@@ -280,7 +298,7 @@ export const LeftPanel = memo(function LeftPanel({
 			window.addEventListener("pointermove", onMove);
 			window.addEventListener("pointerup", onUp);
 		},
-		[weights, projects.length, conversations.length, collapseProjects, collapseConvs, collapseSessions],
+		[weights, projects.length, runningAll.length, collapseProjects, collapseConvs, collapseSessions],
 	);
 
 	useEffect(() => {
@@ -337,7 +355,7 @@ export const LeftPanel = memo(function LeftPanel({
 	// 归一化权重：单展开时强制 flex=1 填满；多展开时按权重比例均值归一，避免 0.539 这类小数导致容器留空
 	const visibleMetaForFlex = [
 		{ key: "projects" as const, visible: projects.length > 0, collapsed: collapseProjects },
-		{ key: "convs" as const, visible: conversations.length > 0, collapsed: collapseConvs },
+		{ key: "convs" as const, visible: runningAll.length > 0, collapsed: collapseConvs },
 		{ key: "sessions" as const, visible: true, collapsed: collapseSessions },
 	].filter((s) => s.visible);
 	const expandedForFlex = visibleMetaForFlex.filter((s) => !s.collapsed);
@@ -398,26 +416,26 @@ export const LeftPanel = memo(function LeftPanel({
 				</div>
 			)}
 			{/* sash: projects ↔ next */}
-			{projects.length > 0 && !collapseProjects && (conversations.length > 0 ? !collapseConvs : !collapseSessions) && (
+			{projects.length > 0 && !collapseProjects && (runningAll.length > 0 ? !collapseConvs : !collapseSessions) && (
 				<div
 					className="lp-sash"
-					onPointerDown={createSashHandler("projects", conversations.length > 0 ? "convs" : "sessions")}
+					onPointerDown={createSashHandler("projects", runningAll.length > 0 ? "convs" : "sessions")}
 					onDoubleClick={() => setWeights({ ...DEFAULT_LP_WEIGHTS })}
 					title={t("dragToResize")}
 				/>
 			)}
 
 			{/* Running conversations — collapsible, flex share. Hidden when empty to keep old layout expectations. */}
-			{conversations.length > 0 && (
+			{runningAll.length > 0 && (
 				<div
 					className={`lp-section lp-section-convs panel-convs ${collapseConvs ? "collapsed" : ""}`}
 					style={!collapseConvs ? { flex: `${effFlex("convs")} 1 0px` } : undefined}
 					onContextMenu={(e) => openConvCtx(e)}
 				>
-					{sectionHeader(t("runningConversations"), collapseConvs, toggleConvs, conversations.length)}
+					{sectionHeader(t("runningConversations"), collapseConvs, toggleConvs, runningAll.length)}
 					{!collapseConvs && (
 						<div className="lp-section-body convs-scroll">
-							{groupConversations(conversations, cwd, activeConversationId).map((g) => (
+							{groupConversations(runningAll, cwd, activeConversationId).map((g) => (
 								<div key={g.cwd} className="panel-conv-group">
 									{!g.isCurrent && (
 										<div className="panel-conv-group-title" title={g.cwd}>
@@ -446,6 +464,23 @@ export const LeftPanel = memo(function LeftPanel({
 										for (const root of roots) append(root, 0);
 										for (const orphan of g.convs) append(orphan, 0);
 										return rows.map(({ c, depth }) => {
+											if ((c as RowConv).elsewhere) {
+												return (
+													<div className="lp-row" key={c.id}>
+														<div className="session-item elsewhere-item" title={`${t("elsewhereTip")}\n${c.cwd}`}>
+															<FiMessageSquare className="session-icon" />
+															<span className="session-info">
+																<span className="session-title">
+																	<span className="elsewhere-badge">{t("elsewhereBadge")}</span>
+																	{c.title}
+																</span>
+																<span className="session-sub">{projectName(c.cwd)}</span>
+															</span>
+															{c.isStreaming && <span className="conv-streaming" title={t("streaming")} />}
+														</div>
+													</div>
+												);
+											}
 											const active = activeConversationId === c.id;
 											return (
 												<div
@@ -609,7 +644,7 @@ export const LeftPanel = memo(function LeftPanel({
 				</div>
 			)}
 			{/* sash: convs ↔ sessions */}
-			{conversations.length > 0 && !collapseConvs && !collapseSessions && (
+			{runningAll.length > 0 && !collapseConvs && !collapseSessions && (
 				<div
 					className="lp-sash"
 					onPointerDown={createSashHandler("convs", "sessions")}

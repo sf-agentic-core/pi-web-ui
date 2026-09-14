@@ -854,6 +854,7 @@ export function App() {
 								active={!isMobile || drawer === "left"}
 								sessionFile={chat.state?.sessionFile ?? null}
 								conversations={chat.conversations}
+								elsewhere={chat.elsewhere}
 								sessions={chat.sessions}
 								projects={chat.projects}
 								activeConversationId={chat.activeConversationId}

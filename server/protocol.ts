@@ -1082,6 +1082,19 @@ export interface ConversationSummary {
 	parentId?: string;
 }
 
+/** A conversation streaming on ANOTHER client (different tab / device) —
+ *  read-only awareness for issue #145. The owning client holds the only
+ *  writer for that transcript; this entry lets other tabs discover that
+ *  "someone else is running in this project" without creating a second
+ *  writer. No id: rows are not clickable (no cross-client attach yet). */
+export interface ElsewhereRunning {
+	/** Display title of the remote conversation. */
+	title: string;
+	/** Workspace it runs in (lets the client group by project). */
+	cwd: string;
+	isStreaming: boolean;
+}
+
 // ---------------------------------------------------------------------------
 // Settings (system prompt / skills / extensions / presets)
 // ---------------------------------------------------------------------------
@@ -1343,6 +1356,9 @@ export type ServerMessage =
 			type: "conversations";
 			conversations: ConversationSummary[];
 			activeId: string;
+			/** issue #145：在其他客户端（标签页/设备）上正在跑的对话（只读感知，
+			 *  不可点）。为空时缺省（老快照字节一致）。Only set when non-empty. */
+			elsewhere?: ElsewhereRunning[];
 	  }
 	| {
 			type: "tool_delta";

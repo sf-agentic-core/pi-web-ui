@@ -10,6 +10,18 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **「看不见的第二个 agent」不会再出现了**（issue #145）—— 换设备 / 新开标签页打开一条正在跑的对话，以前 UI 显示空闲可发，一发消息就给同一份会话再开一支 run，两支 agent 在同一工作区并行动手、事后只有一支可查。现在服务端跨客户端查重：同一份记录在别处正在跑时，`switch_session` / `prompt` 直接拒绝并告诉你去原窗口继续，第二个 writer 从机制上造不出来；owner 空闲后可正常打开（会提醒你别处也开着、只留一处发送）。**新标签页也不再默认落进正在跑的那条**：初始恢复与切项目首访恢复在建之前就查一遍，命中正在跑就停在空白新对话并告诉你原因。同项目不同对话仍可并行（适合改不同文件），但两边都会收到并行提醒，AI 还会收到一条冲突评估提醒（拿不准就用 `ask_user_question` 让你选：并行 / 等它跑完 / 只读围观）。左栏「运行的对话」里直接能看到其他标签页 / 设备的运行（带“另一处”标签，只读不可点）。pi 与 DSH 双引擎同修，回归测试 `tests/cross-client-session-test.mjs`（改前红改后绿，覆盖拒绝双写/默认落点/并行感知）。
+
+<!-- auto-i18n:start -->
+
+### i18n
+
+- 前端新增 key（2）：`elsewhereBadge`、`elsewhereTip`
+
+<!-- auto-i18n:end -->
+
 ## [0.84.0] — 2026-09-13
 
 ### Added
@@ -29,9 +41,11 @@
   - 分组逻辑抽成纯函数 `web/src/conv-groups.ts` + 单测 `tests/unit/conv-groups.test.ts`，另有真浏览器逐帧回归 `tests/conv-group-flash-test.mjs`（MutationObserver 记录每一帧 DOM，两个方向都断言不再渲染项目名；改回只看 `cwd` 即变红）。
 
 <!-- auto-i18n:start -->
+
 ### i18n
 
 - 服务端新增 key（1）：`terminals.cwd.outside.workspace`
+
 <!-- auto-i18n:end -->
 
 ## [0.83.0] — 2026-09-13
@@ -121,11 +135,13 @@
 暂无其他未发布内容。
 
 <!-- auto-i18n:start -->
+
 ### i18n
 
 - 前端新增 key（28）：`browserPageEnabledDesc`、`browserPageOffHint`、`browserControl`、`browserControlTip`、`browserControlChecking`、`browserControlOffline`、`browserControlEmpty`、`browserControlDisabled`、`browserControlPages`、`browserControlPageOpen`、`browserControlPageClosed`、`browserControlExamples`、`browserControlExample1`、`browserControlExample2`、`browserControlOpenOptions`、`browserControlRefresh`、`browserControlCite`、`browserControlCiteTip`、`browserControlCiteNote`、`browserControlCited`、`browserControlCiteFailed`、`browserControlOpenPanel`、`browserControlSingleTip`、`attachPage`、`attachPageShort`、`tplThinkingLabel`、`tplThinkingFollowMain`、`tplThinkingHint`
 - 前端中文变更（2）：`settingsSubagentTemplatesDesc`、`noSubagentTemplates`
 - 前端英文变更（2）：`settingsSubagentTemplatesDesc`、`noSubagentTemplates`
+
 <!-- auto-i18n:end -->
 
 ## [0.82.0] — 2026-09-13

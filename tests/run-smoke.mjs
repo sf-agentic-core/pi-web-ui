@@ -67,6 +67,7 @@ const ALL = [
 	"subagent-thinking-test",
 	"subagent-ui-context-test",
 	"switch-session-background-test",
+	"cross-client-session-test",
 	"terminal-smoke-test",
 	"token-auth-test",
 	"vision-bridge-test",

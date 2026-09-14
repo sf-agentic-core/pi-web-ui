@@ -178,6 +178,8 @@ export const zh = {
 	/* left panel */
 	recentProjects: "最近项目",
 	runningConversations: "运行的对话",
+	elsewhereBadge: "另一处",
+	elsewhereTip: "在其他标签页 / 设备上运行的对话（只读，不可点）",
 	subagentBadge: "子代理",
 	convErrorBadge: "子代理运行报错：{error}",
 	subagentTitle: "子代理 · {title}",
@@ -1307,6 +1309,8 @@ const en: Record<keyof typeof zh, string> = {
 	/* left panel */
 	recentProjects: "Recent projects",
 	runningConversations: "Running chats",
+	elsewhereBadge: "Elsewhere",
+	elsewhereTip: "Conversation running in another tab / device (read-only)",
 	subagentBadge: "Subagent",
 	convErrorBadge: "Subagent failed: {error}",
 	subagentTitle: "Subagent · {title}",

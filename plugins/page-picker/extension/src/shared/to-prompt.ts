@@ -14,6 +14,7 @@ import type { DetailLevel, ElementSnapshot, PickPayload, PickSection, PickedElem
 import { sectionsForDepth } from "./contract.js";
 import { collapse, code, truncate } from "./text.js";
 
+import { t } from "./i18n.js";
 /** 本次要渲染哪几类信息（新载荷看 `sections`；老载荷按 `detail` 推）。 */
 function sectionsOf(payload: PickPayload): Set<PickSection> {
 	const list = payload.sections ?? sectionsForDepth(payload.detail ?? "standard");
@@ -45,16 +46,16 @@ export function toPrompt(payload: PickPayload, opts: ToPromptOptions = {}): stri
 	const shown = elements.slice(0, max);
 
 	const lines: string[] = [];
-	lines.push(`### 网页元素拾取（${elements.length} 个元素）`);
+	lines.push(t(`### 网页元素拾取（{count} 个元素）`, { count: elements.length }));
 	lines.push("");
 	if (sections.has("page")) lines.push(...renderPage(payload));
-	if (payload.note?.trim()) lines.push(`- 整体说明：${collapse(payload.note)}`);
+	if (payload.note?.trim()) lines.push(t(`- 整体说明：{note}`, { note: collapse(payload.note) }));
 	lines.push("");
 	shown.forEach((el, i) => {
 		lines.push(...renderElement(el, level, i + 1, sections, opts));
 	});
 	if (elements.length > shown.length) {
-		lines.push(`（另有 ${elements.length - shown.length} 个已拾取元素未展开）`);
+		lines.push(t(`（另有 {count} 个已拾取元素未展开）`, { count: elements.length - shown.length }));
 	}
 	return lines
 		.join("\n")
@@ -66,14 +67,14 @@ function renderPage(payload: PickPayload): string[] {
 	const page = payload.page;
 	const out: string[] = [];
 	const title = page?.title?.trim();
-	out.push(`- 页面：${code(page?.url ?? "")}${title ? ` — ${collapse(title)}` : ""}`);
+	out.push(t(`- 页面：{url}{title}`, { url: code(page?.url ?? ""), title: title ? ` — ${collapse(title)}` : "" }));
 	const vp = page?.viewport;
 	if (vp) {
-		const scheme = page.colorScheme === "dark" ? "，深色" : page.colorScheme === "light" ? "，浅色" : "";
-		out.push(`- 视口：${round(vp.w)}×${round(vp.h)} @${vp.dpr}x${scheme}`);
+		const scheme = page.colorScheme === "dark" ? t("，深色") : page.colorScheme === "light" ? t("，浅色") : "";
+		out.push(t(`- 视口：{w}×{h} @{dpr}x{scheme}`, { w: round(vp.w), h: round(vp.h), dpr: vp.dpr, scheme: scheme }));
 	}
 	const fw = page?.framework ? FRAMEWORK_LABEL[page.framework] : "";
-	if (fw) out.push(`- 疑似框架：${fw}`);
+	if (fw) out.push(t(`- 疑似框架：{fw}`, { fw: fw }));
 	return out;
 }
 
@@ -87,34 +88,34 @@ function renderElement(
 	const snap = el.snapshot;
 	const maxText = Math.max(0, opts.maxText ?? (level === "compact" ? 160 : 400));
 	const out: string[] = [];
-	out.push(`#### 元素 ${index} · ${code(snap.tagSummary || `<${snap.tag}>`)}`);
+	out.push(t(`#### 元素 {index} · {tag}`, { index: index, tag: code(snap.tagSummary || `<${snap.tag}>`) }));
 	out.push("");
 	if (sections.has("selector")) {
-		out.push(`- 选择器：${code(snap.selector)}`);
+		out.push(t(`- 选择器：{selector}`, { selector: code(snap.selector) }));
 		const source = sections.has("source") ? renderSource(snap) : "";
-		if (source) out.push(`- 源码：${source}`);
-		out.push(`- 尺寸：${renderRect(snap)}`);
+		if (source) out.push(t(`- 源码：{source}`, { source: source }));
+		out.push(t(`- 尺寸：{snap}`, { snap: renderRect(snap) }));
 	} else if (sections.has("source")) {
 		const source = renderSource(snap);
-		if (source) out.push(`- 源码：${source}`);
+		if (source) out.push(t(`- 源码：{source}`, { source: source }));
 	}
 	const text = sections.has("text") && snap.text ? collapse(snap.text) : "";
-	if (text) out.push(`- 文本：${code(truncate(text, maxText))}`);
-	if (el.shot) out.push("- 截图：见本轮附图");
+	if (text) out.push(t(`- 文本：{maxText}`, { maxText: code(truncate(text, maxText)) }));
+	if (el.shot) out.push(t("- 截图：见本轮附图"));
 	if (sections.has("locator")) {
-		if (snap.xpath) out.push(`- XPath：${code(snap.xpath)}`);
-		if (snap.domPath) out.push(`- DOM：${code(snap.domPath)}`);
+		if (snap.xpath) out.push(t(`- XPath：{xpath}`, { xpath: code(snap.xpath) }));
+		if (snap.domPath) out.push(t(`- DOM：{domPath}`, { domPath: code(snap.domPath) }));
 	}
-	if (el.note?.trim()) out.push(`- 备注：${collapse(el.note)}`);
+	if (el.note?.trim()) out.push(t(`- 备注：{note}`, { note: collapse(el.note) }));
 
 	const rules = sections.has("rules") ? renderRules(snap) : [];
 	if (rules.length > 0) {
-		out.push("", "命中的 CSS：", "", "```css", ...rules, "```");
+		out.push("", t("命中的 CSS："), "", "```css", ...rules, "```");
 	}
 	const styles = sections.has("styles") ? renderStyles(snap) : "";
-	if (styles) out.push("", `计算样式（仅与默认/继承值不同的）：${styles}`);
+	if (styles) out.push("", t(`计算样式（仅与默认/继承值不同的）：{styles}`, { styles: styles }));
 	const skeleton = sections.has("skeleton") ? snap.htmlSkeleton?.trim() : "";
-	if (skeleton) out.push("", "HTML 骨架：", "", "```html", skeleton, "```");
+	if (skeleton) out.push("", t("HTML 骨架："), "", "```html", skeleton, "```");
 
 	out.push("");
 	return out;
@@ -134,8 +135,8 @@ function renderSource(snap: ElementSnapshot): string {
 	for (const up of src.chain ?? []) {
 		if (up && up !== src.component) who.push(code(up));
 	}
-	if (who.length > 0) parts.push(`（${who.join(" ← ")}）`);
-	if (src.kind === "css") parts.push("（样式命中位置）");
+	if (who.length > 0) parts.push(t(`（{join}）`, { join: who.join(" ← ") }));
+	if (src.kind === "css") parts.push(t("（样式命中位置）"));
 	if (parts.length === 0) return "";
 	return parts.join(" ");
 }
@@ -143,7 +144,7 @@ function renderSource(snap: ElementSnapshot): string {
 function renderRect(snap: ElementSnapshot): string {
 	const r = snap.rect;
 	const px = `${round(r.w)}×${round(r.h)} px`;
-	const pct = r.vwPct || r.vhPct ? `（视口 ${round(r.vwPct, 1)}% × ${round(r.vhPct, 1)}%）` : "";
+	const pct = r.vwPct || r.vhPct ? t(`（视口 {vwPct}% × {vhPct}%）`, { vwPct: round(r.vwPct, 1), vhPct: round(r.vhPct, 1) }) : "";
 	return `${px}${pct}`;
 }
 

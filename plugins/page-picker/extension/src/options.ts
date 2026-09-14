@@ -1,4 +1,6 @@
 /// <reference path="./chrome.d.ts" />
+import { currentLang, setLangPref, type LangPref, t } from "./shared/i18n.js";
+import { applyDomI18n } from "./shared/i18n-dom.js";
 /// <reference lib="dom" />
 /**
  * 设置页（options）。
@@ -55,6 +57,7 @@ const $ = <T extends HTMLElement>(id: string): T => {
 const fields = {
 	serverUrl: $<HTMLInputElement>("serverUrl"),
 	token: $<HTMLInputElement>("token"),
+	lang: $<HTMLSelectElement>("lang"),
 	preset: $<HTMLSelectElement>("preset"),
 	copyToClipboard: $<HTMLInputElement>("copyToClipboard"),
 	screenshots: $<HTMLInputElement>("screenshots"),
@@ -88,7 +91,7 @@ function buildSectionList(): void {
 	);
 	const custom = document.createElement("option");
 	custom.value = "custom";
-	custom.textContent = "自定义（自己勾）";
+	custom.textContent = t("自定义（自己勾）");
 	fields.preset.append(custom);
 
 	list.replaceChildren(
@@ -103,7 +106,7 @@ function buildSectionList(): void {
 				void (async () => {
 					await save();
 					// 提示要在「已保存」之后落笔，否则会被它覆盖掉
-					if (picked.length === 0) status("至少要勾一项；全不勾会回落成标准组合", "warn");
+					if (picked.length === 0) status(t("至少要勾一项；全不勾会回落成标准组合"), "warn");
 				})();
 			});
 			sectionBoxes.set(key, box);
@@ -143,6 +146,7 @@ function readForm(): PickerSettings {
 	return normalizeSettings({
 		serverUrl: fields.serverUrl.value,
 		token: fields.token.value,
+		lang: fields.lang.value as LangPref,
 		detail: depth,
 		sections: checkedSections(),
 		copyToClipboard: fields.copyToClipboard.checked,
@@ -157,6 +161,7 @@ function readForm(): PickerSettings {
 function fillForm(s: PickerSettings): void {
 	fields.serverUrl.value = s.serverUrl;
 	fields.token.value = s.token;
+	fields.lang.value = s.lang;
 	fields.copyToClipboard.checked = s.copyToClipboard;
 	fields.screenshots.checked = s.screenshots;
 	fields.focusTarget.checked = s.focusTarget;
@@ -170,11 +175,18 @@ function fillForm(s: PickerSettings): void {
 }
 
 async function load(): Promise<void> {
+	let settings: PickerSettings;
 	try {
-		fillForm(normalizeSettings(await chrome.storage.sync.get(null)));
+		settings = normalizeSettings(await chrome.storage.sync.get(null));
 	} catch {
-		fillForm(DEFAULT_SETTINGS);
+		settings = DEFAULT_SETTINGS;
 	}
+	// 先定语言，再把静态 HTML 与动态预设列表刷出来
+	setLangPref(settings.lang);
+	document.documentElement.lang = currentLang();
+	applyDomI18n(document);
+	buildSectionList();
+	fillForm(settings);
 }
 
 async function save(): Promise<void> {
@@ -182,7 +194,7 @@ async function save(): Promise<void> {
 	fields.serverUrl.value = settings.serverUrl; // 回显归一后的地址，让用户看到实际会用哪个
 	await chrome.storage.sync.set({ ...settings });
 	await refreshGrant();
-	status("已保存", "ok");
+	status(t("已保存"), "ok");
 }
 
 /** 该地址的 host 权限有没有（没有就请求；默认 localhost 已内置）。 */
@@ -199,44 +211,44 @@ async function refreshGrant(): Promise<void> {
 	const pattern = originPattern(fields.serverUrl.value);
 	const granted = await originGranted();
 	const label = $("grantState");
-	label.textContent = granted ? `已授权 ${pattern}` : `未授权 ${pattern}`;
+	label.textContent = granted ? t(`已授权 {pattern}`, { pattern: pattern }) : t(`未授权 {pattern}`, { pattern: pattern });
 	label.className = `grant-state ${granted ? "ok" : "warn"}`;
 	const button = $<HTMLButtonElement>("grant");
 	button.disabled = granted;
-	button.textContent = granted ? "已授权" : "授权该地址";
+	button.textContent = granted ? t("已授权") : t("授权该地址");
 }
 
 async function ensureOrigin(): Promise<boolean> {
 	const pattern = originPattern(fields.serverUrl.value);
 	const granted = await chrome.permissions.request({ origins: [pattern] });
 	await refreshGrant();
-	status(granted ? `已授权 ${pattern}` : `未授权 ${pattern}（非本机地址必须授权才能注入）`, granted ? "ok" : "err");
+	status(granted ? t(`已授权 {pattern}`, { pattern: pattern }) : t(`未授权 {pattern}（非本机地址必须授权才能注入）`, { pattern: pattern }), granted ? "ok" : "err");
 	return granted;
 }
 
 async function testConnection(): Promise<void> {
 	const base = normalizeServerUrl(fields.serverUrl.value);
 	if (!(await originGranted())) {
-		status(`未授权 ${originPattern(base)} —— 先点「授权该地址」`, "err");
+		status(t(`未授权 {base} —— 先点「授权该地址」`, { base: originPattern(base) }), "err");
 		return;
 	}
-	status("正在探测服务端…");
+	status(t("正在探测服务端…"));
 	try {
 		const res = await fetch(`${base}/api/health`, { cache: "no-store" });
 		if (!res.ok) {
-			status(`服务端返回 HTTP ${res.status}`, "err");
+			status(t(`服务端返回 HTTP {status}`, { status: res.status }), "err");
 			return;
 		}
 		const info = (await res.json()) as { cwd?: string; piVersion?: string };
 		const open = await countOpenTabs(base);
 		status(
 			open > 0
-				? `服务端在线（cwd: ${info.cwd ?? "?"}），已打开 ${open} 个 pi-web-ui 页面`
-				: `服务端在线（cwd: ${info.cwd ?? "?"}），但浏览器里还没打开这个页面 —— 投递需要它开着`,
+				? t(`服务端在线（cwd: {cwd}），已打开 {open} 个 pi-web-ui 页面`, { cwd: info.cwd ?? "?", open: open })
+				: t(`服务端在线（cwd: {cwd}），但浏览器里还没打开这个页面 —— 投递需要它开着`, { cwd: info.cwd ?? "?" }),
 			open > 0 ? "ok" : "warn",
 		);
 	} catch (err) {
-		status(`连不上服务端：${err instanceof Error ? err.message : String(err)}（地址对吗？证书受信吗？）`, "err");
+		status(t(`连不上服务端：{error}（地址对吗？证书受信吗？）`, { error: err instanceof Error ? err.message : String(err) }), "err");
 	}
 }
 
@@ -252,12 +264,16 @@ async function countOpenTabs(base: string): Promise<number> {
 	}
 }
 
-buildSectionList();
 for (const [key, node] of Object.entries(fields)) {
 	if (key === "preset") continue; // 预设自己处理（要连带勾选项与深度）
 	if (key === "allowShot") continue; // 截图要额外权限：勾选时先申请（见 toggleShot）
+	if (key === "lang") continue; // 语言切换后直接重载页面
 	node.addEventListener("change", () => void save());
 }
+fields.lang.addEventListener("change", async () => {
+	await save();
+	location.reload();
+});
 
 /**
  * 「允许截图」：勾选时先申请 `captureVisibleTab` 要求的权限（http/https 任意主机）。
@@ -269,7 +285,7 @@ for (const [key, node] of Object.entries(fields)) {
 async function toggleShot(on: boolean): Promise<void> {
 	if (!on) {
 		await save();
-		status("已关闭截图：模型只能靠 read 读 DOM 文本", "info");
+		status(t("已关闭截图：模型只能靠 read 读 DOM 文本"), "info");
 		return;
 	}
 	let granted = false;
@@ -281,11 +297,11 @@ async function toggleShot(on: boolean): Promise<void> {
 	}
 	if (!granted) {
 		fields.allowShot.checked = false;
-		status("截图需要「读取您在所有网站上的数据」权限：浏览器没给，已保持关闭", "err");
+		status(t("截图需要「读取您在所有网站上的数据」权限：浏览器没给，已保持关闭"), "err");
 		return;
 	}
 	await save();
-	status("已允许截图（截图时会把目标标签页切到前台，截完立刻切回）", "ok");
+	status(t("已允许截图（截图时会把目标标签页切到前台，截完立刻切回）"), "ok");
 }
 fields.allowShot.addEventListener("change", () => void toggleShot(fields.allowShot.checked));
 fields.preset.addEventListener("change", () => {
@@ -330,16 +346,16 @@ async function initBindPanel(): Promise<void> {
 	const body = $("bindBody");
 	const accept = $<HTMLButtonElement>("bindAccept");
 	if (already) {
-		title.textContent = `已经是当前服务地址：${base}`;
-		body.textContent = "无需改动。要换地址就直接改上面的输入框（改完自动保存）。";
+		title.textContent = t(`已经是当前服务地址：{base}`, { base: base });
+		body.textContent = t("无需改动。要换地址就直接改上面的输入框（改完自动保存）。");
 		accept.classList.add("hidden");
 	} else {
 		const granted = await originGranted();
-		title.textContent = granted ? `把 ${base} 设为服务地址？` : `检测到 pi-web-ui 页面：${base}`;
+		title.textContent = granted ? t(`把 {base} 设为服务地址？`, { base: base }) : t(`检测到 pi-web-ui 页面：{base}`, { base: base });
 		body.textContent = granted
-			? "该地址已授权，点下面按钮就能绑定（之后在别的页面拾取的内容都注入到这里）。"
-			: `浏览器要求在本页点一次才能授权 ${originPattern(base)}；点下面按钮即可授权并绑定。`;
-		accept.textContent = granted ? "设为服务地址" : "授权并绑定";
+			? t("该地址已授权，点下面按钮就能绑定（之后在别的页面拾取的内容都注入到这里）。")
+			: t(`浏览器要求在本页点一次才能授权 {base}；点下面按钮即可授权并绑定。`, { base: originPattern(base) });
+		accept.textContent = granted ? t("设为服务地址") : t("授权并绑定");
 		accept.addEventListener("click", () => void acceptBind(base));
 	}
 	$("bindPanel").classList.remove("hidden");
@@ -350,7 +366,7 @@ async function initBindPanel(): Promise<void> {
 async function acceptBind(base: string): Promise<void> {
 	if (!(await originGranted()) && !(await ensureOrigin())) return;
 	await save(); // save 会回显归一后的地址，用户看得见实际会用哪个
-	status(`已绑定 ${base} —— 以后拾取的内容都注入到这里`, "ok");
+	status(t(`已绑定 {base} —— 以后拾取的内容都注入到这里`, { base: base }), "ok");
 	$("bindPanel").classList.add("hidden");
 }
 
@@ -391,7 +407,7 @@ function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls?: string, text?: 
 function renderPairs(): void {
 	const list = $("pairList");
 	if (pairs.length === 0) {
-		list.replaceChildren(el("div", "empty", "还没有配对。桥默认关闭——只有列在这里的配对之间才能互相调用。"));
+		list.replaceChildren(el("div", "empty", t("还没有配对。桥默认关闭——只有列在这里的配对之间才能互相调用。")));
 		return;
 	}
 	list.replaceChildren(...pairs.map(renderPair));
@@ -400,7 +416,7 @@ function renderPairs(): void {
 function renderPair(pair: BridgePair): HTMLElement {
 	const card = el("div", `pair${pair.enabled ? "" : " off"}`);
 	card.append(el("div", "who", `${pair.a} ↔ ${pair.b}`));
-	const meta = el("div", "meta", pair.note ? `${pair.note} · 权限检查中…` : "权限检查中…");
+	const meta = el("div", "meta", pair.note ? t(`{note} · 权限检查中…`, { note: pair.note }) : t("权限检查中…"));
 	card.append(meta);
 
 	const toggle = el("input");
@@ -408,9 +424,9 @@ function renderPair(pair: BridgePair): HTMLElement {
 	toggle.checked = pair.enabled;
 	toggle.addEventListener("change", () => void setPairEnabled(pair, toggle.checked));
 	const toggleLabel = el("label", "check");
-	toggleLabel.append(toggle, el("span", undefined, pair.enabled ? "启用" : "已停用"));
+	toggleLabel.append(toggle, el("span", undefined, pair.enabled ? t("启用") : t("已停用")));
 
-	const drop = el("button", undefined, "删除配对");
+	const drop = el("button", undefined, t("删除配对"));
 	drop.addEventListener("click", () => void dropPair(pair));
 
 	const actions = el("div", "actions");
@@ -435,7 +451,7 @@ async function showPairPermission(meta: HTMLElement, pair: BridgePair): Promise<
 		if (!granted) missing.push(pattern);
 	}
 	const head = pair.note ? `${pair.note} · ` : "";
-	meta.textContent = missing.length === 0 ? `${head}两端已授权` : `${head}还缺授权：${missing.join("、")}`;
+	meta.textContent = missing.length === 0 ? t(`{head}两端已授权`, { head: head }) : t(`{head}还缺授权：{join}`, { head: head, join: missing.join("、") });
 }
 
 async function notifyPairsChanged(
@@ -456,7 +472,7 @@ async function addPair(): Promise<void> {
 		now: new Date().toISOString(),
 	});
 	if (merged.error || !merged.pair) {
-		pairStatus(merged.error ?? "配对不合法", "err");
+		pairStatus(merged.error ?? t("配对不合法"), "err");
 		return;
 	}
 	const pair = merged.pair;
@@ -468,7 +484,7 @@ async function addPair(): Promise<void> {
 		granted = false;
 	}
 	if (!granted) {
-		pairStatus(`没授权 ${patterns.join("、")} —— 不授权就没法在对端页面里装桥，也执行不了调用`, "err");
+		pairStatus(t(`没授权 {join} —— 不授权就没法在对端页面里装桥，也执行不了调用`, { join: patterns.join("、") }), "err");
 		return;
 	}
 	pairs = merged.pairs;
@@ -478,8 +494,8 @@ async function addPair(): Promise<void> {
 	const res = await notifyPairsChanged();
 	pairStatus(
 		res?.installed
-			? `已配对 ${pair.a} ↔ ${pair.b}；${res.installed} 个已打开的页面装上了桥`
-			: `已配对 ${pair.a} ↔ ${pair.b}（对端页面打开后会自动装桥）`,
+			? t(`已配对 {a} ↔ {b}；{installed} 个已打开的页面装上了桥`, { a: pair.a, b: pair.b, installed: res.installed })
+			: t(`已配对 {a} ↔ {b}（对端页面打开后会自动装桥）`, { a: pair.a, b: pair.b }),
 		"ok",
 	);
 	await refreshOriginOptions();
@@ -493,9 +509,9 @@ async function setPairEnabled(pair: BridgePair, enabled: boolean): Promise<void>
 	pairStatus(
 		enabled
 			? res?.installed
-				? `已启用；${res.installed} 个已打开的页面装上了桥`
-				: "已启用（对端页面打开后自动装桥）"
-			: "已停用：那一对页面上的桥已卸下",
+				? t(`已启用；{installed} 个已打开的页面装上了桥`, { installed: res.installed })
+				: t("已启用（对端页面打开后自动装桥）")
+			: t("已停用：那一对页面上的桥已卸下"),
 		"ok",
 	);
 }
@@ -505,7 +521,7 @@ async function dropPair(pair: BridgePair): Promise<void> {
 	await savePairs(pairs);
 	renderPairs();
 	const res = await notifyPairsChanged([pair.a, pair.b]);
-	pairStatus(res?.uninstalled ? `已删除；${res.uninstalled} 个页面卸下了桥` : "已删除配对", "ok");
+	pairStatus(res?.uninstalled ? t(`已删除；{uninstalled} 个页面卸下了桥`, { uninstalled: res.uninstalled }) : t("已删除配对"), "ok");
 }
 
 /** 配对候选：最近点过扩展图标的页面（带标题）+ 已配对过的 origin（它们不一定在最近列表里）。 */
@@ -513,8 +529,8 @@ async function refreshOriginOptions(): Promise<void> {
 	const known = new Map<string, string>();
 	for (const item of await loadRecent()) known.set(item.origin, item.title ?? item.origin);
 	for (const pair of pairs) {
-		if (!known.has(pair.a)) known.set(pair.a, `${pair.a}（已配对）`);
-		if (!known.has(pair.b)) known.set(pair.b, `${pair.b}（已配对）`);
+		if (!known.has(pair.a)) known.set(pair.a, t(`{a}（已配对）`, { a: pair.a }));
+		if (!known.has(pair.b)) known.set(pair.b, t(`{b}（已配对）`, { b: pair.b }));
 	}
 	const list = $("piOrigins");
 	list.replaceChildren(
@@ -541,7 +557,7 @@ async function initPairDeepLink(): Promise<void> {
 	const origin = normalizeOrigin(raw);
 	if (!origin) return;
 	pairFields.a.value = origin;
-	pairStatus(`已填入本页 ${origin} —— 在下面选另一个端点（两页都点过一次扩展图标就会出现在候选里）`, "info");
+	pairStatus(t(`已填入本页 {origin} —— 在下面选另一个端点（两页都点过一次扩展图标就会出现在候选里）`, { origin: origin }), "info");
 	pairFields.b.focus();
 }
 
@@ -583,7 +599,7 @@ function aiStatus(text: string, kind: "ok" | "err" | "warn" | "info" = "info"): 
 function renderAiPages(): void {
 	const list = $("aiList");
 	if (aiPages.length === 0) {
-		list.replaceChildren(el("div", "empty", "还没有授权任何页面 —— 模型现在没有可操作的页面。"));
+		list.replaceChildren(el("div", "empty", t("还没有授权任何页面 —— 模型现在没有可操作的页面。")));
 		return;
 	}
 	list.replaceChildren(
@@ -593,7 +609,7 @@ function renderAiPages(): void {
 			card.append(el("div", "who", named ? (page.title as string) : page.origin));
 			if (named) card.append(el("div", "meta", page.origin));
 			const actions = el("div", "actions");
-			const drop = el("button", undefined, "收回授权");
+			const drop = el("button", undefined, t("收回授权"));
 			drop.addEventListener("click", () => void revokePage(page));
 			actions.append(drop);
 			card.append(actions);
@@ -605,7 +621,7 @@ function renderAiPages(): void {
 async function grantPage(): Promise<void> {
 	const origin = normalizeOrigin($<HTMLInputElement>("aiPageInput").value);
 	if (!origin) {
-		aiStatus("地址不合法：要 http/https 的 origin，例如 http://localhost:5173", "err");
+		aiStatus(t("地址不合法：要 http/https 的 origin，例如 http://localhost:5173"), "err");
 		return;
 	}
 	const pattern = originPattern(origin);
@@ -617,7 +633,7 @@ async function grantPage(): Promise<void> {
 		granted = false;
 	}
 	if (!granted) {
-		aiStatus(`没授权 ${pattern} —— 不授权就没法在那个页面里装控制桥`, "err");
+		aiStatus(t(`没授权 {pattern} —— 不授权就没法在那个页面里装控制桥`, { pattern: pattern }), "err");
 		return;
 	}
 	// 标题从候选里带过来（用户认标题比认 origin 快）
@@ -628,8 +644,8 @@ async function grantPage(): Promise<void> {
 	const res = await notifyPairsChanged();
 	aiStatus(
 		res?.installed
-			? `已授权 ${origin}；${res.installed} 个已打开的页面已就绪`
-			: `已授权 ${origin}（打开那个页面后自动就绪）`,
+			? t(`已授权 {origin}；{installed} 个已打开的页面已就绪`, { origin: origin, installed: res.installed })
+			: t(`已授权 {origin}（打开那个页面后自动就绪）`, { origin: origin }),
 		"ok",
 	);
 	await refreshOriginOptions();
@@ -639,7 +655,7 @@ async function revokePage(page: AiPage): Promise<void> {
 	aiPages = await revokeAiPage(page.origin);
 	renderAiPages();
 	await notifyPairsChanged([page.origin]);
-	aiStatus(`已收回 ${page.origin} 的授权`, "ok");
+	aiStatus(t(`已收回 {origin} 的授权`, { origin: page.origin }), "ok");
 }
 
 /** `?grant=<url>`：从开发页的拾取浮条「让 AI 操作本页…」跳过来（已预填本页）。 */
@@ -649,7 +665,7 @@ async function initGrantDeepLink(): Promise<void> {
 	const origin = normalizeOrigin(raw);
 	if (!origin) return;
 	$<HTMLInputElement>("aiPageInput").value = origin;
-	aiStatus(`已填入 ${origin} —— 点「授权该页面」，它就成为模型可操作的页面`, "info");
+	aiStatus(t(`已填入 {origin} —— 点「授权该页面」，它就成为模型可操作的页面`, { origin: origin }), "info");
 	$<HTMLButtonElement>("aiGrant").focus();
 }
 

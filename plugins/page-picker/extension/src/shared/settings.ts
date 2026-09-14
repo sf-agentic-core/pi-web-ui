@@ -6,6 +6,7 @@
  * 就让拾取整条链挂掉**（回落到默认值继续工作）。
  */
 
+import { isLangPref, type LangPref } from "./i18n.js";
 import { isDetailLevel, normalizeSections, sectionsForDepth, type DetailLevel, type PickSection } from "./contract.js";
 
 export interface PickerSettings {
@@ -23,6 +24,13 @@ export interface PickerSettings {
 	screenshots: boolean;
 	/** 注入成功后是否把浏览器切到 pi-web-ui 标签页。 */
 	focusTarget: boolean;
+	/**
+	 * 界面语言：`auto`（跟随浏览器）/ `zh` / `en` / `es`。
+	 *
+	 * 只有 `auto` 需要探测（见 shared/i18n.ts）；其余是用户显式选择，优先级更高。
+	 * 选项页改了会立刻生效（页面上直接重载）。
+	 */
+	lang: LangPref;
 	/**
 	 * AI 操作页面总开关（模型经 `browser_page` 工具操作**已授权页面**的能力）。
 	 *
@@ -52,6 +60,7 @@ export const DEFAULT_SERVER_URL = "http://127.0.0.1:8787";
 export const DEFAULT_SETTINGS: PickerSettings = {
 	serverUrl: DEFAULT_SERVER_URL,
 	token: "",
+	lang: "auto",
 	detail: "standard",
 	sections: sectionsForDepth("standard"),
 	copyToClipboard: true,
@@ -90,6 +99,7 @@ export function normalizeSettings(raw: unknown): PickerSettings {
 	return {
 		serverUrl: normalizeServerUrl(src.serverUrl ?? DEFAULT_SETTINGS.serverUrl),
 		token: typeof src.token === "string" ? src.token.trim() : DEFAULT_SETTINGS.token,
+		lang: isLangPref(src.lang) ? src.lang : DEFAULT_SETTINGS.lang,
 		detail,
 		// 老版本设置里没有 sections（只有 detail）→ 按那个档位推导，升级后行为不变
 		sections: src.sections === undefined ? sectionsForDepth(detail) : normalizeSections(src.sections),

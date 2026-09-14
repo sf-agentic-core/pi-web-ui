@@ -14,6 +14,7 @@
 
 import { normalizeServerUrl } from "./settings.js";
 
+import { t } from "./i18n.js";
 /** MAIN world 探测出来的页面身份（跨进程只能传普通对象）。 */
 export interface PiProbe {
 	/** 是不是 pi-web-ui 页面。 */
@@ -55,17 +56,17 @@ export function bindView(pageUrl: string, boundUrl: string): BindView {
 			base,
 			bound,
 			same: true,
-			title: "这个页面就是已绑定的 pi-web-ui",
-			detail: `${base} —— 从别的页面拾取的内容会注入到这里。要在这个页面上拾取元素吗？`,
+			title: t("这个页面就是已绑定的 pi-web-ui"),
+			detail: t(`{base} —— 从别的页面拾取的内容会注入到这里。要在这个页面上拾取元素吗？`, { base: base }),
 		};
 	}
 	return {
 		base,
 		bound,
 		same: false,
-		title: "这个页面是 pi-web-ui",
-		detail: `把拾取的服务地址从 ${bound} 改成 ${base} 吗？改完之后，拾取的内容都注入到本页。`,
-		bindLabel: "设为服务地址",
+		title: t("这个页面是 pi-web-ui"),
+		detail: t(`把拾取的服务地址从 {bound} 改成 {base} 吗？改完之后，拾取的内容都注入到本页。`, { bound: bound, base: base }),
+		bindLabel: t("设为服务地址"),
 	};
 }
 

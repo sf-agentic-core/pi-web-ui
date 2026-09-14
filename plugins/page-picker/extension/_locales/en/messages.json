@@ -1,0 +1,14 @@
+{
+  "extName": {
+    "message": "pi-web-ui Element Picker"
+  },
+  "extDesc": {
+    "message": "Pick web elements during development, capture DOM structure, matched CSS rules (file:line) and React/Vue source positions, inject directly into pi-web-ui composer. Supports AI page control and cross-page bridge."
+  },
+  "actionTitle": {
+    "message": "Pick Web Elements (add to pi-web-ui chat)"
+  },
+  "commandToggle": {
+    "message": "Start picking web elements"
+  }
+}

@@ -1,4 +1,5 @@
 /// <reference lib="dom" />
+import { setLangPref, t } from "../shared/i18n.js";
 /**
  * 页面桥的**页面侧**（注入到被配对页面的 MAIN world）。
  *
@@ -69,7 +70,15 @@ export interface BridgePageInstallResult {
  * 只用来挡「偶发/无意的伪造 postMessage」——真正的边界是扩展后台按 `sender.tab.url` 判定
  * 出「你是谁」，再查配对表决定「你能跟谁说话」。
  */
-export function installBridgePage(options?: { peers?: unknown; self?: unknown; control?: unknown }): BridgePageInstallResult {
+export function installBridgePage(options?: {
+	peers?: unknown;
+	self?: unknown;
+	control?: unknown;
+	/** 界面语言（由 background 注入时带进来 —— MAIN world 里读不到 chrome.storage）。 */
+	lang?: unknown;
+}): BridgePageInstallResult {
+	// 这个函数跑在页面的 MAIN world：它自己的报错文案与右下角提示条都按这个语言渲染
+	setLangPref(options?.lang);
 	const g = globalThis as unknown as Record<string, unknown>;
 	const doc = (g as { document?: { documentElement?: { getAttribute?(name: string): string | null } } }).document;
 	const el = doc?.documentElement;
@@ -137,7 +146,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 	const str = (v: unknown): string => (typeof v === "string" ? v.trim() : "");
 
 	const cut = (text: string, max: number): string =>
-		text.length > max ? `${text.slice(0, max)}\n…（已截断，原文 ${text.length} 字）` : text;
+		text.length > max ? t(`{max}\n…（已截断，原文 {count} 字）`, { max: text.slice(0, max), count: text.length }) : text;
 
 	/** 元素的可见文本（innerText 会算上 CSS 隐藏；拿不到时退回 textContent）。 */
 	const textOf = (node: Element | null): string => {
@@ -229,7 +238,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 		if (what === "url") return { url: String((g as { location?: { href?: string } }).location?.href ?? "") };
 		const selector = str(args.selector);
 		if (what === "query") {
-			if (!selector) return { error: "read what=query 需要 selector" };
+			if (!selector) return { error: t("read what=query 需要 selector") };
 			const all = [...(docAny?.querySelectorAll(selector) ?? [])];
 			const limit = num(args.limit, 20, 1, 100);
 			const picked = (args.all === false ? all.slice(0, 1) : all).slice(0, limit);
@@ -242,19 +251,19 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 		}
 		if (what === "html") {
 			const node = selector ? (docAny?.querySelector(selector) ?? null) : (docAny?.documentElement ?? null);
-			if (selector && !node) return { error: `选择器没匹上：${selector}` };
+			if (selector && !node) return { error: t(`选择器没匹上：{selector}`, { selector: selector }) };
 			return { html: cut(node?.outerHTML ?? "", 20000), selector: selector || null };
 		}
 		const node = selector ? (docAny?.querySelector(selector) ?? null) : (docAny?.body ?? null);
-		if (selector && !node) return { error: `选择器没匹上：${selector}` };
+		if (selector && !node) return { error: t(`选择器没匹上：{selector}`, { selector: selector }) };
 		return { text: cut(textOf(node), 12000), selector: selector || null };
 	};
 
 	actions["click"] = (args) => {
 		const selector = str(args.selector);
-		if (!selector) return { error: "click 需要 selector" };
+		if (!selector) return { error: t("click 需要 selector") };
 		const node = find(args);
-		if (!node) return { error: `选择器没匹上：${selector}` };
+		if (!node) return { error: t(`选择器没匹上：{selector}`, { selector: selector }) };
 		try {
 			// 先滚进视口：不少页面靠 IntersectionObserver 才渲染/启用
 			node.scrollIntoView({ block: "center", inline: "center" });
@@ -269,9 +278,9 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 
 	actions["type"] = (args) => {
 		const selector = str(args.selector);
-		if (!selector) return { error: "type 需要 selector" };
+		if (!selector) return { error: t("type 需要 selector") };
 		const node = find(args);
-		if (!node) return { error: `选择器没匹上：${selector}` };
+		if (!node) return { error: t(`选择器没匹上：{selector}`, { selector: selector }) };
 		const text = typeof args.text === "string" ? args.text : "";
 		const asInput = node as HTMLElement;
 		try {
@@ -295,7 +304,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 		const win = g as unknown as { scrollTo: (x: number, y: number) => void; scrollBy: (x: number, y: number) => void; scrollX: number; scrollY: number };
 		if (selector) {
 			const node = docAny?.querySelector(selector) ?? null;
-			if (!node) return { error: `选择器没匹上：${selector}` };
+			if (!node) return { error: t(`选择器没匹上：{selector}`, { selector: selector }) };
 			try {
 				node.scrollIntoView({ block: "center", inline: "nearest" });
 			} catch {
@@ -308,14 +317,14 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 			const by = args.by as { x?: unknown; y?: unknown };
 			win.scrollBy(num(by.x, 0, -1e9, 1e9), num(by.y, 0, -1e9, 1e9));
 		} else {
-			return { error: "scroll 需要 selector / to / by 之一" };
+			return { error: t("scroll 需要 selector / to / by 之一") };
 		}
 		return { scrolled: true, x: Math.round(win.scrollX), y: Math.round(win.scrollY) };
 	};
 
 	actions["goto"] = (args) => {
 		const url = str(args.url);
-		if (!url) return { error: "goto 需要 url" };
+		if (!url) return { error: t("goto 需要 url") };
 		// 延后一拍再跳：直接把 location 改掉会让页面卸载，这次调用就变成「没有响应」——
 		// 模型只会看到一个莫名其妙的失败，而页面已经跳走了。
 		setTimeout(() => {
@@ -331,7 +340,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 	actions["wait"] = async (args) => {
 		const selector = str(args.selector);
 		const text = typeof args.text === "string" ? args.text : "";
-		if (!selector && !text) return { error: "wait 需要 selector 或 text" };
+		if (!selector && !text) return { error: t("wait 需要 selector 或 text") };
 		const timeout = num(args.timeoutMs, 5000, 1, 30000);
 		const started = Date.now();
 		for (;;) {
@@ -345,7 +354,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 				return {
 					found: null,
 					waitedMs: Date.now() - started,
-					note: `等了 ${timeout}ms 还是没出现（selector/text 可能不对，或者这一步需要先点/先输入）`,
+					note: t(`等了 {timeout}ms 还是没出现（selector/text 可能不对，或者这一步需要先点/先输入）`, { timeout: timeout }),
 				};
 			}
 			await sleep(100);
@@ -354,7 +363,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 
 	actions["eval"] = async (args) => {
 		const code = typeof args.code === "string" ? args.code : "";
-		if (!code.trim()) return { error: "eval 需要 code" };
+		if (!code.trim()) return { error: t("eval 需要 code") };
 		try {
 			// 间接 eval：在页面全局作用域里跑（不是本函数的局部作用域）
 			const value = await (0, eval)(code);
@@ -362,11 +371,9 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			return {
-				error: `${message}${
-					/eval|unsafe-eval|Content Security Policy/i.test(message)
+				error: t(`{message}{type}`, { message: message, type: /eval|unsafe-eval|Content Security Policy/i.test(message)
 						? "（这个页面通过 CSP 禁了 eval —— 换用 read/click/type 这些动作）"
-						: ""
-				}`,
+						: "" }),
 			};
 		}
 	};
@@ -416,7 +423,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 				box.className = "box";
 				const who = docAny!.createElement("span");
 				who.className = "t";
-				who.textContent = "AI 正在操作本页";
+				who.textContent = t("AI 正在操作本页");
 				const detail = docAny!.createElement("span");
 				detail.className = "d";
 				box.append(who, detail);
@@ -455,7 +462,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 		pending.delete(id);
 		clearTimeout(entry.timer);
 		if (msg.ok === true) entry.resolve(msg.value);
-		else entry.reject(new Error(typeof msg.error === "string" && msg.error ? msg.error : "对端调用失败"));
+		else entry.reject(new Error(typeof msg.error === "string" && msg.error ? msg.error : t("对端调用失败")));
 	};
 
 	const listeners = g as {
@@ -469,7 +476,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 			const r = (req && typeof req === "object" ? req : {}) as Record<string, unknown>;
 			const op = typeof r.op === "string" ? r.op.trim() : "";
 			if (!op) {
-				reject(new Error("call({ op }) 要带一个操作名"));
+				reject(new Error(t("call({ op }) 要带一个操作名")));
 				return;
 			}
 			const rawTimeout = typeof r.timeoutMs === "number" && Number.isFinite(r.timeoutMs) ? r.timeoutMs : 5000;
@@ -477,7 +484,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 			const id = `c${++seq}`;
 			const timer = setTimeout(() => {
 				pending.delete(id);
-				reject(new Error(`对端在 ${timeout}ms 内没回（op: ${op}）`));
+				reject(new Error(t(`对端在 {timeout}ms 内没回（op: {op}）`, { timeout: timeout, op: op })));
 			}, timeout);
 			pending.set(id, { resolve, reject, timer });
 			try {
@@ -499,7 +506,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 				// 结构化克隆失败（带了个 DOM 节点/函数）——在本地就报清楚，别让它落到「没反应」
 				pending.delete(id);
 				clearTimeout(timer);
-				reject(new Error(`参数发不出去：${err instanceof Error ? err.message : String(err)}（只能传普通数据）`));
+				reject(new Error(t(`参数发不出去：{error}（只能传普通数据）`, { error: err instanceof Error ? err.message : String(err) })));
 			}
 		});
 
@@ -513,14 +520,14 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 		builtin?: unknown,
 	): Promise<Record<string, unknown>> => {
 		const name = typeof op === "string" ? op.trim() : "";
-		if (!name) return { ok: false, error: "缺少操作名（op）", code: "bad-op" };
+		if (!name) return { ok: false, error: t("缺少操作名（op）"), code: "bad-op" };
 		if (builtin === true) {
 			const fn = builtinOps?.[name];
 			if (!fn) {
 				return {
 					ok: false,
 					code: "no-handler",
-					error: `不支持的动作 "${name}"（支持：${Object.keys(actions).join("、")}）`,
+					error: t(`不支持的动作 "{name}"（支持：{join}）`, { name: name, join: Object.keys(actions).join("、") }),
 				};
 			}
 			// 先在页面上留一个“谁在动”的痕迹（只报信、不拦截）
@@ -531,11 +538,11 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 				const out = await fn((args ?? {}) as Record<string, unknown>);
 				if (out && typeof out === "object" && "error" in (out as Record<string, unknown>)) {
 					const err = (out as Record<string, unknown>).error;
-					return { ok: false, code: "op-failed", error: typeof err === "string" ? err : "动作失败" };
+					return { ok: false, code: "op-failed", error: typeof err === "string" ? err : t("动作失败") };
 				}
 				return out === undefined ? { ok: true } : { ok: true, value: plain(out) };
 			} catch (err) {
-				return { ok: false, code: "op-failed", error: `动作 ${name} 抛错：${err instanceof Error ? err.message : String(err)}` };
+				return { ok: false, code: "op-failed", error: t(`动作 {name} 抛错：{error}`, { name: name, error: err instanceof Error ? err.message : String(err) }) };
 			}
 		}
 		const handler = handlers.get(name);
@@ -544,14 +551,14 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 			return {
 				ok: false,
 				code: "no-handler",
-				error: `对端页面没注册 "${name}"${known.length > 0 ? ` —— 它注册了：${known.join("、")}` : " —— 它一个操作都还没注册"}`,
+				error: t(`对端页面没注册 "{name}"{count}`, { name: name, count: known.length > 0 ? ` —— 它注册了：${known.join("、")}` : " —— 它一个操作都还没注册" }),
 			};
 		}
 		let value: unknown;
 		try {
 			value = await handler(args, { from: typeof from === "string" ? from : "" });
 		} catch (err) {
-			return { ok: false, error: `对端的 "${name}" 抛错：${err instanceof Error ? err.message : String(err)}` };
+			return { ok: false, error: t(`对端的 "{name}" 抛错：{error}`, { name: name, error: err instanceof Error ? err.message : String(err) }) };
 		}
 		if (value !== undefined) {
 			// 提前探一次：DOM 节点 / 函数这类东西会让 executeScript 回程抛 DataCloneError，
@@ -561,7 +568,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 			} catch (err) {
 				return {
 					ok: false,
-					error: `"${name}" 的返回值传不回来：${err instanceof Error ? err.message : String(err)}（只能返回普通数据）`,
+					error: t(`"{name}" 的返回值传不回来：{error}（只能返回普通数据）`, { name: name, error: err instanceof Error ? err.message : String(err) }),
 				};
 			}
 		}
@@ -581,7 +588,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 		pending = new Map();
 		for (const entry of held.values()) {
 			clearTimeout(entry.timer);
-			entry.reject(new Error("页面桥已被卸载"));
+			entry.reject(new Error(t("页面桥已被卸载")));
 		}
 		handlers.clear();
 		if (g.__piBridge === api) delete g.__piBridge;
@@ -595,7 +602,7 @@ export function installBridgePage(options?: { peers?: unknown; self?: unknown; c
 		...(builtinOps ? { __builtin: builtinOps } : {}),
 		on(op, handler) {
 			if (typeof op !== "string" || !op.trim() || typeof handler !== "function") {
-				throw new Error("on(op, handler)：op 要是非空字符串、handler 要是函数");
+				throw new Error(t("on(op, handler)：op 要是非空字符串、handler 要是函数"));
 			}
 			const name = op.trim();
 			handlers.set(name, handler);
@@ -630,26 +637,26 @@ export async function invokeBridgeHandler(req?: {
 	const g = globalThis as unknown as Record<string, unknown>;
 	const api = g.__piBridge as Partial<BridgePageInternal> | undefined;
 	if (!api || typeof api.__invoke !== "function") {
-		return { ok: false, code: "no-bridge", error: "对端页面还没装上页面桥（它可能刚导航过）—— 刷新那个页面再试" };
+		return { ok: false, code: "no-bridge", error: t("对端页面还没装上页面桥（它可能刚导航过）—— 刷新那个页面再试") };
 	}
 	if (req?.builtin === true && !api.__builtin) {
 		return {
 			ok: false,
 			code: "no-control",
-			error: "这个页面没被授权给 AI 操作 —— 在扩展选项页「AI 操作页面」里授权它",
+			error: t("这个页面没被授权给 AI 操作 —— 在扩展选项页「AI 操作页面」里授权它"),
 		};
 	}
 	try {
 		const res = (await api.__invoke(req?.op, req?.args, req?.from, req?.builtin)) as Record<string, unknown> | undefined;
-		if (!res || typeof res !== "object") return { ok: false, error: "对端页面桥返回了意外结果" };
+		if (!res || typeof res !== "object") return { ok: false, error: t("对端页面桥返回了意外结果") };
 		if (res.ok === true) return res.value === undefined ? { ok: true } : { ok: true, value: res.value };
 		return {
 			ok: false,
-			error: typeof res.error === "string" && res.error ? res.error : "对端调用失败",
+			error: typeof res.error === "string" && res.error ? res.error : t("对端调用失败"),
 			...(typeof res.code === "string" ? { code: res.code } : {}),
 		};
 	} catch (err) {
-		return { ok: false, error: `对端页面桥异常：${err instanceof Error ? err.message : String(err)}` };
+		return { ok: false, error: t(`对端页面桥异常：{error}`, { error: err instanceof Error ? err.message : String(err) }) };
 	}
 }
 

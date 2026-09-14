@@ -24,6 +24,7 @@
 import { bindView, type BindResult, type BindView } from "../shared/bind.js";
 import { DEFAULT_SERVER_URL } from "../shared/settings.js";
 
+import { setLangPref, t } from "../shared/i18n.js";
 const FLAG = "__piWebUiBindBar";
 const HOST_ID = "pi-page-picker-bind-host";
 
@@ -102,10 +103,10 @@ function createBar(): BarRuntime & { render: (view: BindView) => void } {
 	const title = el("div", { class: "t" });
 	const detail = el("div", { class: "d" });
 	const status = el("div", { class: "s hidden" });
-	const bindBtn = el("button", { class: "primary", text: "设为服务地址" });
-	const pickBtn = el("button", { text: "在本页拾取元素" });
-	const authBtn = el("button", { class: "hidden", text: "打开设置页授权" });
-	const closeBtn = el("button", { text: "关闭" });
+	const bindBtn = el("button", { class: "primary", text: t("设为服务地址") });
+	const pickBtn = el("button", { text: t("在本页拾取元素") });
+	const authBtn = el("button", { class: "hidden", text: t("打开设置页授权") });
+	const closeBtn = el("button", { text: t("关闭") });
 	const card = el("div", { class: "card hidden" }); // 认完页面才显示（否则非目标页会闪一下空卡片）
 	const foot = el("div", { class: "row" });
 	foot.append(pickBtn, authBtn, el("span", { class: "grow" }), closeBtn, bindBtn);
@@ -138,12 +139,12 @@ function createBar(): BarRuntime & { render: (view: BindView) => void } {
 		detail.textContent = view.detail;
 		// 已经是这个地址了：没有可绑的东西，只留「在本页拾取」（开发 pi-web-ui 自己时用得上）
 		bindBtn.classList.toggle("hidden", view.same);
-		bindBtn.textContent = view.same ? "" : (view.bindLabel ?? "设为服务地址");
-		if (view.same) say(`已绑定 ${view.base}`, "ok");
+		bindBtn.textContent = view.same ? "" : (view.bindLabel ?? t("设为服务地址"));
+		if (view.same) say(t(`已绑定 {base}`, { base: view.base }), "ok");
 	};
 	const onBind = async (): Promise<void> => {
 		bindBtn.disabled = true;
-		bindBtn.textContent = "正在绑定…";
+		bindBtn.textContent = t("正在绑定…");
 		let res: BindResult | undefined;
 		try {
 			res = (await chrome.runtime.sendMessage({ type: "page-picker:bind", url: location.href })) as
@@ -152,15 +153,15 @@ function createBar(): BarRuntime & { render: (view: BindView) => void } {
 			/* 通道断了也按失败处理，下面统一提示 */
 		}
 		if (!res) {
-			say("绑定失败：background 没响应，刷新页面后再试", "err");
+			say(t("绑定失败：background 没响应，刷新页面后再试"), "err");
 			bindBtn.disabled = false;
-			bindBtn.textContent = "设为服务地址";
+			bindBtn.textContent = t("设为服务地址");
 			return;
 		}
 		say(res.message, res.ok ? "ok" : res.needAuth ? "warn" : "err");
 		if (res.ok) {
 			bindBtn.disabled = false;
-			bindBtn.textContent = "已绑定";
+			bindBtn.textContent = t("已绑定");
 			bindBtn.classList.add("hidden");
 			window.setTimeout(destroy, 2600);
 			return;
@@ -168,7 +169,7 @@ function createBar(): BarRuntime & { render: (view: BindView) => void } {
 		// 没授权：页面上点的按钮给不了浏览器要的手势 → 去扩展自己的页面点一次
 		if (res.needAuth) authBtn.classList.remove("hidden");
 		bindBtn.disabled = false;
-		bindBtn.textContent = "重试绑定";
+		bindBtn.textContent = t("重试绑定");
 	};
 
 	bindBtn.addEventListener("click", () => void onBind());
@@ -211,7 +212,9 @@ void (async () => {
 	let bound = "";
 	try {
 		const res = (await chrome.runtime.sendMessage({ type: "page-picker:settings" })) as
-			{ serverUrl?: string } | undefined;
+			{ serverUrl?: string; lang?: unknown } | undefined;
+		// 语言要在 render 之前定（浮条的按钮 / 说明都是 t("…")）
+		setLangPref(res?.lang);
 		bound = res?.serverUrl ?? "";
 	} catch {
 		/* 拿不到设置也能问 —— bindView 会用默认地址兜底 */

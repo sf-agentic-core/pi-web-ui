@@ -1,0 +1,14 @@
+{
+  "extName": {
+    "message": "pi-web-ui Selector de Elementos"
+  },
+  "extDesc": {
+    "message": "Selecciona elementos web en desarrollo, captura estructura DOM, CSS coincidente (archivo:línea) y posición en React/Vue, e inyéctalos en pi-web-ui. Permite control con IA y puente entre páginas."
+  },
+  "actionTitle": {
+    "message": "Seleccionar elementos web (añadir al chat de pi-web-ui)"
+  },
+  "commandToggle": {
+    "message": "Comenzar a seleccionar elementos web"
+  }
+}

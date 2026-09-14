@@ -63,7 +63,14 @@ function main() {
 	const manifest = JSON.parse(readFileSync(join(here, "manifest.json"), "utf8"));
 	const version = manifest.version ?? "0.0.0";
 
-	const entries = [...entryFiles, ...distFiles]
+	let localeFiles = [];
+	try {
+		localeFiles = collect(join(here, "_locales"));
+	} catch {
+		// 没有 _locales 也没关系
+	}
+
+	const entries = [...entryFiles, ...distFiles, ...localeFiles]
 		.map((full) => ({
 			// zip 内一律用 / 分隔（Windows 的 \ 会让解压器建出奇怪的文件名）
 			name: relative(here, full).split("\\").join("/"),

@@ -38,6 +38,7 @@ import { pageContext, snapshotElement } from "./element.js";
 import { requestGrantHere, requestPairHere } from "./pair-here.js";
 import { createPresetControls } from "./preset-controls.js";
 
+import { setLangPref, t } from "../shared/i18n.js";
 const FLAG = "__piWebUiPagePicker";
 const HOST_ID = "pi-page-picker-host";
 
@@ -193,7 +194,7 @@ function createPicker(): PickerRuntime {
 		onToggleSection: (key, on) => applyPickOptions(detail, applySectionToggle(effectiveSections(), key, on)),
 		onRefuseEmpty: () => showToast("至少要留一项：全不勾会回落成标准组合", "err"),
 	});
-	const noteInput = el("input", { type: "text", placeholder: "整体说明（可选）：比如「这三处间距不一致」" });
+	const noteInput = el("input", { type: "text", placeholder: t("整体说明（可选）：比如「这三处间距不一致」") });
 	// 勾选项里按 Esc 也要能退（焦点落在我们自己的 UI 里时，全局键盘监听会跳过）—— 与备注框一致
 	presets.root.addEventListener("keydown", (e) => {
 		if (e.key !== "Escape") return;
@@ -201,31 +202,31 @@ function createPicker(): PickerRuntime {
 		if (phase === "editing") setPhase("picking");
 		else stop();
 	});
-	const sendBtn = el("button", { class: "primary", text: "添加到对话" });
-	const moreBtn = el("button", { text: "继续选" });
-	const cancelBtn = el("button", { text: "取消" });
+	const sendBtn = el("button", { class: "primary", text: t("添加到对话") });
+	const moreBtn = el("button", { text: t("继续选") });
+	const cancelBtn = el("button", { text: t("取消") });
 	// 两个“另一件事”的入口放在最左边（它们不该和发送按钮挤在一起）：
 	// 都在页面上给不了权限手势，所以只是把用户送到设置页那一次点击上
-	const grantBtn = el("button", { text: "让 AI 操作本页…" });
-	grantBtn.title = "授权后模型就能在对话里用 browser_page 工具读写这个页面（可随时在选项页收回）";
+	const grantBtn = el("button", { text: t("让 AI 操作本页…") });
+	grantBtn.title = t("授权后模型就能在对话里用 browser_page 工具读写这个页面（可随时在选项页收回）");
 	grantBtn.addEventListener("click", () => {
 		void (async () => {
 			const ok = await requestGrantHere(location.href);
 			showToast(
-				ok ? "已在设置页预填本页 —— 点「授权该页面」即生效" : "打不开设置页：请手动到扩展选项页里授权",
+				ok ? t("已在设置页预填本页 —— 点「授权该页面」即生效") : t("打不开设置页：请手动到扩展选项页里授权"),
 				ok ? "ok" : "err",
 			);
 		})();
 	});
-	const pairBtn = el("button", { text: "与另一页配对…" });
-	pairBtn.title = "把本页作为一个端点，去设置页选另一个页面（两个页面都点过扩展图标即可）";
+	const pairBtn = el("button", { text: t("与另一页配对…") });
+	pairBtn.title = t("把本页作为一个端点，去设置页选另一个页面（两个页面都点过扩展图标即可）");
 	pairBtn.addEventListener("click", () => {
 		void (async () => {
 			const ok = await requestPairHere(location.href);
 			showToast(
 				ok
-					? "已在设置页预填本页 —— 选另一个端点即可（另一个页面也要点过一次扩展图标）"
-					: "打不开设置页：请手动到扩展选项页里添加配对",
+					? t("已在设置页预填本页 —— 选另一个端点即可（另一个页面也要点过一次扩展图标）")
+					: t("打不开设置页：请手动到扩展选项页里添加配对"),
 				ok ? "ok" : "err",
 			);
 		})();
@@ -293,23 +294,23 @@ function createPicker(): PickerRuntime {
 		const parts: (Node | string)[] = [];
 		if (phase === "picking") {
 			parts.push(
-				el("span", { text: picked.length > 0 ? `继续点击追加，或` : "点击拾取元素" }),
-				el("span", { class: "k", text: "Shift+点击" }),
-				el("span", { text: "多选" }),
+				el("span", { text: picked.length > 0 ? t(`继续点击追加，或`) : t("点击拾取元素") }),
+				el("span", { class: "k", text: t("Shift+点击") }),
+				el("span", { text: t("多选") }),
 				el("span", { class: "k", text: "Enter" }),
-				el("span", { text: "完成" }),
+				el("span", { text: t("完成") }),
 				el("span", { class: "k", text: "Esc" }),
-				el("span", { text: "退出" }),
+				el("span", { text: t("退出") }),
 			);
-			if (picked.length > 0) parts.unshift(el("b", { text: `已选 ${picked.length}` }));
+			if (picked.length > 0) parts.unshift(el("b", { text: t(`已选 {count}`, { count: picked.length }) }));
 			// 当前预设写在这里（HUD 是不可点的纯信息条）—— 确认条里有 chip，这里只报「现在是哪个」
-			parts.push(el("span", { text: "预设" }), el("b", { text: presetShortLabel(effectiveSections()) }));
+			parts.push(el("span", { text: t("预设") }), el("b", { text: presetShortLabel(effectiveSections()) }));
 		} else {
 			parts.push(
-				el("b", { text: `已选 ${picked.length} 个元素` }),
-				el("span", { text: "确认后点「添加到对话」" }),
+				el("b", { text: t(`已选 {count} 个元素`, { count: picked.length }) }),
+				el("span", { text: t("确认后点「添加到对话」") }),
 				el("span", { class: "k", text: "Ctrl+Enter" }),
-				el("span", { text: "直接发送" }),
+				el("span", { text: t("直接发送") }),
 			);
 		}
 		hud.replaceChildren(...parts);
@@ -322,7 +323,7 @@ function createPicker(): PickerRuntime {
 			const idx = el("div", { class: "idx", text: String(i + 1) });
 			const sel = el("div", { class: "sel", text: p.snapshot.selector });
 			sel.title = p.snapshot.selector;
-			const input = el("input", { type: "text", placeholder: "这个元素的问题（可选）" });
+			const input = el("input", { type: "text", placeholder: t("这个元素的问题（可选）") });
 			input.value = p.note;
 			input.addEventListener("input", () => {
 				p.note = input.value;
@@ -407,7 +408,7 @@ function createPicker(): PickerRuntime {
 			/* 后台没响应 → 下面统一提示 */
 		}
 		if (!res?.ok) {
-			optionsNotice = "没同步到扩展设置（这次的选择只在本页生效）";
+			optionsNotice = t("没同步到扩展设置（这次的选择只在本页生效）");
 			renderBar();
 			return;
 		}
@@ -545,12 +546,12 @@ function createPicker(): PickerRuntime {
 	async function send(): Promise<void> {
 		if (picked.length === 0) return;
 		sendBtn.disabled = true;
-		sendBtn.textContent = "发送中…";
+		sendBtn.textContent = t("发送中…");
 		try {
 			const res = (await chrome.runtime.sendMessage({ type: "page-picker:picked", payload: buildPayload() })) as
 				{ ok?: boolean; message?: string; copy?: string } | undefined;
 			if (res?.copy) await copyText(res.copy);
-			showToast(res?.message ?? (res?.ok ? "已添加到对话" : "发送失败"), res?.ok ? "ok" : "err");
+			showToast(res?.message ?? (res?.ok ? t("已添加到对话") : t("发送失败")), res?.ok ? "ok" : "err");
 			if (res?.ok) {
 				stop();
 				return;
@@ -559,7 +560,7 @@ function createPicker(): PickerRuntime {
 			showToast(`发送失败：${err instanceof Error ? err.message : String(err)}`, "err");
 		}
 		sendBtn.disabled = false;
-		sendBtn.textContent = "添加到对话";
+		sendBtn.textContent = t("添加到对话");
 	}
 
 	/** 剪贴板：优先 async API，失败回退 execCommand（页面未聚焦时会走到这里）。 */
@@ -616,7 +617,7 @@ function createPicker(): PickerRuntime {
 			noteInput.value = "";
 			presets.setPanelOpen(false); // 新一轮从「只有六个 chip」开始，不叠着上轮的展开状态
 			sendBtn.disabled = false;
-			sendBtn.textContent = "添加到对话";
+			sendBtn.textContent = t("添加到对话");
 			(document.body ?? document.documentElement).append(host);
 			renderHud();
 			renderBar();
@@ -660,11 +661,13 @@ void (async () => {
 	let sections: PickSection[] | undefined;
 	try {
 		const res = (await chrome.runtime.sendMessage({ type: "page-picker:settings" })) as
-			{ detail?: DetailLevel; sections?: PickSection[] } | undefined;
+			{ detail?: DetailLevel; sections?: PickSection[]; lang?: unknown } | undefined;
+		// 先定语言再画 UI：浮条上所有文案都是 t("…")，语言必须在第一次渲染前生效
+		setLangPref(res?.lang);
 		detail = res?.detail;
 		sections = res?.sections;
 	} catch {
-		/* 拿不到设置也能用默认档拾取 */
+		/* 拿不到设置也能用默认档拾取（语言则按浏览器语言探测） */
 	}
 	const startOpts: { detail?: DetailLevel; sections?: PickSection[] } = {};
 	if (detail) startOpts.detail = detail;

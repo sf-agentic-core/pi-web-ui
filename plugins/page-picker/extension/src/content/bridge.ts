@@ -1,4 +1,5 @@
 /// <reference path="../chrome.d.ts" />
+import { t } from "../shared/i18n.js";
 /// <reference lib="dom" />
 /**
  * 页面桥的扩展侧（content script，**隔离世界**，注入到被配对的页面）。
@@ -79,11 +80,11 @@ async function forward(data: Record<string, unknown>): Promise<BridgeCallResult>
 			timeoutMs: data.timeoutMs,
 		})) as BridgeCallResult | undefined;
 		if (!res || typeof res !== "object") {
-			return { ok: false, error: "扩展后台返回了空结果（service worker 可能刚被回收）—— 重试一次" };
+			return { ok: false, error: t("扩展后台返回了空结果（service worker 可能刚被回收）—— 重试一次") };
 		}
 		return res;
 	} catch (err) {
-		return { ok: false, error: `扩展后台没响应：${err instanceof Error ? err.message : String(err)}` };
+		return { ok: false, error: t(`扩展后台没响应：{error}`, { error: err instanceof Error ? err.message : String(err) }) };
 	}
 }
 
@@ -92,7 +93,7 @@ function reply(id: unknown, result: BridgeCallResult): void {
 		window.postMessage(
 			result.ok
 				? { __piBridge: runtime.token, kind: "result", id, ok: true, value: result.value }
-				: { __piBridge: runtime.token, kind: "result", id, ok: false, error: result.error ?? "对端调用失败" },
+				: { __piBridge: runtime.token, kind: "result", id, ok: false, error: result.error ?? t("对端调用失败") },
 			"*",
 		);
 	} catch (err) {
@@ -105,7 +106,7 @@ function reply(id: unknown, result: BridgeCallResult): void {
 					kind: "result",
 					id,
 					ok: false,
-					error: `对端结果传不回来：${err instanceof Error ? err.message : String(err)}`,
+					error: t(`对端结果传不回来：{error}`, { error: err instanceof Error ? err.message : String(err) }),
 				},
 				"*",
 			);

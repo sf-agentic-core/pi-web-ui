@@ -1,4 +1,5 @@
 /// <reference lib="dom" />
+import { t } from "./i18n.js";
 /**
  * 「页面桥」的纯逻辑：配对表 + 路由决策 + 消息形状/体积校验。
  *
@@ -177,25 +178,25 @@ export function decideRoute(pairs: BridgePair[], fromOrigin: unknown, toOrigin?:
 		return {
 			ok: false,
 			code: "bad-origin",
-			message: `调用方地址不合法（${String(fromOrigin)}）—— 只支持 http/https 页面`,
+			message: t(`调用方地址不合法（{fromOrigin}）—— 只支持 http/https 页面`, { fromOrigin: String(fromOrigin) }),
 		};
 	}
 	const rawTo = typeof toOrigin === "string" ? toOrigin.trim() : "";
 	const want = rawTo ? normalizeOrigin(rawTo) : undefined;
 	if (rawTo && !want) {
-		return { ok: false, code: "bad-origin", message: `对端地址不合法（${rawTo}）—— 只支持 http/https 页面` };
+		return { ok: false, code: "bad-origin", message: t(`对端地址不合法（{rawTo}）—— 只支持 http/https 页面`, { rawTo: rawTo }) };
 	}
 	if (want === from) {
-		return { ok: false, code: "bad-origin", message: "对端就是自己 —— 桥是用来跨页面的" };
+		return { ok: false, code: "bad-origin", message: t("对端就是自己 —— 桥是用来跨页面的") };
 	}
 
 	const touching = pairs.filter((p) => pairOfOrigin(p, from));
 	const enabled = touching.filter((p) => p.enabled);
 	if (enabled.length === 0) {
 		if (touching.length > 0) {
-			return { ok: false, code: "disabled", message: `${from} 的配对已被停用 —— 到扩展选项页「页面桥」里重新启用` };
+			return { ok: false, code: "disabled", message: t(`{from} 的配对已被停用 —— 到扩展选项页「页面桥」里重新启用`, { from: from }) };
 		}
-		return { ok: false, code: "no-pair", message: `${from} 还没配对任何页面 —— 到扩展选项页「页面桥」里加一对` };
+		return { ok: false, code: "no-pair", message: t(`{from} 还没配对任何页面 —— 到扩展选项页「页面桥」里加一对`, { from: from }) };
 	}
 
 	const peerList = [...new Set(enabled.map((p) => peerOf(p, from)).filter((v): v is string => Boolean(v)))];
@@ -205,7 +206,7 @@ export function decideRoute(pairs: BridgePair[], fromOrigin: unknown, toOrigin?:
 			return {
 				ok: false,
 				code: "no-pair",
-				message: `${from} 与 ${want} 之间没有配对（当前配对的是：${peerList.join("、") || "无"}）`,
+				message: t(`{from} 与 {want} 之间没有配对（当前配对的是：{join}）`, { from: from, want: want, join: peerList.join("、") || "无" }),
 			};
 		}
 		return { ok: true, pair, peer: want };
@@ -214,7 +215,7 @@ export function decideRoute(pairs: BridgePair[], fromOrigin: unknown, toOrigin?:
 		return {
 			ok: false,
 			code: "ambiguous",
-			message: `${from} 配对了多个页面（${peerList.join("、")}）—— 调用时用 to 指定对端`,
+			message: t(`{from} 配对了多个页面（{join}）—— 调用时用 to 指定对端`, { from: from, join: peerList.join("、") }),
 		};
 	}
 	return { ok: true, pair: enabled[0], peer: peerList[0] };
@@ -237,7 +238,7 @@ export interface SizeCheck {
 export function measureForTransport(value: unknown, what: string, limit: number): SizeCheck {
 	if (value === undefined) return { ok: true, chars: 0 };
 	if (typeof value === "function" || typeof value === "symbol") {
-		return { ok: false, message: `${what}不能跨页面传输（函数 / Symbol 过不去）` };
+		return { ok: false, message: t(`{what}不能跨页面传输（函数 / Symbol 过不去）`, { what: what }) };
 	}
 	let text: string | undefined;
 	try {
@@ -245,15 +246,15 @@ export function measureForTransport(value: unknown, what: string, limit: number)
 	} catch (err) {
 		return {
 			ok: false,
-			message: `${what}不能跨页面传输：${err instanceof Error ? err.message : String(err)}（循环引用 / BigInt 过不去）`,
+			message: t(`{what}不能跨页面传输：{error}（循环引用 / BigInt 过不去）`, { what: what, error: err instanceof Error ? err.message : String(err) }),
 		};
 	}
-	if (text === undefined) return { ok: false, message: `${what}不能跨页面传输` };
+	if (text === undefined) return { ok: false, message: t(`{what}不能跨页面传输`, { what: what }) };
 	const chars = text.length;
 	if (chars > limit) {
 		return {
 			ok: false,
-			message: `${what}太大（${Math.round(chars / 1024)}KB > 上限 ${Math.round(limit / 1024)}KB）—— 只传必要字段`,
+			message: t(`{what}太大（{chars}KB > 上限 {limit}KB）—— 只传必要字段`, { what: what, chars: Math.round(chars / 1024), limit: Math.round(limit / 1024) }),
 		};
 	}
 	return { ok: true, chars };
@@ -283,12 +284,12 @@ export interface BridgeCall {
 export function parseBridgeCall(raw: unknown): { ok: true; call: BridgeCall } | { ok: false; message: string } {
 	const src = (raw && typeof raw === "object" ? raw : {}) as Record<string, unknown>;
 	const op = typeof src.op === "string" ? src.op.trim() : "";
-	if (!op) return { ok: false, message: "调用缺少操作名（op）" };
-	if (op.length > MAX_OP_CHARS) return { ok: false, message: `操作名过长（${op.length} > ${MAX_OP_CHARS}）` };
+	if (!op) return { ok: false, message: t("调用缺少操作名（op）") };
+	if (op.length > MAX_OP_CHARS) return { ok: false, message: t(`操作名过长（{count} > {MAX_OP_CHARS}）`, { count: op.length, MAX_OP_CHARS: MAX_OP_CHARS }) };
 	// eslint 风格的控制字符检查：op 是标签，混进换行/不可见字符只会让日志和报错变得难读
-	if (/[\u0000-\u001f\u007f]/.test(op)) return { ok: false, message: "操作名里有控制字符" };
-	const size = measureForTransport(src.args, "参数", MAX_ARGS_CHARS);
-	if (!size.ok) return { ok: false, message: size.message ?? "参数不合法" };
+	if (/[\u0000-\u001f\u007f]/.test(op)) return { ok: false, message: t("操作名里有控制字符") };
+	const size = measureForTransport(src.args, t("参数"), MAX_ARGS_CHARS);
+	if (!size.ok) return { ok: false, message: size.message ?? t("参数不合法") };
 	const to = typeof src.to === "string" && src.to.trim() ? src.to.trim() : undefined;
 	return {
 		ok: true,
@@ -303,7 +304,7 @@ export function parseBridgeCall(raw: unknown): { ok: true; call: BridgeCall } | 
 
 /** 一对配对的一句话描述（选项页与日志共用，免得两处漂移）。 */
 export function describePair(pair: BridgePair): string {
-	const note = pair.note ? `（${pair.note}）` : "";
+	const note = pair.note ? t(`（{note}）`, { note: pair.note }) : "";
 	return `${pair.a} ↔ ${pair.b}${note}`;
 }
 
@@ -316,8 +317,8 @@ export function upsertPair(
 ): { pairs: BridgePair[]; pair?: BridgePair; error?: string } {
 	const a = normalizeOrigin(x);
 	const b = normalizeOrigin(y);
-	if (!a || !b) return { pairs, error: "两端都要是 http/https 地址（如 https://a.example）" };
-	if (a === b) return { pairs, error: "两端不能是同一个地址" };
+	if (!a || !b) return { pairs, error: t("两端都要是 http/https 地址（如 https://a.example）") };
+	if (a === b) return { pairs, error: t("两端不能是同一个地址") };
 	const id = pairId(a, b);
 	const existing = pairs.find((p) => p.id === id);
 	const note = (opts.note ?? existing?.note ?? "").trim();
@@ -485,13 +486,13 @@ export function decideAiRoute(aiPages: AiPage[], toOrigin?: unknown): AiRouteDec
 	const rawTo = typeof toOrigin === "string" ? toOrigin.trim() : "";
 	const want = rawTo ? normalizeOrigin(rawTo) : undefined;
 	if (rawTo && !want) {
-		return { ok: false, code: "bad-origin", message: `目标页面地址不合法（${rawTo}）—— 只支持 http/https 页面` };
+		return { ok: false, code: "bad-origin", message: t(`目标页面地址不合法（{rawTo}）—— 只支持 http/https 页面`, { rawTo: rawTo }) };
 	}
 	if (aiPages.length === 0) {
 		return {
 			ok: false,
 			code: "no-page",
-			message: "还没有授权任何页面给 AI —— 在 page-picker 扩展的选项页「AI 操作页面」里授权一个页面",
+			message: t("还没有授权任何页面给 AI —— 在 page-picker 扩展的选项页「AI 操作页面」里授权一个页面"),
 		};
 	}
 	if (want) {
@@ -500,7 +501,7 @@ export function decideAiRoute(aiPages: AiPage[], toOrigin?: unknown): AiRouteDec
 			return {
 				ok: false,
 				code: "no-page",
-				message: `${want} 没有被授权给 AI（当前授权的：${aiPages.map((p) => p.origin).join("、")}）`,
+				message: t(`{want} 没有被授权给 AI（当前授权的：{join}）`, { want: want, join: aiPages.map((p) => p.origin).join("、") }),
 			};
 		}
 		return { ok: true, page, peer: want };
@@ -509,7 +510,7 @@ export function decideAiRoute(aiPages: AiPage[], toOrigin?: unknown): AiRouteDec
 		return {
 			ok: false,
 			code: "ambiguous",
-			message: `有多个已授权页面（${aiPages.map((p) => p.origin).join("、")}）—— 调用时用 target 指定一个`,
+			message: t(`有多个已授权页面（{join}）—— 调用时用 target 指定一个`, { join: aiPages.map((p) => p.origin).join("、") }),
 		};
 	}
 	return { ok: true, page: aiPages[0], peer: aiPages[0].origin };

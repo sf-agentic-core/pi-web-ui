@@ -1,4 +1,5 @@
 /// <reference lib="dom" />
+import { t } from "./i18n.js";
 /**
  * 网页元素拾取的数据契约（扩展各模块之间、以及扩展 → pi-webUi 之间的唯一定义）。
  *
@@ -37,14 +38,14 @@ export function isPickSection(v: unknown): v is PickSection {
 
 /** 每一项的中文说明（扩展 UI 是中文的，文案就放在这里，设置页直接读）。 */
 export const SECTION_INFO: Record<PickSection, { label: string; hint: string }> = {
-	page: { label: "页面上下文", hint: "URL / 标题 / 视口 / 疑似框架" },
-	selector: { label: "定位信息", hint: "选择器 + 标签名 + 尺寸（改代码时几乎总要）" },
-	locator: { label: "XPath 与 DOM 路径", hint: "选择器不唯一/失效时的兜底定位" },
-	source: { label: "源码位置", hint: "React/Vue 文件:行号 + 组件调用链 —— 「一次改对」的关键" },
-	text: { label: "文本内容", hint: "元素里的文字（过长会截断）" },
-	rules: { label: "命中的 CSS 规则", hint: "哪条规则命中了它、来自哪个文件的哪一行" },
-	styles: { label: "计算样式", hint: "只报与默认值/继承值不同的项（通常 3~5 行）" },
-	skeleton: { label: "HTML 骨架", hint: "结构（子节点折叠成 …），比整段 outerHTML 省得多" },
+	page: { get label() { return t("页面上下文"); }, get hint() { return t("URL / 标题 / 视口 / 疑似框架"); } },
+	selector: { get label() { return t("定位信息"); }, get hint() { return t("选择器 + 标签名 + 尺寸（改代码时几乎总要）"); } },
+	locator: { get label() { return t("XPath 与 DOM 路径"); }, get hint() { return t("选择器不唯一/失效时的兜底定位"); } },
+	source: { get label() { return t("源码位置"); }, get hint() { return t("React/Vue 文件:行号 + 组件调用链 —— 「一次改对」的关键"); } },
+	text: { get label() { return t("文本内容"); }, get hint() { return t("元素里的文字（过长会截断）"); } },
+	rules: { get label() { return t("命中的 CSS 规则"); }, get hint() { return t("哪条规则命中了它、来自哪个文件的哪一行"); } },
+	styles: { get label() { return t("计算样式"); }, get hint() { return t("只报与默认值/继承值不同的项（通常 3~5 行）"); } },
+	skeleton: { get label() { return t("HTML 骨架"); }, get hint() { return t("结构（子节点折叠成 …），比整段 outerHTML 省得多"); } },
 };
 
 /** 预设：常用组合（选项页下拉、拾取浮条上的 chip 都是它）。`depth` 决定采集深浅，`sections` 决定要哪几类信息。 */
@@ -62,49 +63,49 @@ export interface SectionPreset {
 export const SECTION_PRESETS: SectionPreset[] = [
 	{
 		id: "lean",
-		label: "精简（最省上下文）",
-		short: "精简",
-		hint: "只留定位 + 源码位置 + 短文本：大约三五行/元素",
+		get label() { return t("精简（最省上下文）"); },
+		get short() { return t("精简"); },
+		get hint() { return t("只留定位 + 源码位置 + 短文本：大约三五行/元素"); },
 		depth: "compact",
 		sections: ["page", "selector", "source", "text"],
 	},
 	{
 		id: "standard",
-		label: "标准（推荐）",
-		short: "标准",
-		hint: "再加命中的 CSS、计算样式差异与 HTML 骨架",
+		get label() { return t("标准（推荐）"); },
+		get short() { return t("标准"); },
+		get hint() { return t("再加命中的 CSS、计算样式差异与 HTML 骨架"); },
 		depth: "standard",
 		sections: ["page", "selector", "source", "text", "rules", "styles", "skeleton"],
 	},
 	{
 		id: "full",
-		label: "完整",
-		short: "完整",
-		hint: "全要，并采得更深（选择器/骨架更深、文本更长）",
+		get label() { return t("完整"); },
+		get short() { return t("完整"); },
+		get hint() { return t("全要，并采得更深（选择器/骨架更深、文本更长）"); },
 		depth: "full",
 		sections: [...PICK_SECTIONS],
 	},
 	{
 		id: "source",
-		label: "只要能改对地方",
-		short: "改对地方",
-		hint: "选择器 + 源码位置（React/Vue 文件:行号），不报样式",
+		get label() { return t("只要能改对地方"); },
+		get short() { return t("改对地方"); },
+		get hint() { return t("选择器 + 源码位置（React/Vue 文件:行号），不报样式"); },
 		depth: "standard",
 		sections: ["selector", "source"],
 	},
 	{
 		id: "styles",
-		label: "只排查样式",
-		short: "样式",
-		hint: "选择器 + 命中的 CSS + 计算样式差异（间距/颜色/布局问题）",
+		get label() { return t("只排查样式"); },
+		get short() { return t("样式"); },
+		get hint() { return t("选择器 + 命中的 CSS + 计算样式差异（间距/颜色/布局问题）"); },
 		depth: "standard",
 		sections: ["selector", "rules", "styles"],
 	},
 	{
 		id: "text",
-		label: "只看文案/结构",
-		short: "文案",
-		hint: "选择器 + 文本 + HTML 骨架，不报源码与样式",
+		get label() { return t("只看文案/结构"); },
+		get short() { return t("文案"); },
+		get hint() { return t("选择器 + 文本 + HTML 骨架，不报源码与样式"); },
 		depth: "compact",
 		sections: ["selector", "text", "skeleton"],
 	},
@@ -142,14 +143,14 @@ export function presetForSections(sections: PickSection[]): SectionPreset | unde
 
 /** 采集深浅的名字（拾取浮条上要显示「这次采多深」）。 */
 export const DETAIL_LABELS: Record<DetailLevel, string> = {
-	compact: "精简",
-	standard: "标准",
-	full: "完整",
+	get compact() { return t("精简"); },
+	get standard() { return t("标准"); },
+	get full() { return t("完整"); },
 };
 
 /** 当前组合的短名（浮条上的状态提示；不一致就是「自定义」）。 */
 export function presetShortLabel(sections: PickSection[]): string {
-	return presetForSections(sections)?.short ?? "自定义";
+	return presetForSections(sections)?.short ?? t("自定义");
 }
 
 /**
@@ -192,8 +193,8 @@ export function describeSections(sections: PickSection[]): string {
 	const names = sections.map((k) => SECTION_INFO[k].label);
 	const matched = presetForSections(sections);
 	return (
-		`当前发送：${names.length > 0 ? names.join(" / ") : "（都没勾 —— 将回落标准组合）"}` +
-		`（共 ${sections.length} 项${matched ? `，预设：${matched.label}` : "，自定义"}）`
+		t(`当前发送：{count}`, { count: names.length > 0 ? names.join(" / ") : "（都没勾 —— 将回落标准组合）" }) +
+		t(`（共 {count} 项{label}）`, { count: sections.length, label: matched ? `，预设：${matched.label}` : "，自定义" })
 	);
 }
 

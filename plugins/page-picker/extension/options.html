@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 	<head>
 		<meta charset="UTF-8" />
-		<title>pi-web-ui 元素拾取 · 设置</title>
+		<title data-i18n="pi-web-ui 元素拾取 · 设置">pi-web-ui 元素拾取 · 设置</title>
 		<style>
 			:root {
 				color-scheme: dark;
@@ -203,26 +203,43 @@
 	</head>
 	<body>
 		<main>
-			<h1>pi-web-ui 元素拾取</h1>
-			<div class="hint">
+			<fieldset>
+				<legend data-i18n="界面语言">界面语言</legend>
+				<label class="row"
+					><span data-i18n="语言">语言</span>
+					<select id="lang">
+						<option value="auto" data-i18n="跟随浏览器">跟随浏览器</option>
+						<option value="en">English</option>
+						<option value="es">Español</option>
+						<option value="zh">中文</option>
+					</select></label
+				>
+				<div class="hint" style="margin: 10px 0 0" data-i18n="默认跟随浏览器语言（中文界面显中文、西班牙文显西班牙文，其它语言一律英文）。 选了具体语言就固定用它 —— 选项页与页面上的拾取浮条同时生效。">
+					默认跟随浏览器语言（中文界面显中文、西班牙文显西班牙文，其它语言一律英文）。
+					选了具体语言就固定用它 —— 选项页与页面上的拾取浮条同时生效。
+				</div>
+			</fieldset>
+
+			<h1 data-i18n="pi-web-ui 元素拾取">pi-web-ui 元素拾取</h1>
+			<div class="hint" data-i18n-html="在开发网页上按扩展图标（或 <code>Alt+Shift+P</code>）开始拾取，选中的元素会整理成上下文注入 pi-web-ui 的输入框， 你补一句说明再发送。">
 				在开发网页上按扩展图标（或 <code>Alt+Shift+P</code>）开始拾取，选中的元素会整理成上下文注入 pi-web-ui 的输入框，
 				你补一句说明再发送。
 			</div>
 
 			<fieldset>
-				<legend>pi-web-ui 服务</legend>
+				<legend data-i18n="pi-web-ui 服务">pi-web-ui 服务</legend>
 				<label class="row"
-					><span>服务地址</span><input id="serverUrl" type="text" placeholder="http://127.0.0.1:8787"
+					><span data-i18n="服务地址">服务地址</span><input id="serverUrl" type="text" placeholder="http://127.0.0.1:8787"
 				/></label>
 				<label class="row"
-					><span>访问口令 PI_WEB_TOKEN</span><input id="token" type="password" placeholder="没开鉴权就留空"
+					><span data-i18n="访问口令 PI_WEB_TOKEN">访问口令 PI_WEB_TOKEN</span><input id="token" type="password" placeholder="没开鉴权就留空" data-i18n-placeholder="没开鉴权就留空"
 				/></label>
 				<div class="actions">
-					<button id="grant">授权该地址</button>
-					<button id="test">测试连接</button>
+					<button id="grant" data-i18n="授权该地址">授权该地址</button>
+					<button id="test" data-i18n="测试连接">测试连接</button>
 					<span id="status" class="status info"></span>
 				</div>
-				<div class="hint" style="margin: 10px 0 0">
+				<div class="hint" style="margin: 10px 0 0" data-i18n-html="只预置了 <code>localhost</code> / <code>127.0.0.1</code> 的权限。换成局域网 IP、域名或 https 地址（<b>远程部署就是这种</b>）后： 先点「授权该地址」。<br /> <b>更省事的办法：直接在 pi-web-ui 页面上点扩展图标</b> —— 扩展会认出那个页面， 在页面上问你「要不要把它设为服务地址」，地址和端口都不用手打。<br /> 投递是往<b>浏览器里打开的那个 pi-web-ui 页面</b >注入内容的，所以这个地址的页面得开着（可以在另一个标签页/窗口，不必是当前标签）； 页面关着时会退化成「复制 Markdown 到剪贴板」。">
 					只预置了 <code>localhost</code> / <code>127.0.0.1</code> 的权限。换成局域网 IP、域名或 https
 					地址（<b>远程部署就是这种</b>）后： 先点「授权该地址」。<br />
 					<b>更省事的办法：直接在 pi-web-ui 页面上点扩展图标</b> —— 扩展会认出那个页面，
@@ -233,18 +250,18 @@
 				</div>
 				<div class="grant-state warn" id="grantState"></div>
 				<div class="bind-panel hidden" id="bindPanel">
-					<b id="bindTitle">检测到 pi-web-ui 页面</b>
+					<b id="bindTitle" data-i18n="检测到 pi-web-ui 页面">检测到 pi-web-ui 页面</b>
 					<div class="hint" id="bindBody" style="margin: 0"></div>
 					<div class="actions" style="margin-top: 10px">
-						<button class="primary" id="bindAccept">授权并绑定</button>
-						<button id="bindDismiss">忽略</button>
+						<button class="primary" id="bindAccept" data-i18n="授权并绑定">授权并绑定</button>
+						<button id="bindDismiss" data-i18n="忽略">忽略</button>
 					</div>
 				</div>
 			</fieldset>
 
 			<fieldset>
-				<legend>AI 操作页面（让模型能读写网页）</legend>
-				<div class="hint" style="margin: 0 0 10px">
+				<legend data-i18n="AI 操作页面（让模型能读写网页）">AI 操作页面（让模型能读写网页）</legend>
+				<div class="hint" style="margin: 0 0 10px" data-i18n-html="授权之后，模型在对话里就能用 <code>browser_page</code> 工具操作那个页面： <code>read</code>（读文本 / 查元素）、<code>click</code>、<code>type</code>、<code>scroll</code>、<code>goto</code>、 <code>wait</code>，以及开关打开后的 <code>eval</code>（执行任意 JS）。<br /> <strong>另一端固定是 pi-web-ui 页面本身</strong>：模型的动作要从浏览器里那个 pi-web-ui 页面 送进扩展，所以<b>那个标签页得开着</b>（与拾取投递同一个取舍）；这里只需要授权被操作的那个页面。<br /> <strong>只对你信任的页面授权</strong>：授权后模型能点它、在它里面输入、读它的内容。可以随时收回。">
 					授权之后，模型在对话里就能用 <code>browser_page</code> 工具操作那个页面：
 					<code>read</code>（读文本 / 查元素）、<code>click</code>、<code>type</code>、<code>scroll</code>、<code>goto</code>、
 					<code>wait</code>，以及开关打开后的 <code>eval</code>（执行任意 JS）。<br />
@@ -254,19 +271,19 @@
 				</div>
 				<label class="check"
 					><input id="aiControl" type="checkbox" />
-					<span><b>允许 AI 操作页面（总开关）</b><i>关掉后模型的所有页面动作会被直接拒绝</i></span></label
+					<span data-i18n-html="<b>允许 AI 操作页面（总开关）</b><i>关掉后模型的所有页面动作会被直接拒绝</i>"><b>允许 AI 操作页面（总开关）</b><i>关掉后模型的所有页面动作会被直接拒绝</i></span></label
 				>
 				<label class="check"
 					><input id="allowEval" type="checkbox" />
 					<span
-						><b>允许执行任意 JS（eval，默认关）</b
+						 data-i18n-html="<b>允许执行任意 JS（eval，默认关）</b ><i>开了等于把页面交给模型写的脚本：能改数据、能提交表单、能发请求</i>"><b>允许执行任意 JS（eval，默认关）</b
 						><i>开了等于把页面交给模型写的脚本：能改数据、能提交表单、能发请求</i></span
 					></label
 				>
 				<label class="check"
 					><input id="allowShot" type="checkbox" />
 					<span
-						><b>允许截图（默认开）</b
+						 data-i18n-html="<b>允许截图（默认开）</b ><i >模型能看到页面长什么样。<b>打开它会申请「读取您在所有网站上的数据」</b>：浏览器的截图 API 只认这个权限（或你点图标那一刻的临时授权），普通授权不够。<br /> 另外截图只能截「当前活动标签页」，所以扩展会先把目标页切到前台、截完立刻切回（焦点会跳一下）。<br /> 不想给这个权限就保持关闭 —— 模型仍能靠 read 读 DOM 文本，只是“看不见”页面。</i >"><b>允许截图（默认开）</b
 						><i
 							>模型能看到页面长什么样。<b>打开它会申请「读取您在所有网站上的数据」</b>：浏览器的截图 API 只认这个权限（或你点图标那一刻的临时授权），普通授权不够。<br />
 							另外截图只能截「当前活动标签页」，所以扩展会先把目标页切到前台、截完立刻切回（焦点会跳一下）。<br />
@@ -275,22 +292,22 @@
 					></label
 				>
 				<label class="row"
-					><span>授权一个页面</span><input id="aiPageInput" type="text" list="piOrigins" placeholder="http://localhost:5173"
+					><span data-i18n="授权一个页面">授权一个页面</span><input id="aiPageInput" type="text" list="piOrigins" placeholder="http://localhost:5173"
 				/></label>
 				<div class="actions">
-					<button class="primary" id="aiGrant">授权该页面</button>
+					<button class="primary" id="aiGrant" data-i18n="授权该页面">授权该页面</button>
 					<span id="aiStatus" class="status info"></span>
 				</div>
 				<div class="pair-list" id="aiList"></div>
-				<div class="hint" style="margin: 10px 0 0">
+				<div class="hint" style="margin: 10px 0 0" data-i18n="地址不用手打：在目标页面上点一次扩展图标，它就会出现在候选里；或者在开发页的拾取浮条上点 「让 AI 操作本页…」，本页会自动预填好。">
 					地址不用手打：在目标页面上点一次扩展图标，它就会出现在候选里；或者在开发页的拾取浮条上点
 					「让 AI 操作本页…」，本页会自动预填好。
 				</div>
 			</fieldset>
 
 			<fieldset>
-				<legend>页面桥（让两个页面互相读写）</legend>
-				<div class="hint" style="margin: 0 0 10px">
+				<legend data-i18n="页面桥（让两个页面互相读写）">页面桥（让两个页面互相读写）</legend>
+				<div class="hint" style="margin: 0 0 10px" data-i18n-html="配对之后，这两个页面里的脚本可以互相调用： 对端用 <code>window.__piBridge.on(&quot;readOrders&quot;, () => …)</code> 注册能力，这边用 <code>await window.__piBridge.call({ op: &quot;readOrders&quot; })</code> 拿到结果。跨源、跨标签页、跨窗口都行 —— 浏览器里只有扩展能做到这件事。<br /> <strong>桥默认关闭</strong>：只有下面列出的配对能通，两端的 host 权限由你在这里授权。 被配对的页面里，<b>任何脚本</b>（包括第三方广告/统计脚本）都摸得到 <code>window.__piBridge</code>，所以<b>只对你信任的页面开桥</b>。">
 					配对之后，这两个页面里的脚本可以互相调用： 对端用
 					<code>window.__piBridge.on("readOrders", () => …)</code> 注册能力，这边用
 					<code>await window.__piBridge.call({ op: "readOrders" })</code> 拿到结果。跨源、跨标签页、跨窗口都行
@@ -300,21 +317,21 @@
 					<code>window.__piBridge</code>，所以<b>只对你信任的页面开桥</b>。
 				</div>
 				<label class="row"
-					><span>端点 A（origin）</span><input id="pairA" type="text" list="piOrigins" placeholder="http://localhost:5173"
+					><span data-i18n="端点 A（origin）">端点 A（origin）</span><input id="pairA" type="text" list="piOrigins" placeholder="http://localhost:5173"
 				/></label>
 				<label class="row"
-					><span>端点 B（origin）</span><input id="pairB" type="text" list="piOrigins" placeholder="https://tools.example"
+					><span data-i18n="端点 B（origin）">端点 B（origin）</span><input id="pairB" type="text" list="piOrigins" placeholder="https://tools.example"
 				/></label>
 				<label class="row"
-					><span>备注（可选）</span><input id="pairNote" type="text" placeholder="订单页 ↔ 本地工具页"
+					><span data-i18n="备注（可选）">备注（可选）</span><input id="pairNote" type="text" placeholder="订单页 ↔ 本地工具页" data-i18n-placeholder="订单页 ↔ 本地工具页"
 				/></label>
 				<datalist id="piOrigins"></datalist>
 				<div class="actions">
-					<button class="primary" id="pairAdd">授权并添加配对</button>
+					<button class="primary" id="pairAdd" data-i18n="授权并添加配对">授权并添加配对</button>
 					<span id="pairStatus" class="status info"></span>
 				</div>
 				<div class="pair-list" id="pairList"></div>
-				<div class="hint" style="margin: 10px 0 0">
+				<div class="hint" style="margin: 10px 0 0" data-i18n-html="<strong>地址不用手打</strong>：在要配对的两个页面里各点一次扩展图标，它们就会出现在上面两个输入框的 <b>候选下拉</b>里（点一下就填好了）；在开发页的拾取浮条上点「与另一页配对…」还能直接把本页预填好。<br /> 例子：在开发页里读线上后台的数据（<code>on(&quot;orders&quot;, …)</code> 在后台页）， 或者让 A 页控制 B 页（<code>on(&quot;highlight&quot;, ({id}) => document.querySelector(`#${id}`)?.scrollIntoView())</code>）。 对端页面没打开、或者没注册那个 op 时会得到一句说明原因的错误，而不是「没反应」。">
 					<strong>地址不用手打</strong>：在要配对的两个页面里各点一次扩展图标，它们就会出现在上面两个输入框的
 					<b>候选下拉</b>里（点一下就填好了）；在开发页的拾取浮条上点「与另一页配对…」还能直接把本页预填好。<br />
 					例子：在开发页里读线上后台的数据（<code>on("orders", …)</code> 在后台页）， 或者让 A 页控制 B
@@ -324,37 +341,37 @@
 			</fieldset>
 
 			<fieldset>
-				<legend>发送什么（可多选）</legend>
-				<div class="hint" style="margin: 0 0 10px">
+				<legend data-i18n="发送什么（可多选）">发送什么（可多选）</legend>
+				<div class="hint" style="margin: 0 0 10px" data-i18n-html="每一项都是一类信息，勾了就采、也发；没勾的<strong>根本不采</strong>（既省上下文也省时间）。 嫌信息多就先挑一个预设，再按需增减。">
 					每一项都是一类信息，勾了就采、也发；没勾的<strong>根本不采</strong>（既省上下文也省时间）。
 					嫌信息多就先挑一个预设，再按需增减。
 				</div>
 				<label class="row"
-					><span>预设</span>
+					><span data-i18n="预设">预设</span>
 					<select id="preset"></select
 				></label>
 				<div class="cols" id="sectionList"></div>
 				<label class="check" style="margin-top: 12px"
 					><input id="screenshots" type="checkbox" />
-					<span><b>采集元素截图</b><i>作为附件一并送进对话（纯文本模型请看视觉桥）</i></span></label
+					<span data-i18n-html="<b>采集元素截图</b><i>作为附件一并送进对话（纯文本模型请看视觉桥）</i>"><b>采集元素截图</b><i>作为附件一并送进对话（纯文本模型请看视觉桥）</i></span></label
 				>
 				<div class="hint" id="sectionSummary" style="margin-top: 6px"></div>
 			</fieldset>
 
 			<fieldset>
-				<legend>投递</legend>
+				<legend data-i18n="投递">投递</legend>
 				<label class="check"
 					><input id="copyToClipboard" type="checkbox" />
-					<span><b>同时复制 Markdown 到剪贴板</b><i>注入失败时的兜底，建议开着</i></span></label
+					<span data-i18n-html="<b>同时复制 Markdown 到剪贴板</b><i>注入失败时的兜底，建议开着</i>"><b>同时复制 Markdown 到剪贴板</b><i>注入失败时的兜底，建议开着</i></span></label
 				>
 				<label class="check"
 					><input id="focusTarget" type="checkbox" />
-					<span><b>注入后切到 pi-web-ui 标签页</b><i>关掉则留在当前网页继续看</i></span></label
+					<span data-i18n-html="<b>注入后切到 pi-web-ui 标签页</b><i>关掉则留在当前网页继续看</i>"><b>注入后切到 pi-web-ui 标签页</b><i>关掉则留在当前网页继续看</i></span></label
 				>
 			</fieldset>
 
 			<div class="actions">
-				<button id="reset">恢复默认</button>
+				<button id="reset" data-i18n="恢复默认">恢复默认</button>
 			</div>
 		</main>
 		<script type="module" src="dist/options.js"></script>

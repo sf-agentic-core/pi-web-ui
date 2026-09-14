@@ -48,6 +48,7 @@ import { loadSoundSettings, playSound, saveSoundSettings, type SoundKind, type S
 import { useWideChat } from "./chat-width-settings";
 import { projectNameFromCwd, useProjectTitle } from "./title-settings";
 import { notify } from "./notify";
+import { decideAvailabilityAnnouncement, loadLastSeenVersion, saveLastSeenVersion } from "./availability";
 import { useTheme } from "./theme";
 import { useWallpaperEffect } from "./wallpaper";
 
@@ -513,6 +514,48 @@ export function App() {
 			void notify(t("notifyErrorTitle"), t("notifyErrorBody"));
 		}
 	}, [chat.notices, sound]);
+
+	// Service availability cue — "the restart/deploy finished, keep working".
+	//
+	// The socket comes back on its own (reconnect backoff lives in use-chat), so
+	// this only has to notice the `ready` transition and say something useful:
+	// "online" when the same build returned, "updated" when the build itself
+	// changed. The second case also covers reloading during an outage, where the
+	// fresh page never saw an earlier `ready` (see availability.ts).
+	//
+	// The OS/PWA notification is raised here only for the page-alive case; with
+	// nothing running, the server pushes it instead and the service worker stays
+	// silent when it can see a window — so one restart never double-toasts.
+	const availabilityRef = useRef({ wasReady: false, sawReady: false });
+	useEffect(() => {
+		const announcement = decideAvailabilityAnnouncement({
+			wasReady: availabilityRef.current.wasReady,
+			isReady: chat.ready,
+			sawReadyBefore: availabilityRef.current.sawReady,
+			version: chat.appVersion ?? "",
+			lastSeenVersion: loadLastSeenVersion(),
+		});
+		availabilityRef.current = {
+			wasReady: chat.ready,
+			sawReady: availabilityRef.current.sawReady || chat.ready,
+		};
+		if (!chat.ready) return;
+		// Remember the build even when nothing is announced, so a plain reload of
+		// the same version stays quiet later.
+		saveLastSeenVersion(chat.appVersion ?? "");
+		if (!announcement) return;
+
+		const versionDelta =
+			announcement.kind === "updated"
+				? `v${announcement.previousVersion} → v${announcement.version}`
+				: t("notifyOnlineBody");
+		playSound("online", sound);
+		pushNotice(
+			"info",
+			announcement.kind === "updated" ? `${t("notifyOnlineTitle")} · ${versionDelta}` : t("notifyOnlineTitle"),
+		);
+		void notify(t("notifyOnlineTitle"), versionDelta);
+	}, [chat.ready, chat.appVersion, pushNotice, sound, t]);
 
 	const attach = (
 		path: string,

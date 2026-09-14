@@ -17,11 +17,13 @@ export interface SoundSettings {
 	start: boolean;
 	/** An error notice was raised. */
 	error: boolean;
+	/** The service came back after a restart/update. */
+	online: boolean;
 	/** Master volume 0–100. */
 	volume: number;
 }
 
-export type SoundKind = "question" | "done" | "start" | "error";
+export type SoundKind = "question" | "done" | "start" | "error" | "online";
 
 const STORAGE_KEY = "pi-web-sounds";
 
@@ -31,6 +33,9 @@ export const DEFAULT_SOUND_SETTINGS: SoundSettings = {
 	done: true,
 	start: false,
 	error: true,
+	// On by default: it fires once per restart, so it is confirmation rather than
+	// noise — and it is the cue that says "the deploy is done, keep working".
+	online: true,
 	volume: 100,
 };
 
@@ -43,7 +48,7 @@ export function loadSoundSettings(): SoundSettings {
 		const merged: SoundSettings = { ...DEFAULT_SOUND_SETTINGS, ...parsed };
 		// Sanitize stored values so a corrupted or out-of-range entry can't
 		// break the slider or the volume math.
-		for (const k of ["enabled", "question", "done", "start", "error"] as const) {
+		for (const k of ["enabled", "question", "done", "start", "error", "online"] as const) {
 			if (typeof merged[k] !== "boolean") merged[k] = DEFAULT_SOUND_SETTINGS[k];
 		}
 		if (typeof merged.volume !== "number" || !Number.isFinite(merged.volume)) {
@@ -116,12 +121,21 @@ const ERROR: Note[] = [
 	{ type: "square", freq: 220, start: 0, dur: 0.16, peak: 0.18 },
 	{ type: "square", freq: 174.61, start: 0.18, dur: 0.26, peak: 0.18 },
 ];
+/** Three ascending notes — the service is available again. Deliberately a third
+ *  distinct shape: `question` is two rising notes and `done` is two falling, so
+ *  a confused "which cue was that?" would be the whole feature's fault. */
+const ONLINE: Note[] = [
+	{ type: "sine", freq: 523.25, start: 0, dur: 0.12, peak: 0.36 },
+	{ type: "sine", freq: 659.25, start: 0.1, dur: 0.12, peak: 0.36 },
+	{ type: "sine", freq: 783.99, start: 0.2, dur: 0.22, peak: 0.36 },
+];
 
 const PATTERNS: Record<SoundKind, Note[]> = {
 	question: QUESTION,
 	done: DONE,
 	start: START,
 	error: ERROR,
+	online: ONLINE,
 };
 
 function tone(c: AudioContext, note: Note, volume: number): void {

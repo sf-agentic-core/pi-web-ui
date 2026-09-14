@@ -377,6 +377,8 @@ export const zh = {
 	notifyQuestionBody: "pi 正在等你回答一个问题。",
 	notifyErrorTitle: "出错了",
 	notifyErrorBody: "一个会话报告了错误。",
+	notifyOnlineTitle: "服务已上线",
+	notifyOnlineBody: "服务重新可用了。",
 	"sound.question": "问卷弹出",
 	"sound.question.desc": "ask_user_question 出现时",
 	"sound.done": "回复结束",
@@ -385,6 +387,8 @@ export const zh = {
 	"sound.start.desc": "智能体开始新一轮时",
 	"sound.error": "出错",
 	"sound.error.desc": "出现错误提示时",
+	"sound.online": "重新上线",
+	"sound.online.desc": "服务重启或更新后恢复可用时",
 
 	/* pi setup modal */
 	setupTitle: "未检测到 pi agent 配置",
@@ -1498,6 +1502,8 @@ const en: Record<keyof typeof zh, string> = {
 	notifyQuestionBody: "pi is waiting for your answer to a question.",
 	notifyErrorTitle: "Something went wrong",
 	notifyErrorBody: "A session reported an error.",
+	notifyOnlineTitle: "Service is online",
+	notifyOnlineBody: "The service is available again.",
 	"sound.question": "Question popup",
 	"sound.question.desc": "When ask_user_question appears",
 	"sound.done": "Reply finished",
@@ -1506,6 +1512,8 @@ const en: Record<keyof typeof zh, string> = {
 	"sound.start.desc": "When the agent starts a new turn",
 	"sound.error": "Error",
 	"sound.error.desc": "When an error notice appears",
+	"sound.online": "Back online",
+	"sound.online.desc": "When the service comes back after a restart or update",
 
 	/* pi setup modal */
 	setupTitle: "pi agent config not detected",

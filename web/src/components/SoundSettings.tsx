@@ -11,8 +11,8 @@ interface SoundSettingsProps {
 
 const SOUND_EVENTS: {
 	kind: SoundKind;
-	labelKey: "sound.question" | "sound.done" | "sound.start" | "sound.error";
-	descKey: "sound.question.desc" | "sound.done.desc" | "sound.start.desc" | "sound.error.desc";
+	labelKey: "sound.question" | "sound.done" | "sound.start" | "sound.error" | "sound.online";
+	descKey: "sound.question.desc" | "sound.done.desc" | "sound.start.desc" | "sound.error.desc" | "sound.online.desc";
 }[] = [
 	{
 		kind: "question",
@@ -20,6 +20,8 @@ const SOUND_EVENTS: {
 		descKey: "sound.question.desc",
 	},
 	{ kind: "done", labelKey: "sound.done", descKey: "sound.done.desc" },
+	// 重启/更新后恢复可用 —— 和「会话结束」一样属于「可以回来继续干活了」的提示。
+	{ kind: "online", labelKey: "sound.online", descKey: "sound.online.desc" },
 	{ kind: "start", labelKey: "sound.start", descKey: "sound.start.desc" },
 	{ kind: "error", labelKey: "sound.error", descKey: "sound.error.desc" },
 ];

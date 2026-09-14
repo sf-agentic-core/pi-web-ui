@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { currentLang, detectLang, interpolate, setLangPref, t } from "../../plugins/page-picker/extension/src/shared/i18n.js";
+import {
+	currentLang,
+	detectLang,
+	interpolate,
+	setLangPref,
+	t,
+} from "../../plugins/page-picker/extension/src/shared/i18n.js";
 import { EN } from "../../plugins/page-picker/extension/src/shared/locales/en.js";
 import { ES } from "../../plugins/page-picker/extension/src/shared/locales/es.js";
 import { readFileSync } from "node:fs";
@@ -21,6 +27,7 @@ describe("page-picker i18n", () => {
 		expect(currentLang()).toBe("en");
 		setLangPref("auto");
 		// In node without chrome.i18n, defaults to source language "zh"
+		expect(detectLang()).toBe("zh");
 		expect(currentLang()).toBe("zh");
 	});
 

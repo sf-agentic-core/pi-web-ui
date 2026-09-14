@@ -250,7 +250,7 @@ function wrapTemplate(inner) {
 		text += inner[i];
 		i++;
 	}
-	const msg = `\`${text.replace(/`/g, "\\`").replace(/\$\{/g, "\\${")}\``;
+	const msg = `\`${text.replace(/\\/g, "\\\\").replace(/`/g, "\\`").replace(/\$\{/g, "\\${")}\``;
 	if (params.length === 0) return `t(${msg})`;
 	const obj = params.map((p) => `${p.name}: ${p.expr}`).join(", ");
 	return `t(${msg}, { ${obj} })`;

@@ -124,6 +124,12 @@ export async function sendPush(
 		// to, so it is pruned rather than retried forever.
 		return { ok: false, outcome: "prune", error: describeError(err) };
 	}
+	// What leaves the machine here is exactly two things: a VAPID JWT signature
+	// (the key itself never leaves disk) and the encrypted payload, which holds a
+	// title and a short body. A scanner flags this call as "file data in outbound
+	// network request" because the endpoint is read from the subscription store —
+	// which is what a push subscription is. See the header of this file for the
+	// full list of what is deliberately never sent.
 	try {
 		const response = await doFetch(record.endpoint, {
 			method: "POST",

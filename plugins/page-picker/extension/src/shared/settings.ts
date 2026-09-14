@@ -28,9 +28,9 @@ export interface PickerSettings {
 	 * 界面语言：`auto`（跟随浏览器）/ `zh` / `en` / `es`。
 	 *
 	 * 只有 `auto` 需要探测（见 shared/i18n.ts）；其余是用户显式选择，优先级更高。
-	 * 选项页改了会立刻生效（页面上直接重载）。
+	 * 选项页改了会立刻生效（页面上直接重载）。缺省时由 normalizeSettings 补为 auto。
 	 */
-	lang: LangPref;
+	lang?: LangPref;
 	/**
 	 * AI 操作页面总开关（模型经 `browser_page` 工具操作**已授权页面**的能力）。
 	 *

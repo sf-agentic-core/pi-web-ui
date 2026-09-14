@@ -61,7 +61,17 @@ function recordSizeField(): Buffer {
 
 const CRV = "prime256v1";
 
-/** HKDF-Extract per RFC 5869: HMAC with the salt as key. */
+/**
+ * HKDF-Extract per RFC 5869: HMAC with the salt as key.
+ *
+ * A security scanner flags this as an "insufficient password hash". It is not
+ * password hashing: RFC 8291 §3.3 mandates exactly this construction, and the
+ * inputs are high-entropy (a 256-bit ECDH shared secret mixed with the 128-bit
+ * authentication secret the browser generated), so a deliberately slow KDF would
+ * buy nothing and would break interoperability with every browser. The
+ * derivation is pinned byte-for-byte against the RFC's worked example in
+ * tests/unit/push-ece.test.ts.
+ */
 function hkdfExtract(salt: Buffer, ikm: Buffer): Buffer {
 	return createHmac("sha256", salt).update(ikm).digest();
 }

@@ -6,7 +6,7 @@ Fork de [xing-shuyin/pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) para s
 
 - **No tocar picord/Discord**: la consola es una ruta adicional, no un reemplazo.
 - **Acceso privado**: solo Tailscale + autenticación propia; nunca expuesto a Internet público.
-- **Config centralizada**: los modelos, MCP, skills y settings provienen de `core-agent-library`.
+- **Config centralizada**: los modelos, MCP, skills y settings provienen de `pi-global-harness` (paquete global; `core-agent-library` está archivado y eliminado).
 - **Licencia MIT** (upstream): nuestro fork mantiene los cambios como commits/PRs versionados, revisables y re-vinculables a upstream (`git rebase upstream/main`).
 
 ## Decisiones de arquitectura
@@ -26,7 +26,7 @@ Fork de [xing-shuyin/pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) para s
 - [ ] Pin de versión y CI en el fork.
 
 ### M1 — Tachikoma personal (POC operativo)
-- [ ] Integrar config de `core-agent-library` (jerarquía workspace → core, vía enlace a repo).
+- [ ] Integrar config de `pi-global-harness` (jerarquía workspace → global, vía el `.pi/` del workspace).
 - [ ] UI de variables de entorno y secrets (core + workspace).
 - [ ] PWA instalable (manifest + service worker + iconos) para Android/PC.
 - [ ] Autenticación (login + cookie/sesión) sobre loopback.
@@ -46,5 +46,6 @@ Fork de [xing-shuyin/pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) para s
 
 ## Vinculación con la librería agéntica
 
-- El RFC/ADR correspondiente se mantiene en `core-agent-library/docs/` (sustituye al RFC-003 web-terminal).
-- Los MCP/skills/agentes que use la consola son los mismos de `core-agent-library`.
+- El RFC/ADR correspondiente se mantiene en `core-docs/adr/` (los ADRs se migraron desde
+  `core-agent-library/docs/adr/` el 2026-09-15).
+- Los MCP/skills/agentes que use la consola son los mismos de `pi-global-harness`.

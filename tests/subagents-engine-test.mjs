@@ -95,7 +95,9 @@ const mock = createServer(async (req, res) => {
 	const url = new URL(req.url ?? "/", `http://127.0.0.1:${MOCK_PORT}`);
 	if (url.pathname.endsWith("/models")) {
 		res.writeHead(200, { "content-type": "application/json" });
-		res.end(JSON.stringify({ object: "list", data: [{ id: MODEL_ID, object: "model", name: "Mock", input: ["text"] }] }));
+		res.end(
+			JSON.stringify({ object: "list", data: [{ id: MODEL_ID, object: "model", name: "Mock", input: ["text"] }] }),
+		);
 		return;
 	}
 	if (!url.pathname.endsWith("/chat/completions")) {
@@ -137,7 +139,10 @@ let failures = 0;
 
 /** Collapse line breaks and control characters so a server- or file-provided
  *  value cannot forge extra log lines (CodeQL js/log-injection). */
-const safe = (value) => String(value).replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").slice(0, 300);
+const safe = (value) =>
+	String(value)
+		.replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ")
+		.slice(0, 300);
 
 const check = (name, ok, extra = "") => {
 	console.log(`${ok ? "✓" : "✗"} ${safe(name)}${extra ? " — " + safe(extra) : ""}`);
@@ -204,7 +209,11 @@ try {
 	await sleep(800);
 
 	// --- default: first-party engine -----------------------------------------
-	check("default engine is pi-web-ui", client.settings.subagentEngine === "pi-web-ui", String(client.settings.subagentEngine));
+	check(
+		"default engine is pi-web-ui",
+		client.settings.subagentEngine === "pi-web-ui",
+		String(client.settings.subagentEngine),
+	);
 
 	const listed = client.settings.piSubagentsAgents ?? [];
 	check("pi-subagents agents are listed (read-only)", listed.length > 0, `${listed.length} found`);
@@ -233,10 +242,18 @@ try {
 		!relevantPresent(client.tools, FIRST_PARTY),
 		client.tools.filter((t) => t.startsWith("subagent") || t === "delegate_task").join(", ") || "none",
 	);
-	check("pi-subagents' `subagent` tool is exposed", client.tools.includes("subagent"), client.tools.filter((t) => t.includes("subagent")).join(", "));
+	check(
+		"pi-subagents' `subagent` tool is exposed",
+		client.tools.includes("subagent"),
+		client.tools.filter((t) => t.includes("subagent")).join(", "),
+	);
 
 	const persisted = JSON.parse(readFileSync(join(dataDir, "subagents-engine.json"), "utf8"));
-	check("engine persisted to <dataDir>/subagents-engine.json", persisted.engine === "pi-subagents", JSON.stringify(persisted));
+	check(
+		"engine persisted to <dataDir>/subagents-engine.json",
+		persisted.engine === "pi-subagents",
+		JSON.stringify(persisted),
+	);
 
 	// --- switch back ---------------------------------------------------------
 	client.send({ type: "set_subagent_engine", engine: "pi-web-ui" });

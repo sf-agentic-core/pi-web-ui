@@ -46,11 +46,7 @@ import {
 } from "./update-check.js";
 import { hasActiveSubagentRun, hasPendingWaitSubscription, shouldRetainActive } from "./wait-subscription-scan.js";
 import { discoverPiSubagentsAgents, type PiSubagentsAgent } from "./pi-subagents-agents.js";
-import {
-	PI_SUBAGENTS_EXTENSION_KEY,
-	SubagentsEngineStore,
-	type SubagentEngine,
-} from "./subagents-engine.js";
+import { PI_SUBAGENTS_EXTENSION_KEY, SubagentsEngineStore, type SubagentEngine } from "./subagents-engine.js";
 import { removeFirstOccurrence } from "./queue-utils.js";
 import type {
 	PluginAgentTool,
@@ -1998,9 +1994,7 @@ export class ClientSession {
 							out.push(WINDOWS_PERSONA);
 						}
 						if (
-							isTerminalGuidanceOn(
-								effectiveDisabledAgentTools(this.settingsSvc.current, this.subagentsEngine.get()),
-							)
+							isTerminalGuidanceOn(effectiveDisabledAgentTools(this.settingsSvc.current, this.subagentsEngine.get()))
 						) {
 							// 终端工具使用引导（全平台）：告诉模型什么场景该用持久终端
 							// 而不是一次性 bash——没有这段模型几乎从不主动选终端工具。
@@ -4021,10 +4015,7 @@ export class ClientSession {
 	 *  reload）。session.reload() 与新会话创建都会把 custom 工具加回活跃集，
 	 *  所以这两条路径之后都要重放本方法（见 reloadSession/创建处）。 */
 	private applyToolGating(session: AgentSession): void {
-		applyAgentToolsGating(
-			session,
-			effectiveDisabledAgentTools(this.settingsSvc.current, this.subagentsEngine.get()),
-		);
+		applyAgentToolsGating(session, effectiveDisabledAgentTools(this.settingsSvc.current, this.subagentsEngine.get()));
 		// SDK 的 setActiveToolsByName 只改 agent.state.tools，不派发任何事件——门控后
 		// 主动推一次快照，否则快照里的 tools 要等下一个 SDK 事件才对齐（会话空闲时永远
 		// 等不到；回归：tests/terminal-smoke-test.mjs「agent exposes persistent terminal tools」）。

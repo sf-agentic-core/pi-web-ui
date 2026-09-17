@@ -248,10 +248,7 @@ import type { UiSubagentEngine } from "./protocol.js";
  *  active engine. `delegate_task` is included on purpose: it is a front-end onto
  *  the same spawn channel (SubagentToolHost.spawnSubagent), so leaving it enabled
  *  would keep the pi-web-ui engine reachable and the ambiguity alive. */
-export const PI_WEB_UI_ONLY_SUBAGENT_TOOLS: readonly string[] = [
-	...SUBAGENT_TOOL_NAMES,
-	DELEGATE_TASK_TOOL_NAME,
-];
+export const PI_WEB_UI_ONLY_SUBAGENT_TOOLS: readonly string[] = [...SUBAGENT_TOOL_NAMES, DELEGATE_TASK_TOOL_NAME];
 
 /** Extra tools to hide because the OTHER subagent engine is active. In
  *  pi-subagents mode the extension's `subagent` tool is the single delegation
@@ -265,10 +262,7 @@ export function engineDisabledAgentTools(engine: UiSubagentEngine): string[] {
  * 门控实效名单：新字段 + 问卷别名合并（问卷关 = ask 工具必关，双保险；
  * 两处平时由 set() 同步一致，合并只防陈旧会话/旧客户端的半边状态）。
  */
-export function effectiveDisabledAgentTools(
-	s: LegacyToolSwitches,
-	engine: UiSubagentEngine = "pi-web-ui",
-): string[] {
+export function effectiveDisabledAgentTools(s: LegacyToolSwitches, engine: UiSubagentEngine = "pi-web-ui"): string[] {
 	const next = new Set(legacyToDisabled({ ...s, disabledAgentTools: s.disabledAgentTools }));
 	if (s.questionnaireEnabled === false) next.add(ASK_USER_QUESTION_TOOL_NAME);
 	for (const name of engineDisabledAgentTools(engine)) next.add(name);

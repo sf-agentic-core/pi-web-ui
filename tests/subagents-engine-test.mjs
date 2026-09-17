@@ -263,9 +263,18 @@ try {
 	check("switching back restores the first-party tools", relevantPresent(client.tools, FIRST_PARTY));
 	check("switching back hides `subagent` again", !client.tools.includes("subagent"));
 } catch (error) {
-	console.error("✗ 异常:", error instanceof Error ? error.message : error);
-	console.error("--- server log ---");
-	console.error(serverLog.join("").slice(-3000));
+	console.error("✗ exception:", safe(error instanceof Error ? error.message : error));
+	// The captured server output is raw (and therefore tainted) text, so it is
+	// written to a file instead of printed: dumping it to stdout is a
+	// log-injection sink, and a file also keeps the WHOLE log readable rather
+	// than the last 3000 characters.
+	try {
+		const dumpPath = join(base, "server.log");
+		writeFileSync(dumpPath, serverLog.join(""));
+		console.error(`--- full server log: ${safe(dumpPath)} ---`);
+	} catch {
+		console.error("--- server log unavailable ---");
+	}
 	failures++;
 } finally {
 	try {

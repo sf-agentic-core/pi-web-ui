@@ -45,6 +45,8 @@ import {
 	type UpdateItem,
 } from "./update-check.js";
 import { hasActiveSubagentRun, hasPendingWaitSubscription, shouldRetainActive } from "./wait-subscription-scan.js";
+import { discoverPiSubagentsAgents, type PiSubagentsAgent } from "./pi-subagents-agents.js";
+import { PI_SUBAGENTS_EXTENSION_KEY, SubagentsEngineStore, type SubagentEngine } from "./subagents-engine.js";
 import { removeFirstOccurrence } from "./queue-utils.js";
 import type {
 	PluginAgentTool,
@@ -1523,7 +1525,9 @@ export class ClientSession {
 			piExamples: PI_DOC_PATHS.examples,
 			appendFiles: this.lastSdkAppendFiles,
 			windowsPersona: process.platform === "win32" ? WINDOWS_PERSONA : "",
-			terminalGuidance: isTerminalGuidanceOn(effectiveDisabledAgentTools(this.settingsSvc.current))
+			terminalGuidance: isTerminalGuidanceOn(
+				effectiveDisabledAgentTools(this.settingsSvc.current, this.subagentsEngine.get()),
+			)
 				? TERMINAL_TOOLS_GUIDANCE
 				: "",
 			markersGuidance: this.markerSvc.buildGuidance(),
@@ -1752,6 +1756,10 @@ export class ClientSession {
 
 	/** 子代理模板库（全局共享，<dataDir>/subagent-templates.json）。 */
 	private readonly subagentTemplates: SubagentTemplatesStore;
+	/** Active subagent engine (global, <dataDir>/subagents-engine.json). Decides
+	 *  which delegation surface the AI gets: the first-party tools, or the
+	 *  pi-subagents extension's `subagent` tool — never both. */
+	private readonly subagentsEngine: SubagentsEngineStore;
 	/** 内置标记服务（todo/notify/svc/rename 等，可全局/分组开关）。 */
 	private readonly markerSvc: MarkerService;
 
@@ -1793,6 +1801,7 @@ export class ClientSession {
 		this.agentDir = agentDir;
 		this.stateStore = stateStore;
 		this.subagentTemplates = new SubagentTemplatesStore(join(stateStore.dataDir, "subagent-templates.json"));
+		this.subagentsEngine = new SubagentsEngineStore(join(stateStore.dataDir, "subagents-engine.json"));
 		this.markerSvc = new MarkerService({
 			clientId,
 			stateStore,
@@ -1843,6 +1852,9 @@ export class ClientSession {
 				},
 				applyRetryOverrides: () => this.applyRetryOverrides(),
 				applyToolGating: () => this.applyToolGating(this.session),
+				getSubagentEngine: () => this.subagentsEngine.get(),
+				setSubagentEngine: async (engine: SubagentEngine) => this.setSubagentEngine(engine),
+				listPiSubagentsAgents: () => this.listPiSubagentsAgents(),
 				promptSnapshot: () => this.promptSnapshot(),
 				getMarkerState: () => ({
 					markersEnabled: this.markerSvc.current.markersEnabled,
@@ -1981,7 +1993,9 @@ export class ClientSession {
 							// GBK 老中文文件让模型改用终端按正确编码读（iconv/chcp/Get-Content）。
 							out.push(WINDOWS_PERSONA);
 						}
-						if (isTerminalGuidanceOn(effectiveDisabledAgentTools(this.settingsSvc.current))) {
+						if (
+							isTerminalGuidanceOn(effectiveDisabledAgentTools(this.settingsSvc.current, this.subagentsEngine.get()))
+						) {
 							// 终端工具使用引导（全平台）：告诉模型什么场景该用持久终端
 							// 而不是一次性 bash——没有这段模型几乎从不主动选终端工具。
 							// 组内工具全关时不注入（不教 AI 用不存在的工具）。
@@ -2009,7 +2023,11 @@ export class ClientSession {
 					// 匹配 —— isExtensionDisabled / isExtensionEnabled 同时比对 npm:<pkg> 候选键。
 					extensionsOverride: (res) => {
 						// 自家内联扩展（灵魂替换）是基础设施，不参与白名单/禁用过滤。
-						const keepOwn = (e: { path: string }) => !e.path.startsWith(INLINE_PERSONA_EXT);
+						// NOTE: this predicate answers "is this OUR inline extension?", so it must
+						// be true only for the inline persona. It used to be negated, which made
+						// `keepOwn(e) || ...` true for every third-party extension and silently
+						// turned the whole disable/whitelist filtering into a no-op.
+						const keepOwn = (e: { path: string }) => e.path.startsWith(INLINE_PERSONA_EXT);
 						if (apply && apply.enabledExtensions.length > 0) {
 							const set = new Set(apply.enabledExtensions);
 							return {
@@ -2020,7 +2038,7 @@ export class ClientSession {
 						return {
 							...res,
 							extensions: res.extensions.filter(
-								(e) => keepOwn(e) || !isExtensionDisabled(e, this.settingsSvc.current.disabledExtensions),
+								(e) => keepOwn(e) || !isExtensionDisabled(e, this.effectiveDisabledExtensions()),
 							),
 						};
 					},
@@ -3953,12 +3971,51 @@ export class ClientSession {
 		return this.settingsSvc.applyRuntime();
 	}
 
+	// -----------------------------------------------------------------------
+	// Subagent engine (global switch) — exactly one delegation surface at a time.
+	// pi-web-ui mode hides the pi-subagents extension; pi-subagents mode hides the
+	// first-party subagent_* tools + delegate_task (see tool-manager).
+	// -----------------------------------------------------------------------
+
+	/** Client-disabled extensions plus the engine-derived ones. In pi-web-ui mode
+	 *  the pi-subagents extension is filtered out of the resource loader, so its
+	 *  `subagent` tool is never registered for the session. */
+	private effectiveDisabledExtensions(): string[] {
+		const base = this.settingsSvc.current.disabledExtensions;
+		if (this.subagentsEngine.get() !== "pi-web-ui") return base;
+		return base.includes(PI_SUBAGENTS_EXTENSION_KEY) ? base : [...base, PI_SUBAGENTS_EXTENSION_KEY];
+	}
+
+	/** Active subagent engine (global — every client sees the same one). */
+	getSubagentEngine(): SubagentEngine {
+		return this.subagentsEngine.get();
+	}
+
+	/** Agent definitions found under pi-subagents' workspace + global roots.
+	 *  Read-only listing; the panel never writes these files. */
+	listPiSubagentsAgents(): PiSubagentsAgent[] {
+		try {
+			return discoverPiSubagentsAgents(this.cwd, this.agentDir);
+		} catch {
+			return [];
+		}
+	}
+
+	/** Persist a new engine. The extension set is decided when a runtime is built,
+	 *  so this reloads rather than relying on the live tool gating alone: the
+	 *  reload replays applyToolGating, which reads the engine store again. */
+	async setSubagentEngine(engine: SubagentEngine): Promise<void> {
+		if (this.subagentsEngine.get() === engine) return;
+		this.subagentsEngine.set(engine);
+		await this.settingsSvc.applyRuntime();
+	}
+
 	/** 统一工具门控（tool_manage 唯一落点）：按 disabledAgentTools 把目录内工具
 	 *  逐个加回/剔除活跃集（工具仍留在注册表，重开可直接加回；live 生效无需
 	 *  reload）。session.reload() 与新会话创建都会把 custom 工具加回活跃集，
 	 *  所以这两条路径之后都要重放本方法（见 reloadSession/创建处）。 */
 	private applyToolGating(session: AgentSession): void {
-		applyAgentToolsGating(session, effectiveDisabledAgentTools(this.settingsSvc.current));
+		applyAgentToolsGating(session, effectiveDisabledAgentTools(this.settingsSvc.current, this.subagentsEngine.get()));
 		// SDK 的 setActiveToolsByName 只改 agent.state.tools，不派发任何事件——门控后
 		// 主动推一次快照，否则快照里的 tools 要等下一个 SDK 事件才对齐（会话空闲时永远
 		// 等不到；回归：tests/terminal-smoke-test.mjs「agent exposes persistent terminal tools」）。

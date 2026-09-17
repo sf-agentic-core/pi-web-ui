@@ -617,6 +617,11 @@ export type ClientMessage =
 	| { type: "save_subagent_template"; template: UiSubagentTemplate }
 	/** 删除一个子代理模板。 */
 	| { type: "delete_subagent_template"; name: string }
+	/** Switch the active subagent engine (global, all clients). Hides the other
+	 *  system's tools so the AI has exactly one delegation surface. Disabling the
+	 *  pi-subagents extension only takes effect after a runtime reload, which the
+	 *  host schedules itself. */
+	| { type: "set_subagent_engine"; engine: UiSubagentEngine }
 	/** Save a UI plugin's declarative settings (manifest "settings" schema).
 	 *  The host validates against the schema, persists to storage.json and
 	 *  notifies the plugin (host.onSettingsChanged). */
@@ -1163,6 +1168,25 @@ export interface UiMarkerInfo {
 	guidance: string[];
 }
 
+/** Which subagent system is active. Global (all clients) — see
+ *  server/subagents-engine.ts for why this is not a per-client preference. */
+export type UiSubagentEngine = "pi-web-ui" | "pi-subagents";
+
+/** A file-backed agent definition discovered from `pi-subagents` roots.
+ *  Read-only in the settings panel: these are `.md` files on disk, not rows we own. */
+export interface UiPiSubagentsAgent {
+	/** Agent name (frontmatter `name`, else the file basename). */
+	name: string;
+	/** Short description from frontmatter ("" when absent). */
+	description: string;
+	/** Model reference as written in frontmatter (`provider/id`, or `""`). */
+	model: string;
+	/** Originating root: the workspace's own agents, or the global/user ones. */
+	source: "workspace" | "global";
+	/** Absolute path of the definition file (shown for traceability). */
+	path: string;
+}
+
 /** Full settings state pushed to the browser (settings_state). */
 export interface UiSettingsState {
 	promptMode: "append" | "replace";
@@ -1254,6 +1278,13 @@ export interface UiSettingsState {
 	/** 内置默认模板名（settings_state 里供面板标「默认」徽标；用户文件为准时可能
 	 *  已删除/改名，长度可与 subagentTemplates 不同）。 */
 	subagentDefaultTemplates: string[];
+	/** Active subagent engine (global switch, see server/subagents-engine.ts).
+	 *  "pi-web-ui" = the first-party templates above; "pi-subagents" = the
+	 *  extension's own agent files. Only one is exposed to the AI at a time. */
+	subagentEngine: UiSubagentEngine;
+	/** Agents discovered from pi-subagents' workspace + global roots. Only
+	 *  meaningful (and only rendered) when subagentEngine === "pi-subagents". */
+	piSubagentsAgents: UiPiSubagentsAgent[];
 }
 export type ServerMessage =
 	| {

@@ -1038,6 +1038,16 @@ export const zh = {
 	pluginSettingsReset: "恢复默认",
 	settingsPresets: "预设",
 	settingsSubagentTemplates: "子代理模板",
+	subagentEngineLabel: "子代理引擎",
+	subagentEngineHint:
+		"同一时间只暴露一个子代理系统，避免模型在两个之间犹豫：pi-web-ui 用内置模板；pi-subagents 用其 agents 目录下的定义。切换会重载会话。",
+	subagentEnginePiWebUi: "pi-web-ui（内置模板）",
+	subagentEnginePiSubagents: "pi-subagents（agents 目录）",
+	subagentEngineListHint:
+		"以下定义来自磁盘，此处只读 —— 修改请直接编辑对应的 .md 文件。pi-subagents 自带的包内置代理不在此列出。",
+	subagentEngineWorkspace: "工作区",
+	subagentEngineGlobal: "全局",
+	subagentEngineNone: "（无）",
 	settingsSubagentTemplatesDesc:
 		"配置子代理预设（角色系统提示词 + 技能/扩展白名单 + 可选模型与思考强度）。AI 派生子代理时可选用模板（subagent_spawn 的 template 参数），也可不传按默认运行；停用的模板保留在面板但对 AI 不可见。",
 	noSubagentTemplates:
@@ -2183,6 +2193,16 @@ const en: Record<keyof typeof zh, string> = {
 	pluginSettingsReset: "Reset defaults",
 	settingsPresets: "Presets",
 	settingsSubagentTemplates: "Subagent templates",
+	subagentEngineLabel: "Subagent engine",
+	subagentEngineHint:
+		"Only one subagent system is exposed at a time so the model never has to choose between them: pi-web-ui uses the built-in templates; pi-subagents uses the agent definitions in its agents directories. Switching reloads the session.",
+	subagentEnginePiWebUi: "pi-web-ui (built-in templates)",
+	subagentEnginePiSubagents: "pi-subagents (agents dirs)",
+	subagentEngineListHint:
+		"These definitions live on disk and are read-only here — edit the .md files directly. pi-subagents' own bundled package agents are not listed.",
+	subagentEngineWorkspace: "Workspace",
+	subagentEngineGlobal: "Global",
+	subagentEngineNone: "(none)",
 	settingsSubagentTemplatesDesc:
 		"Presets for spawned subagents (role system prompt + skills/extensions whitelist + optional model and thinking level). AI may pick a template (subagent_spawn template param) or spawn without one; disabled templates stay in the panel but are invisible to AI tools.",
 	noSubagentTemplates:

@@ -2123,6 +2123,62 @@ export function SettingsModal({ chat, terminal, onSwitchToTerminal, onClose }: S
 									</button>
 								</div>
 
+								{/* ---- Engine switch: exactly one subagent system at a time (global) ------ */}
+								<div className="set-mode-row">
+									<label className="set-field-label">
+										{t("subagentEngineLabel")} <HintTip text={t("subagentEngineHint")} />
+									</label>
+									<select
+										className="set-select"
+										value={settings.subagentEngine}
+										onChange={(e) =>
+											appSend({
+												type: "set_subagent_engine",
+												engine: e.target.value as "pi-web-ui" | "pi-subagents",
+											})
+										}
+									>
+										<option value="pi-web-ui">{t("subagentEnginePiWebUi")}</option>
+										<option value="pi-subagents">{t("subagentEnginePiSubagents")}</option>
+									</select>
+								</div>
+
+								{/* pi-subagents mode: read-only listing of the .md agent files on disk.
+								    They are not rows we own, so there is nothing to edit here. */}
+								{settings.subagentEngine === "pi-subagents" && (
+									<div>
+										<p className="set-hint">{t("subagentEngineListHint")}</p>
+										{(["workspace", "global"] as const).map((src) => {
+											const group = (settings.piSubagentsAgents ?? []).filter((a) => a.source === src);
+											return (
+												<div key={src}>
+													<div className="set-field-label">
+														{src === "workspace"
+															? t("subagentEngineWorkspace")
+															: t("subagentEngineGlobal")}
+														<span className="set-count">{group.length}</span>
+													</div>
+													{group.length === 0 ? (
+														<p className="set-hint">{t("subagentEngineNone")}</p>
+													) : (
+														group.map((a) => (
+															<div key={a.path} className="set-row">
+																<div className="set-row-info">
+																	<span className="set-row-name">{a.name}</span>
+																	{a.model ? <code>{a.model}</code> : null}
+																	<span className="set-row-desc">{a.description}</span>
+																</div>
+															</div>
+														))
+													)}
+												</div>
+											);
+										})}
+									</div>
+								)}
+
+								{settings.subagentEngine === "pi-web-ui" && (
+									<>
 								{/* ---- 默认模型：全部子代理的兜底（模板/显式 model 参数优先） ---------- */}
 								<div className="set-mode-row">
 									<label className="set-field-label">
@@ -2393,6 +2449,8 @@ export function SettingsModal({ chat, terminal, onSwitchToTerminal, onClose }: S
 											</div>
 										))}
 									</div>
+								)}
+									</>
 								)}
 							</div>
 						)}

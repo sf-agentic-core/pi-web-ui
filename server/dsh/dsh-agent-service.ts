@@ -2501,6 +2501,10 @@ export class DshClientSession {
 			markers: [],
 			subagentTemplates: [],
 			subagentDefaultTemplates: [],
+			// DSH has no subagent system of its own and cannot host the pi-subagents
+			// extension, so the engine switch is a no-op here (the panel hides it).
+			subagentEngine: "pi-web-ui",
+			piSubagentsAgents: [],
 			subagentDefaultModel: null,
 			subagentModels: [],
 			quickPhrases: [...this.settings.quickPhrases],
@@ -2726,6 +2730,15 @@ export class DshClientSession {
 			level: "info",
 			text: "DSH 引擎不支持子代理模板（请在 pi 引擎中使用）",
 			textEn: "Subagent templates are not supported by the DSH engine (use the pi engine instead)",
+		});
+	}
+
+	async setSubagentEngine(): Promise<void> {
+		this.emit({
+			type: "notice",
+			level: "info",
+			text: "DSH 引擎不支持子代理引擎切换（请在 pi 引擎中使用）",
+			textEn: "The subagent engine switch is not supported by the DSH engine (use the pi engine instead)",
 		});
 	}
 

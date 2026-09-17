@@ -20,6 +20,8 @@ import {
 } from "./client-state.js";
 import { findVisionModels, SYSTEM_PROMPT } from "./vision-bridge.js";
 import { DEFAULT_TEMPLATES, type SubagentTemplatesStore } from "./subagent-templates.js";
+import type { SubagentEngine } from "./subagents-engine.js";
+import type { PiSubagentsAgent } from "./pi-subagents-agents.js";
 import { deriveLegacy, foldLegacyIntoDisabled, normalizeDisabledAgentTools } from "./tool-manager.js";
 
 /** ClientSession 提供给本服务的宿主能力（窄接口，便于独立测试）。 */
@@ -57,6 +59,13 @@ export interface SettingsHost {
 	promptSnapshot: () => { full: string; texts: Record<string, string>; toolsSchema: string };
 	/** 可选：内置标记状态（设置面板展示用）。 */
 	getMarkerState?: () => MarkerStateForSettings;
+	/** Active subagent engine (global switch — see server/subagents-engine.ts). */
+	getSubagentEngine: () => SubagentEngine;
+	/** Persist a new engine and reload the runtime so the extension set changes.
+	 *  Defers while a reply is streaming (see applyRuntime). */
+	setSubagentEngine: (engine: SubagentEngine) => Promise<void>;
+	/** Agents found under pi-subagents' workspace + global roots (read-only). */
+	listPiSubagentsAgents: () => PiSubagentsAgent[];
 }
 
 export class SettingsService {
@@ -282,6 +291,8 @@ export class SettingsService {
 						}),
 				subagentTemplates: this.templates.list(),
 				subagentDefaultTemplates: DEFAULT_TEMPLATES.map((t) => t.name),
+				subagentEngine: this.host.getSubagentEngine(),
+				piSubagentsAgents: this.host.listPiSubagentsAgents(),
 				subagentDefaultModel: this.settings.subagentDefaultModel ?? null,
 				retryMaxAttempts: this.settings.retryMaxAttempts,
 				subagentModels: this.collectSubagentModels(),
@@ -626,6 +637,31 @@ export class SettingsService {
 			level: "info",
 			text: `子代理模板已保存：${n}`,
 			textEn: `Subagent template saved: ${n}`,
+		});
+	}
+
+	/** Switch the active subagent engine (global, all clients). Persisting is not
+	 *  enough on its own — the pi-subagents extension is filtered when the runtime
+	 *  is created, so the host reloads. The host defers that while a reply is
+	 *  streaming; this still pushes state so the panel reflects the new choice. */
+	async setSubagentEngine(engine: SubagentEngine): Promise<void> {
+		try {
+			await this.host.setSubagentEngine(engine);
+		} catch (error) {
+			this.host.emit({
+				type: "notice",
+				level: "error",
+				text: `切换子代理引擎失败：${(error as Error).message}`,
+				textEn: `Failed to switch subagent engine: ${(error as Error).message}`,
+			});
+			return;
+		}
+		this.push();
+		this.host.emit({
+			type: "notice",
+			level: "info",
+			text: `子代理引擎已切换：${engine}`,
+			textEn: `Subagent engine switched: ${engine}`,
 		});
 	}
 

@@ -63,6 +63,7 @@ import type {
 	ServerMessage,
 	UiServiceInfo,
 	UiSubagentTemplate,
+	UiSubagentEngine,
 } from "./protocol.js";
 
 /** 从 CLI 参数中取 flag 值：支持 --flag value 与 --flag=value 两种写法。
@@ -799,6 +800,9 @@ export interface DispatchSession {
 	setLocale(locale: string): Promise<void>;
 	/** 删除一个子代理模板。 */
 	deleteSubagentTemplate(name: string): Promise<void>;
+	/** Switch the active subagent engine (global). pi-subagents mode hides the
+	 *  first-party subagent tools and vice versa, so the AI has one surface. */
+	setSubagentEngine(engine: UiSubagentEngine): Promise<void>;
 	emitNotice(level: "info" | "warning" | "error", text: string, textEn?: string): void;
 	activeConversations(): number;
 	pendingMessages(): number;
@@ -1412,6 +1416,10 @@ wss.on("connection", (ws) => {
 				break;
 			case "delete_subagent_template":
 				void cs.deleteSubagentTemplate(msg.name);
+				break;
+			case "set_subagent_engine":
+				// Global switch: persists + reloads the runtime (defers while streaming).
+				void cs.setSubagentEngine(msg.engine);
 				break;
 			case "apply_preset":
 				void cs.applyPreset(msg.name);

@@ -134,8 +134,13 @@ server.stderr?.on("data", (d) => {
 server.on("exit", (code) => serverLog.push(`[exit] server exited with ${code}`));
 
 let failures = 0;
+
+/** Collapse line breaks and control characters so a server- or file-provided
+ *  value cannot forge extra log lines (CodeQL js/log-injection). */
+const safe = (value) => String(value).replace(/[\u0000-\u001f\u007f\u2028\u2029]+/g, " ").slice(0, 300);
+
 const check = (name, ok, extra = "") => {
-	console.log(`${ok ? "✓" : "✗"} ${name}${extra ? " — " + extra : ""}`);
+	console.log(`${ok ? "✓" : "✗"} ${safe(name)}${extra ? " — " + safe(extra) : ""}`);
 	if (!ok) failures++;
 };
 
@@ -152,7 +157,9 @@ const waitForPort = async (port, timeout = 60000) => {
 	}
 	throw new Error(
 		`server did not start on ${port}` +
-			(lastError ? ` (last fetch error: ${lastError.message} / cause: ${lastError.cause?.message ?? "-"})` : " (fetch never rejected, status was never ok)"),
+			(lastError
+				? ` (last fetch error: ${safe(lastError.message)} / cause: ${safe(lastError.cause?.message ?? "-")})`
+				: " (fetch never rejected, status was never ok)"),
 	);
 };
 

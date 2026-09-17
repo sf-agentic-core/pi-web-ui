@@ -45,27 +45,34 @@ export class SubagentsEngineStore {
 
 	/** Current engine. Revalidated against the file mtime on every call. */
 	get(): SubagentEngine {
-		let mtimeMs = -1;
-		try {
-			mtimeMs = statSync(this.filePath).mtimeMs;
-		} catch {
-			mtimeMs = -1; // missing or unreadable → defaults
-		}
+		const mtimeMs = this.fileMtimeMs();
 		if (this.cached !== null && mtimeMs === this.cachedMtimeMs) return this.cached;
 
-		let engine = DEFAULT_SUBAGENT_ENGINE;
-		try {
-			const parsed = JSON.parse(readFileSync(this.filePath, "utf8")) as { engine?: unknown };
-			engine = normalizeSubagentEngine(parsed?.engine) ?? DEFAULT_SUBAGENT_ENGINE;
-		} catch {
-			// Missing/corrupt file: keep the default. Not written back — the file
-			// only materializes once someone actually chooses an engine.
-			engine = DEFAULT_SUBAGENT_ENGINE;
-		}
-
+		const engine = this.readFromDisk();
 		this.cached = engine;
 		this.cachedMtimeMs = mtimeMs;
 		return engine;
+	}
+
+	/** File mtime in ms, or -1 when the file is missing/unreadable. */
+	private fileMtimeMs(): number {
+		try {
+			return statSync(this.filePath).mtimeMs;
+		} catch {
+			return -1;
+		}
+	}
+
+	/** Normalized engine from disk. A missing/corrupt file yields the default and
+	 *  is deliberately not written back — the file only materializes once someone
+	 *  actually chooses an engine. */
+	private readFromDisk(): SubagentEngine {
+		try {
+			const parsed = JSON.parse(readFileSync(this.filePath, "utf8")) as { engine?: unknown };
+			return normalizeSubagentEngine(parsed?.engine) ?? DEFAULT_SUBAGENT_ENGINE;
+		} catch {
+			return DEFAULT_SUBAGENT_ENGINE;
+		}
 	}
 
 	/** Persist a new engine (atomic tmp + rename). Throws on failure so the

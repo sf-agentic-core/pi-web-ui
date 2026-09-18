@@ -839,6 +839,17 @@ export interface EngineService {
 	/** Browser UI locale report (hello.locale / set_locale) — persist per
 	 *  client and refresh lang-aware prompts (streaming-safe). */
 	setLocale(clientId: string, locale: string): Promise<void>;
+	/** 手动过户（pi 引擎实现；DSH 未实现 → dispatch 回落提示）。 */
+	takeOverConversation?(targetId: string, ownerId: string, convId: string): Promise<void>;
+	/** 跨页作答预告 + 答案转交（pi 引擎实现；DSH 未实现 → dispatch 回落提示）。 */
+	peekElsewhereQuestion?(targetId: string, ownerId: string, convId: string): Promise<void>;
+	answerElsewhereQuestion?(
+		targetId: string,
+		ownerId: string,
+		id: string,
+		answers: { id: string; selected: string[]; custom?: string }[],
+		cancelled?: boolean,
+	): Promise<void>;
 	onQuit?: (() => boolean) | undefined;
 	onToolEvent?:
 		| ((ev: {
@@ -1124,6 +1135,30 @@ wss.on("connection", (ws) => {
 			case "switch_conversation":
 				void cs.switchConversation(msg.id);
 				break;
+			case "take_over_conversation":
+				if (typeof service.takeOverConversation === "function") {
+					void service.takeOverConversation(clientId, msg.owner, msg.id);
+				} else {
+					send({
+						type: "notice",
+						level: "error",
+						text: "当前引擎不支持过户（take over），请用 pi 引擎",
+						textEn: "Takeover is not supported by the current engine; use the pi engine.",
+					});
+				}
+				break;
+			case "peek_elsewhere_question":
+				if (typeof service.peekElsewhereQuestion === "function") {
+					void service.peekElsewhereQuestion(clientId, msg.owner, msg.id);
+				} else {
+					send({
+						type: "notice",
+						level: "error",
+						text: "当前引擎不支持跨页作答，请用 pi 引擎",
+						textEn: "Cross-page answering is not supported by the current engine; use the pi engine.",
+					});
+				}
+				break;
 			case "list_files":
 				void cs.listFiles(msg.path);
 				break;
@@ -1401,7 +1436,21 @@ wss.on("connection", (ws) => {
 				void cs.rescanDshPatches?.();
 				break;
 			case "question_answer":
-				void cs.answerQuestion?.(msg.id, msg.answers, msg.cancelled);
+				if (msg.owner) {
+					// 跨页作答：答案转交持有方会话（本页不持有该问卷）。
+					if (typeof service.answerElsewhereQuestion === "function") {
+						void service.answerElsewhereQuestion(clientId, msg.owner, msg.id, msg.answers, msg.cancelled);
+					} else {
+						send({
+							type: "notice",
+							level: "error",
+							text: "当前引擎不支持跨页作答，请用 pi 引擎",
+							textEn: "Cross-page answering is not supported by the current engine; use the pi engine.",
+						});
+					}
+				} else {
+					void cs.answerQuestion?.(msg.id, msg.answers, msg.cancelled);
+				}
 				break;
 			case "page_response":
 				// 浏览器（page-picker 扩展经前端）对 browser_page 的回包：恢复挂起的

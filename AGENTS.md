@@ -251,7 +251,7 @@ npm publish
 - **快照 60ms 节流**：调试时 `get_state` 可立即推一次（`cs.flushSnapshot()`）。
 - **snapshot 发送背压**：`send()` 在序列化之前检查 `ws.bufferedAmount`，超过阈值时丢弃 snapshot（全量幂等且稍后必有更新）；丢弃时安排 250ms 重试 timer。
 - **`hello` 前/会话未就绪时的命令**：`server/index.ts` 的 `pending` 队列会缓存并在 attach 后重放。
-- **clientId 每标签页独立**（issue #10）：前端 `getClientId()` 存 sessionStorage（非 localStorage），同源多标签页是多个独立客户端。回归：`multi-tab-test.mjs`。
+- **clientId 每标签页独立**（issue #10）：前端 `getClientId()` 存 sessionStorage（非 localStorage），同源多标签页是多个独立客户端。回归：`multi-tab-test.mjs`。关浏览器重开 = 新 clientId，旧 ClientSession 变残留：**无其他在线浏览器时 attach 自动认领**最近断开的有内容残留（只换 map 键、不搬 runtime；首帧推送前必须按新 id 重接 `wireClient`，否则把自己当“另一处”），有在线标签时不认领（跑着的照常走 elsewhere 只读 + 双写拦截）。**手动过户 / 跨页作答**（backport de upstream #217）：右键 elsewhere 行可把整段对话（含子代理后代、等答复问卷）搬到本页（`take_over_conversation`，搬 runtime 本体、单 writer 不变，源页旧对话框经 `question_retracted` 收起）；点 elsewhere 行的 `?` 经 `peek_elsewhere_question` 把问卷原文拉到本页弹框，`question_answer` 带 `owner` 由持有方 resolve（本页只展示/关闭，id 属对方作用域）。别处列表靠流式签名驱动其他页重推，问卷态计入签名。回归：`tests/orphan-adopt-test.mjs` + `tests/unit/orphan-adopt.test.ts`、`tests/remote-answer-test.mjs`、`tests/takeover-test.mjs`。
 - **socket 半开**：服务端 10s 心跳，客户端 30s 无消息主动断开重连（指数退避 1s→10s）。
 - **预览与附件行号**：`countLines` 不算尾随换行；前端 `split("\n")` 后也要 pop 掉末尾空串。
 - **Windows 老中文文件乱码**：预览/内联附件/行附件统一走 `decodeText`（严格 UTF-8 失败 → GBK → latin1）。

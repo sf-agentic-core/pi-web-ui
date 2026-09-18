@@ -412,6 +412,12 @@ export type ClientMessage =
 	| { type: "list_sessions" }
 	| { type: "switch_session"; path: string }
 	| { type: "switch_conversation"; id: string }
+	/** 手动过户：把另一处（elsewhere 行，owner/convId 标识）的对话整体搬到本页
+	 *  （含等答复的问卷/页调用），搬完自动切过去. */
+	| { type: "take_over_conversation"; owner: string; id: string }
+	/** 跨页作答预告请求：把另一处的等答复问卷原文取回本页展示（id = 对方 convId）。
+	 *  回答仍经 question_answer（带 owner）回去，不搬迁对话. */
+	| { type: "peek_elsewhere_question"; owner: string; id: string }
 	| { type: "list_projects" }
 	| { type: "list_files"; path?: string }
 	/** 列目录：path 省略 = 工作区根；也接受工作区外绝对路径（Windows "C:/…"、
@@ -645,12 +651,14 @@ export type ClientMessage =
 	 *  patch files take effect (patches are only loaded at runtime boot). */
 	| { type: "dsh_patches_rescan" }
 	/** DSH engine: answer a model ask_user_question dialog (id echoes
-	 *  question_pending.id). `cancelled` (user ✗) rejects the pending ask. */
+	 *  question_pending.id). `cancelled` (user ✗) rejects the pending ask.
+	 *  owner = 跨页作答：转给持有方会话（elsewhere_question 预告的那张问卷）。 */
 	| {
 			type: "question_answer";
 			id: string;
 			answers: QuestionAnswer[];
 			cancelled?: boolean;
+			owner?: string;
 	  }
 	/** Answer to page_request (id echoes page_request.id). `ok:false` carries a
 	 *  human-readable `error` — no browser/extension, page not allowed, or the
@@ -1080,19 +1088,29 @@ export interface ConversationSummary {
 	canceled?: boolean;
 	/** 父对话 id（Running 面板嵌套展示用）。 */
 	parentId?: string;
+	/** 有问卷正在等答复（本会话 + elsewhere 行都挂「?」角标；点进去即可回答）。 */
+	hasQuestion?: boolean;
 }
 
 /** A conversation streaming on ANOTHER client (different tab / device) —
  *  read-only awareness for issue #145. The owning client holds the only
  *  writer for that transcript; this entry lets other tabs discover that
  *  "someone else is running in this project" without creating a second
- *  writer. No id: rows are not clickable (no cross-client attach yet). */
+ *  writer. Rows ARE actionable since manual takeover: owner/convId identify
+ *  the takeover target (take_over_conversation); absent = legacy sender
+ *  (e.g. DSH engine) that cannot be taken over. */
 export interface ElsewhereRunning {
 	/** Display title of the remote conversation. */
 	title: string;
 	/** Workspace it runs in (lets the client group by project). */
 	cwd: string;
 	isStreaming: boolean;
+	/** Owning client id (takeover target's holder). Absent = 不可过户. */
+	owner?: string;
+	/** Conversation id inside the owning client (takeover target). */
+	convId?: string;
+	/** 有问卷正在等答复 —— 过户后可在本页直接回答. */
+	hasQuestion?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1644,6 +1662,13 @@ export type ServerMessage =
 			deadline?: number;
 			questions: UiQuestion[];
 	  }
+	/** 待答问卷被搬走/取消：前端若正展示该 id 的对话框立即收起（不过户/不恢复）。
+	 *  手动过户把问卷搬到另一会话时，源页面靠它收起旧对话框（快照为 null 只能收
+	 *  snapshot 来源的面板，即时通道弹出的收不到 —— 见 pending-question.ts）。 */
+	| { type: "question_retracted"; id: string }
+	/** 跨页作答预告（peek_elsewhere_question 的回包）：另一处问卷的原文，
+	 *  本页弹框展示、经 question_answer（带 owner）回去作答。 */
+	| { type: "elsewhere_question"; owner: string; convId: string; id: string; questions: UiQuestion[] }
 	// -- browser page control (browser_page tool) ---------------------------
 	/** The model wants to act on a page in the user's browser
 	 *  (`browser_page` customTool; implemented by the page-picker browser

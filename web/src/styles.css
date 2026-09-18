@@ -808,6 +808,31 @@ body.rp-resizing .rp-sash.dragging::after {
 	white-space: nowrap;
 	flex-shrink: 0;
 }
+/* 等问卷角标：正圆 Singles，「?」居中；配色与 .subagent-badge 同源（accent 线框 + 淡底）。 */
+.question-badge {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	width: 16px;
+	height: 16px;
+	margin-right: 6px;
+	padding: 0;
+	border-radius: 50%;
+	border: 1px solid var(--accent);
+	color: var(--accent);
+	background: color-mix(in srgb, var(--accent) 8%, transparent);
+	font-size: 11px;
+	line-height: 1;
+	flex-shrink: 0;
+	vertical-align: 1px;
+}
+/* 「另一处」行上的 ? 可点：点后把问卷拉到本页作答。 */
+.question-badge.clickable {
+	cursor: pointer;
+}
+.question-badge.clickable:hover {
+	background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
 
 .session-icon {
 	flex-shrink: 0;

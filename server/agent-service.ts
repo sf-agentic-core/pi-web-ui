@@ -833,8 +833,10 @@ export { workspacePath };
  * One open conversation (chat thread) of a client. Each conversation owns its
  * OWN AgentSessionRuntime, so starting a new chat or switching between chats
  * never interrupts another conversation's in-flight run.
+ *
+ * 导出给过户载荷类型（TakeoverPayload）用：对话对象本身在会话之间整体搬迁。
  */
-interface Conversation {
+export interface Conversation {
 	id: string;
 	/** Display title: first user prompt (truncated) or the default. */
 	title: string;
@@ -1102,6 +1104,64 @@ export interface ProjectRunnerInfo {
 	clientId: string;
 	title: string;
 	sessionFile?: string;
+}
+
+/**
+ * 浏览器重启认领（orphan adoption）的候选快照 —— 纯数据，决策逻辑见
+ * pickAdoptableOrphan（纯函数，可单测）。live = 还有浏览器连着（sinkCount>0）；
+ * pseudo = 插件/调度伪客户端（sink 常驻，不能按浏览器存活判断，永远不参与认领）。
+ */
+export interface OrphanCandidate {
+	id: string;
+	live: boolean;
+	pseudo: boolean;
+	/** 正在跑的对话数（主对话 + 子代理都算）。 */
+	streaming: number;
+	/** 是否有值得认领的内容（跑着 / 后台挂着 / 有消息历史；纯空白会话不算）。 */
+	adoptable: boolean;
+	/** 最近活跃时间（各对话 lastActiveAt/lastSdkEventAt 的最大值）。 */
+	activity: number;
+}
+
+/**
+ * 选一个断开的残留会话给新标签认领（纯函数）：
+ * - 还有别的在线浏览器（非伪客户端且 live）→ 不认领（新标签是第二块屏，
+ *   issue #10 的隔离必须保留，跑着的对话继续走 elsewhere 只读感知）。
+ * - 否则在断开 + 非伪 + 有内容的候选中按（streaming 多 → 最近活跃）取最优；
+ *   没有返回 null（调用方走正常新建流程）。
+ */
+export function pickAdoptableOrphan(cands: OrphanCandidate[]): string | null {
+	if (cands.some((c) => !c.pseudo && c.live)) return null;
+	let best: OrphanCandidate | null = null;
+	for (const c of cands) {
+		if (c.pseudo || c.live || !c.adoptable) continue;
+		if (!best || c.streaming > best.streaming || (c.streaming === best.streaming && c.activity > best.activity)) {
+			best = c;
+		}
+	}
+	return best?.id ?? null;
+}
+
+/** 手动过户时跟着对话一起搬走的等答复问卷（id 在目标会话重排）. */
+export interface TakeoverQuestion {
+	resolve: (value: QuestionAnswer[] | null) => void;
+	questions: UiQuestion[];
+	conversationId: string;
+}
+
+/** 手动过户时跟着对话一起搬走的页调用（id/计时器在目标会话重建）. */
+export interface TakeoverPageCall {
+	resolve: (r: PageCallResult) => void;
+	req: PageCallRequest;
+	timeoutMs: number;
+	conversationId: string;
+}
+
+/** 手动过户载荷：对话对象（含 runtime/终端/队列/缓存）整体搬迁 + 桥接中的问卷/页调用. */
+export interface TakeoverPayload {
+	convs: Conversation[];
+	questions: TakeoverQuestion[];
+	pageCalls: TakeoverPageCall[];
 }
 
 export class ClientSession {
@@ -1811,7 +1871,14 @@ export class ClientSession {
 	 *  协议 page_request 也没有这个字段）。 */
 	private pendingPageCalls = new Map<
 		string,
-		{ resolve: (r: PageCallResult) => void; timer: ReturnType<typeof setTimeout>; conversationId?: string }
+		{
+			resolve: (r: PageCallResult) => void;
+			timer: ReturnType<typeof setTimeout>;
+			conversationId?: string;
+			/** 过户重发 page_request 用（op/args/target）. */
+			req: PageCallRequest;
+			timeoutMs: number;
+		}
 	>();
 
 	private constructor(clientId: string, cwd: string, agentDir: string, stateStore: ClientStateStore) {
@@ -2384,23 +2451,32 @@ export class ClientSession {
 	 *  TOOL_WATCHDOG_TIMEOUT_MS, abort the session instead of letting the
 	 *  conversation hang forever (the SDK bash tool has no default timeout). */
 	private armToolWatchdog(conv: Conversation, toolCallId: string): void {
-		const t = setTimeout(() => {
-			conv.toolWatchdogs.delete(toolCallId);
-			// The tool finished before the deadline — nothing to do.
-			if (!conv.toolStartTimes.has(toolCallId)) return;
-			this.emit({
-				type: "notice",
-				level: "warning",
-				text: `工具执行超过 ${Math.round(TOOL_WATCHDOG_TIMEOUT_MS / 60_000)} 分钟，已自动终止（防止挂死）。可调整超时：环境变量 PI_WEB_TOOL_TIMEOUT_MS（毫秒）。`,
-				textEn: `Tool ran over ${Math.round(TOOL_WATCHDOG_TIMEOUT_MS / 60_000)} min and was auto-terminated (hang guard). Tune via PI_WEB_TOOL_TIMEOUT_MS (ms).`,
-			});
-			conv.toolStartTimes.delete(toolCallId);
-			// Abort the run (kills the process tree via the SDK's abort signal);
-			// agent_end will fire with stopReason "aborted" and existing logic
-			// clears any goal / review loop. interruptRun adds a force-reset
-			// fallback in case the model stream ignores the abort signal.
-			void this.interruptRun(conv, "工具执行超时");
-		}, TOOL_WATCHDOG_TIMEOUT_MS);
+		this.rearmToolWatchdog(conv, toolCallId, TOOL_WATCHDOG_TIMEOUT_MS);
+	}
+
+	/** （重）布工具挂死看门狗：delayMs 后仍在跑则 abort 整轮。过户时用剩余时间重布
+	 *  （已逾期的立即触发，语义不变）. */
+	private rearmToolWatchdog(conv: Conversation, toolCallId: string, delayMs: number): void {
+		const t = setTimeout(
+			() => {
+				conv.toolWatchdogs.delete(toolCallId);
+				// The tool finished before the deadline — nothing to do.
+				if (!conv.toolStartTimes.has(toolCallId)) return;
+				this.emit({
+					type: "notice",
+					level: "warning",
+					text: `工具执行超过 ${Math.round(TOOL_WATCHDOG_TIMEOUT_MS / 60_000)} 分钟，已自动终止（防止挂死）。可调整超时：环境变量 PI_WEB_TOOL_TIMEOUT_MS（毫秒）。`,
+					textEn: `Tool ran over ${Math.round(TOOL_WATCHDOG_TIMEOUT_MS / 60_000)} min and was auto-terminated (hang guard). Tune via PI_WEB_TOOL_TIMEOUT_MS (ms).`,
+				});
+				conv.toolStartTimes.delete(toolCallId);
+				// Abort the run (kills the process tree via the SDK's abort signal);
+				// agent_end will fire with stopReason "aborted" and existing logic
+				// clears any goal / review loop. interruptRun adds a force-reset
+				// fallback in case the model stream ignores the abort signal.
+				void this.interruptRun(conv, "工具执行超时");
+			},
+			Math.max(0, delayMs),
+		);
 		t.unref?.();
 		conv.toolWatchdogs.set(toolCallId, t);
 	}
@@ -3137,6 +3213,8 @@ export class ClientSession {
 			}
 			const id = `q-${++this.questionSeq}`;
 			this.pendingQuestions.set(id, { resolve, questions, conversationId });
+			// 运行列表的「?」角标靠 conversations 推送（问卷登记/解决不经过快照通道）。
+			this.emitConversations();
 			this.emit({
 				type: "question_pending",
 				id,
@@ -3146,14 +3224,19 @@ export class ClientSession {
 	}
 
 	/** 前端回答模型提问（question_answer → 恢复 askUser 的 Promise）。id 需匹配
-	 *  pendingQuestions 中键；cancelled 或未匹配（例如用户早已切走）时按「取消」处理
-	 *  —— 把挂起的提问全部 reject，让模型知道用户离开了。 */
-	resolveQuestion(id: string, answers: QuestionAnswer[], cancelled?: boolean): void {
+	 *  pendingQuestions 中键；未匹配（对方刚回答/取消、页面刷新重发）静默忽略。
+	 *  成功 resolve 后同步推 question_retracted + conversations：本页 live 对话框
+	 *  靠前者收起（跨页作答时源页就靠它），别处的「?」角标靠后者即时消失。
+	 *  返回是否真的恢复了一个挂起提问（跨页作答的送达回执用）。 */
+	resolveQuestion(id: string, answers: QuestionAnswer[], cancelled?: boolean): boolean {
 		const pending = this.pendingQuestions.get(id);
-		if (pending) {
-			this.pendingQuestions.delete(id);
-			pending.resolve(cancelled ? null : answers);
-		}
+		if (!pending) return false;
+		this.pendingQuestions.delete(id);
+		pending.resolve(cancelled ? null : answers);
+		this.emit({ type: "question_retracted", id });
+		// 同上：角标消失也要即时推送（否则要等到 run 结束别处才知道问完了）。
+		this.emitConversations();
+		return true;
 	}
 
 	/** 快照侧的待答提问（UiState.pendingQuestion）：只带当前对话的问卷——切回
@@ -3179,6 +3262,19 @@ export class ClientSession {
 	answerQuestion(id: string, answers: QuestionAnswer[], cancelled?: boolean): Promise<void> {
 		this.resolveQuestion(id, answers, cancelled);
 		return Promise.resolve();
+	}
+
+	/** 取某对话的等答复问卷原文（跨页作答的 peek 用；只读，不改变状态）。 */
+	peekPendingQuestion(convId: string): { id: string; questions: UiQuestion[] } | undefined {
+		for (const [id, p] of this.pendingQuestions) {
+			if (p.conversationId === convId) return { id, questions: p.questions };
+		}
+		return undefined;
+	}
+
+	/** 跨页作答：把别处问卷的原文推给本页弹框（回答经 answerElsewhereQuestion 回去）。 */
+	pushElsewhereQuestion(owner: string, convId: string, q: { id: string; questions: UiQuestion[] }): void {
+		this.emit({ type: "elsewhere_question", owner, convId, id: q.id, questions: q.questions });
 	}
 
 	/** 关闭所有挂起提问（dispose 时清理）：以「取消」解析，避免模型挂死。 */
@@ -3256,6 +3352,25 @@ export class ClientSession {
 		}
 	}
 
+	/** 页调用超时计时器：到点按失败 resolve（晚到的 page_response 在
+	 *  resolvePageCall 里找不到 id 会静默忽略）。过户重建时复用（计时重走）. */
+	private armPageCallTimeout(
+		id: string,
+		resolve: (r: PageCallResult) => void,
+		timeoutMs: number,
+	): ReturnType<typeof setTimeout> {
+		return setTimeout(() => {
+			// 到点：先删再 resolve——晚到的 page_response 在 resolvePageCall 里找
+			// 找不到 id，会静默忽略（见那里的注释）。
+			if (this.pendingPageCalls.delete(id)) {
+				resolve({
+					ok: false,
+					error: `${Math.round(timeoutMs / 1000)} 秒内没有收到浏览器响应（timeout ${timeoutMs}ms）。请确认 pi-web-ui 页面已打开且 page-picker 扩展已启用。`,
+				});
+			}
+		}, timeoutMs);
+	}
+
 	pageCall(req: PageCallRequest, sig: { aborted?: boolean }, conversationId?: string): Promise<PageCallResult> {
 		return new Promise((resolve) => {
 			if (sig?.aborted || this.disposed) {
@@ -3273,18 +3388,9 @@ export class ClientSession {
 			const id = `p-${++this.pageSeq}`;
 			// 夹取与工具入口同一套规则（防手写脏值/其它调用方绕过 schema）。
 			const timeoutMs = normalizePageCallTimeoutMs(req.timeoutMs);
-			const timer = setTimeout(() => {
-				// 到点：先删再 resolve——晚到的 page_response 在 resolvePageCall 里找
-				// 找不到 id，会静默忽略（见那里的注释）。
-				if (this.pendingPageCalls.delete(id)) {
-					resolve({
-						ok: false,
-						error: `${Math.round(timeoutMs / 1000)} 秒内没有收到浏览器响应（timeout ${timeoutMs}ms）。请确认 pi-web-ui 页面已打开且 page-picker 扩展已启用。`,
-					});
-				}
-			}, timeoutMs);
+			const timer = this.armPageCallTimeout(id, resolve, timeoutMs);
 			// 先登记再发：同步回包（同进程假客户端）也不能漏掉。
-			this.pendingPageCalls.set(id, { resolve, timer, conversationId });
+			this.pendingPageCalls.set(id, { resolve, timer, conversationId, req, timeoutMs });
 			this.emit({ type: "page_request", id, op: req.op, args: req.args, target: req.target, timeoutMs });
 		});
 	}
@@ -4218,15 +4324,72 @@ export class ClientSession {
 		return out;
 	}
 
-	/** issue #145：本实例所有正在跑的对话摘要（elsewhere 列表的本机一半）。 */
-	streamingSummariesAll(): { title: string; cwd: string; isStreaming: boolean }[] {
-		const out: { title: string; cwd: string; isStreaming: boolean }[] = [];
+	/** issue #145：本实例所有正在跑的对话摘要（elsewhere 列表的本机一半 +
+	 *  手动过户的目标定位：convId + 是否有等答复问卷）。 */
+	streamingSummariesAll(): {
+		title: string;
+		cwd: string;
+		isStreaming: boolean;
+		convId: string;
+		hasQuestion: boolean;
+	}[] {
+		const out: { title: string; cwd: string; isStreaming: boolean; convId: string; hasQuestion: boolean }[] = [];
 		for (const conv of this.convs.values()) {
 			if (conv.isSubagent) continue;
 			if (!this.conversationStreaming(conv)) continue;
-			out.push({ title: conv.title, cwd: conv.cwd, isStreaming: true });
+			out.push({
+				title: conv.title,
+				cwd: conv.cwd,
+				isStreaming: true,
+				convId: conv.id,
+				hasQuestion: this.isWaitingOnUser(conv.id),
+			});
 		}
 		return out;
+	}
+
+	/**
+	 * 浏览器重启认领用：本会话是否有值得新标签接管的内容。
+	 * 跑着的（主对话/子代理都算）、后台挂着的（listed）、有消息历史的都算；
+	 * 纯空白会话（刚建就关了标签）不算 —— 认领它与新建无异，不如走新建流程。
+	 * 零 token 冒烟测试的残留会话永远是空白的，因此认领逻辑不会改变它们的行为。
+	 */
+	hasAdoptableContent(): boolean {
+		for (const c of this.convs.values()) {
+			try {
+				if (c.session.isStreaming) return true;
+			} catch {
+				// 会话替换中 —— 按未跑处理
+			}
+			if (c.isSubagent) continue;
+			if (c.listed) return true;
+			try {
+				if (c.session.getSessionStats().totalMessages > 0) return true;
+			} catch {
+				// 会话替换中 —— 按无消息处理
+			}
+		}
+		return false;
+	}
+
+	/** 各对话最近活跃时间的最大值（认领时多个残留按此排序，新的优先）。 */
+	latestActivity(): number {
+		let at = 0;
+		for (const c of this.convs.values()) {
+			at = Math.max(at, c.lastActiveAt || 0, c.lastSdkEventAt || 0);
+		}
+		return at;
+	}
+
+	/** 被新标签认领后首帧即被告之（pendingNotices 随 attachSink 下发）。 */
+	noteAdopted(): void {
+		this.pendingNotices.push({
+			type: "notice",
+			level: "info",
+			text: "已恢复你关闭浏览器前的工作会话（含运行中的对话），可直接继续查看与操作。",
+			textEn:
+				"Restored the workspace session from before the browser was closed, including its running conversations — pick up right where you left off.",
+		});
 	}
 
 	/** issue #145：让其他客户端重推 conversations（elsewhere 刷新用；
@@ -4931,6 +5094,135 @@ export class ClientSession {
 		void conv.runtime.dispose().catch(() => {});
 	}
 
+	/** 过户用的对话摘要（AgentService 拼移动集合 + 容量检查用）。 */
+	takeoverBriefs(): { id: string; title: string; cwd: string; parentId?: string; isSubagent: boolean }[] {
+		return [...this.convs.values()].map((c) => ({
+			id: c.id,
+			title: c.title,
+			cwd: c.cwd,
+			...(c.parentId ? { parentId: c.parentId } : {}),
+			isSubagent: c.isSubagent,
+		}));
+	}
+
+	/**
+	 * 过户转出：把指定对话（含事件订阅/看门狗计时器/等答复问卷/页调用）从本会话摘除。
+	 * - 先修 active：active 被搬且还有剩余 → 切过去（优先主对话）；active 被搬且掏空 →
+	 *   建空白兜底，建不出来（quiesce）则拒绝搬出（ok:false），绝不留悬空 active。
+	 * - 看门狗计时器清掉（toolStartTimes 保留，目标按剩余时间重布）。
+	 * - 只搬归属被搬对话的问卷/页调用（conversationId 对得上的；未记归属的留在源会话）。
+	 */
+	async detachTakeoverConversations(
+		ids: string[],
+	): Promise<{ ok: true; payload: TakeoverPayload } | { ok: false; reason: "missing" | "empty" }> {
+		const set = new Set(ids);
+		const convs = [...this.convs.values()].filter((c) => set.has(c.id));
+		if (convs.length === 0) return { ok: false, reason: "missing" };
+		if (set.has(this.activeId)) {
+			const remaining =
+				[...this.convs.values()].find((c) => !set.has(c.id) && !c.isSubagent) ??
+				[...this.convs.values()].find((c) => !set.has(c.id));
+			if (remaining) {
+				await this.switchConversation(remaining.id);
+			} else if (!(await this.newChat())) {
+				return { ok: false, reason: "empty" };
+			}
+		}
+		for (const conv of convs) {
+			this.convs.delete(conv.id);
+			this.clearAllToolWatchdogs(conv);
+			conv.unsubscribe?.();
+			conv.unsubscribe = undefined;
+		}
+		const questions: TakeoverQuestion[] = [];
+		for (const [qid, p] of this.pendingQuestions) {
+			if (p.conversationId !== undefined && set.has(p.conversationId)) {
+				this.pendingQuestions.delete(qid);
+				questions.push({ resolve: p.resolve, questions: p.questions, conversationId: p.conversationId });
+				// 源页面的对话框可能是即时通道弹出的（live），快照为 null 收不掉它 ——
+				// 明确撤回，让源页面立即收起（目标页由转入方重推 question_pending）。
+				this.emit({ type: "question_retracted", id: qid });
+			}
+		}
+		const pageCalls: TakeoverPageCall[] = [];
+		for (const [pid, p] of this.pendingPageCalls) {
+			if (p.conversationId !== undefined && set.has(p.conversationId)) {
+				this.pendingPageCalls.delete(pid);
+				clearTimeout(p.timer);
+				pageCalls.push({ resolve: p.resolve, req: p.req, timeoutMs: p.timeoutMs, conversationId: p.conversationId });
+			}
+		}
+		this.emitConversations();
+		this.flushSnapshot();
+		return { ok: true, payload: { convs, questions, pageCalls } };
+	}
+
+	/**
+	 * 过户转入：把另一会话摘除的对话整体接过来，返回主对话的新 id。
+	 * - id 冲突（两边计数器都从 c1 开始，大概率撞上）→ 给搬入方分配新 id，move
+	 *   集合内的 parentId/问卷归属同步改写。模型手里旧 runId 的后续子代理工具调用
+	 *   会报 unknown（可经列表查新 id）；定时唤醒的旧 id 同理回落无头执行。
+	 * - 事件订阅/终端投递/问卷/页调用全部重接到本会话并立即重推（问卷对话框在新
+	 *   页面直接弹出来）。看门狗按剩余时间重布（已逾期的立即触发）。
+	 */
+	insertTakeoverConvs(payload: TakeoverPayload): string {
+		const remap = new Map<string, string>();
+		for (const conv of payload.convs) {
+			if (this.convs.has(conv.id)) {
+				remap.set(conv.id, this.nextConversationId());
+			}
+		}
+		const fix = (id: string): string => remap.get(id) ?? id;
+		let mainId = "";
+		for (const conv of payload.convs) {
+			conv.id = fix(conv.id);
+			if (conv.parentId) conv.parentId = fix(conv.parentId);
+			if (!conv.isSubagent && !mainId) mainId = conv.id;
+			conv.lastActiveAt = Date.now();
+			conv.terminals.rebindEmit((msg) => this.emitTerminal(conv.id, msg));
+			conv.terminals.onAgentIdle = (terminalId, idleMs, title, lastLines) =>
+				this.notifyTerminalIdle(conv.id, terminalId, idleMs, title, lastLines);
+			conv.unsubscribe?.();
+			conv.unsubscribe = conv.session.subscribe((event) => this.onEvent(conv, event));
+			for (const [toolCallId, start] of conv.toolStartTimes) {
+				if (!conv.toolWatchdogs.has(toolCallId)) {
+					this.rearmToolWatchdog(conv, toolCallId, TOOL_WATCHDOG_TIMEOUT_MS - (Date.now() - start));
+				}
+			}
+			this.convs.set(conv.id, conv);
+		}
+		if (!mainId) mainId = payload.convs[0]?.id ?? "";
+		for (const q of payload.questions) {
+			const nid = `q-${++this.questionSeq}`;
+			this.pendingQuestions.set(nid, {
+				resolve: q.resolve,
+				questions: q.questions,
+				conversationId: fix(q.conversationId),
+			});
+			this.emit({ type: "question_pending", id: nid, questions: q.questions });
+		}
+		for (const p of payload.pageCalls) {
+			const nid = `p-${++this.pageSeq}`;
+			const timer = this.armPageCallTimeout(nid, p.resolve, p.timeoutMs);
+			this.pendingPageCalls.set(nid, {
+				resolve: p.resolve,
+				timer,
+				conversationId: fix(p.conversationId),
+				req: p.req,
+				timeoutMs: p.timeoutMs,
+			});
+			this.emit({
+				type: "page_request",
+				id: nid,
+				op: p.req.op,
+				args: p.req.args,
+				target: p.req.target,
+				timeoutMs: p.timeoutMs,
+			});
+		}
+		return mainId;
+	}
+
 	/** Switch the ACTIVE conversation without interrupting any other chat. */
 	async switchConversation(id: string): Promise<void> {
 		if (!this.convs.has(id) || id === this.activeId) return;
@@ -5033,15 +5325,18 @@ export class ClientSession {
 				isSubagent: !!conv.isSubagent,
 				// 子代理带 error 标记：左栏红点提示（普通对话不参与）。
 				...(conv.isSubagent ? this.subagentRunOutcome(conv) : {}),
+				// 等答复的问卷：左栏「?」角标（主对话/子代理各自挂名下，切过去即可回答）。
+				...(this.isWaitingOnUser(conv.id) ? { hasQuestion: true as const } : {}),
 				parentId: conv.parentId,
 			});
 		}
-		// issue #145：流式集合签名变化 → 通知其他客户端重推（左栏「另一处正在运行」近实时）
+		// issue #145：流式集合签名变化 → 通知其他客户端重推（左栏「另一处正在运行」近实时）。
+		// 签名含等问卷态（问卷挂起/解决不改变流式集合，不带它已打开的别处页面永远看不到 `?`）。
 		try {
 			const sig = JSON.stringify(
 				[...this.convs.values()]
 					.filter((c) => this.conversationStreaming(c))
-					.map((c) => c.id)
+					.map((c) => `${c.id}:${this.isWaitingOnUser(c.id) ? 1 : 0}`)
 					.sort(),
 			);
 			if (sig !== this.lastRunningSig) {
@@ -5062,8 +5357,8 @@ export class ClientSession {
 	}
 
 	/** List persisted sessions for this client, newest first. */
-	/** issue #145：上次 emit 时本实例流式对话 id 集合签名。变化时经
-	 *  onRunningChanged 让其他客户端重推 conversations（elsewhere 近实时）；
+	/** issue #145：上次 emit 时本实例流式对话 id 集合签名（含等问卷态，见 emitConversations）。
+	 *  变化时经 onRunningChanged 让其他客户端重推 conversations（elsewhere 近实时）；
 	 *  签名相等即停，天然防 ping-pong 循环。 */
 	private lastRunningSig = "";
 
@@ -6536,12 +6831,13 @@ export class AgentService {
 		return out;
 	}
 
-	/** issue #145：别处所有正在跑的对话（左栏 elsewhere 只读感知用）。 */
+	/** issue #145：别处所有正在跑的对话（左栏 elsewhere 只读感知 + 手动过户用）。
+	 *  owner/convId 标识过户目标（手动过户入口）；DSH 引擎不填（不可过户）。 */
 	listExternalRunning(excludeClientId: string): ElsewhereRunning[] {
 		const out: ElsewhereRunning[] = [];
 		for (const [clientId, cs] of this.clients) {
 			if (clientId === excludeClientId) continue;
-			for (const r of cs.streamingSummariesAll()) out.push(r);
+			for (const r of cs.streamingSummariesAll()) out.push({ ...r, owner: clientId });
 		}
 		return out;
 	}
@@ -6636,6 +6932,233 @@ export class AgentService {
 		};
 	}
 
+	/** 插件/调度伪客户端：sink 常驻（fire-and-forget 的空函数），不能按浏览器存活判断。 */
+	private static isPseudoClientId(id: string): boolean {
+		return id.startsWith("plugin:") || id.startsWith("scheduler:");
+	}
+
+	/**
+	 * 浏览器重启认领：给 fresh clientId 找一个可接管的断开残留会话（返回旧 id）。
+	 * 有别的在线浏览器时返回 null（issue #10 隔离优先）。
+	 * 全同步：attach 里的认领段不含 await，并发的新标签后到者看到 sinkCount>0，
+	 * 不会抢走同一个残留。
+	 */
+	private findAdoptableOrphan(excludeClientId: string): { oldId: string; cs: ClientSession } | null {
+		const cands: OrphanCandidate[] = [];
+		for (const [id, cs] of this.clients) {
+			if (id === excludeClientId) continue;
+			const pseudo = AgentService.isPseudoClientId(id);
+			let live = false;
+			let streaming = 0;
+			let adoptable = false;
+			let activity = 0;
+			try {
+				live = cs.sinkCount() > 0;
+			} catch {
+				live = false;
+			}
+			if (!pseudo && !live) {
+				try {
+					streaming = cs.activeConversations();
+				} catch {
+					streaming = 0;
+				}
+				try {
+					adoptable = cs.hasAdoptableContent();
+				} catch {
+					adoptable = false;
+				}
+				try {
+					activity = cs.latestActivity();
+				} catch {
+					activity = 0;
+				}
+			}
+			cands.push({ id, live, pseudo, streaming, adoptable, activity });
+		}
+		const picked = pickAdoptableOrphan(cands);
+		if (!picked) return null;
+		const cs = this.clients.get(picked);
+		return cs ? { oldId: picked, cs } : null;
+	}
+
+	/**
+	 * 跨客户端感知接线（同会话查重 / 同项目并行 / elsewhere 列表 / 跨端 steer）。
+	 * attach 尾部与认领分支共用 —— 认领换了 map 键，必须在首帧推送（attachSink）
+	 * 前就按新 id 重接，否则 self-exclusion 失效：把自己当成“另一处”（elsewhere
+	 * 误报 + prompt/switch 自拦）。尾部会再调一次，幂等。
+	 */
+	private wireClient(cs: ClientSession, clientId: string): void {
+		cs.findSessionOwner = (targetPath) => this.findSessionOwner(targetPath, clientId);
+		cs.hasStreamingElsewhere = () => this.hasStreamingElsewhere(clientId);
+		cs.listProjectRunners = (cwd) => this.listProjectRunners(cwd, clientId);
+		cs.listExternalRunning = () => this.listExternalRunning(clientId);
+		cs.notifyExternalClients = (msg) => this.notifyClientsExcept(clientId, msg);
+		cs.onRunningChanged = () => this.pokeExternalRunning(clientId);
+	}
+
+	/**
+	 * 手动过户（take_over_conversation）：把 owner 会话的某主对话（含子代理后代、
+	 * 等答复问卷/页调用）整体搬到 target 会话并切过去。搬的是 runtime 本体不是
+	 * 副本，单 writer 不变 —— 从在线标签页手里接管也是安全的；源会话修好 active
+	 * 并推全量刷新，双方都收到去向通知。quiesce 排空期也放行（重连既有工作）。
+	 */
+	async takeOverConversation(targetId: string, ownerId: string, convId: string): Promise<void> {
+		const target = this.clients.get(targetId);
+		if (!target) return;
+		const fail = (text: string, textEn: string): void => {
+			target.sendNotice({ type: "notice", level: "warning", text, textEn });
+		};
+		if (!ownerId || !convId) {
+			fail("过户目标不明确（缺 owner/id），请重试", "Takeover target unclear (missing owner/id), please retry.");
+			return;
+		}
+		if (ownerId === targetId) {
+			// 自己的对话 → 退化为普通切换。
+			try {
+				await target.switchConversation(convId);
+			} catch {
+				/* switch 内部已用 notice 报错 */
+			}
+			return;
+		}
+		if (AgentService.isPseudoClientId(ownerId)) {
+			fail("定时任务/插件会话不支持过户", "Scheduler/plugin sessions cannot be taken over.");
+			return;
+		}
+		const source = this.clients.get(ownerId);
+		if (!source) {
+			fail("对方会话已不存在，可从历史对话里直接打开", "The source session is gone; reopen it from History instead.");
+			target.refreshExternalRunning();
+			return;
+		}
+		const briefs = source.takeoverBriefs();
+		const main = briefs.find((b) => b.id === convId);
+		if (!main) {
+			fail(
+				"对方已经没有这条对话（刚结束或被关闭），左栏稍后自动刷新",
+				"That conversation is gone on the other side; the list refreshes shortly.",
+			);
+			target.refreshExternalRunning();
+			return;
+		}
+		if (main.isSubagent) {
+			fail(
+				"只能过户主对话（子代理随主对话一起搬）",
+				"Only main conversations can be taken over (subagents move with their parent).",
+			);
+			return;
+		}
+		const moveIds = [convId, ...collectSubagentDescendantIds(briefs, convId)];
+		const moveSet = new Set(moveIds);
+		// 容量：与 switchSession 同口径（目标项目非子代理 8 个）。
+		const movedMains = briefs.filter((b) => moveSet.has(b.id) && !b.isSubagent).length;
+		const openInProject =
+			target.takeoverBriefs().filter((b) => b.cwd === main.cwd && !b.isSubagent).length + movedMains;
+		if (openInProject > MAX_OPEN_CONVERSATIONS) {
+			fail(
+				`目标项目运行的对话已达上限（${MAX_OPEN_CONVERSATIONS} 个），请先打开某个对话并离开（不继续对话）以移出列表`,
+				`This project already has the max open conversations (${MAX_OPEN_CONVERSATIONS}). Open one and leave it (without continuing) to remove it from the list.`,
+			);
+			return;
+		}
+		try {
+			const detached = await source.detachTakeoverConversations(moveIds);
+			if (!detached.ok) {
+				fail(
+					detached.reason === "empty"
+						? "对方会话只剩这一条对话且服务排空中，稍后再试"
+						: "对方已经没有这条对话（刚结束或被关闭），左栏稍后自动刷新",
+					detached.reason === "empty"
+						? "The source session only has this conversation and the server is draining; try later."
+						: "That conversation is gone on the other side; the list refreshes shortly.",
+				);
+				if (detached.reason === "missing") target.refreshExternalRunning();
+				return;
+			}
+			const newMainId = target.insertTakeoverConvs(detached.payload);
+			// 源会话修好 active（detach 内部已处理）→ 推全量刷新 + 告知去向；
+			// 无 sink 时 emit 即丢，无需判断。
+			source.sendNotice({
+				type: "notice",
+				level: "info",
+				text: `「${main.title}」已过户到另一处接管，本页不再持有它。`,
+				textEn: `"${main.title}" was taken over by another page and is no longer held here.`,
+			});
+			target.sendNotice({
+				type: "notice",
+				level: "info",
+				text: `已将「${main.title}」过户到当前页面，可直接继续查看与操作。`,
+				textEn: `"${main.title}" was moved to this page — pick up right where it left off.`,
+			});
+			await target.switchConversation(newMainId);
+		} catch (err) {
+			fail(`过户失败：${(err as Error).message}`, `Takeover failed: ${(err as Error).message}`);
+		}
+	}
+
+	/**
+	 * 跨页作答预告（peek_elsewhere_question）：把 owner 会话里某对话的等答复问卷
+	 *  原文取回 target 页展示。只读，不搬迁对话；问卷已不在则直说（并刷新左栏）。
+	 */
+	async peekElsewhereQuestion(targetId: string, ownerId: string, convId: string): Promise<void> {
+		const target = this.clients.get(targetId);
+		if (!target) return;
+		const fail = (text: string, textEn: string): void => {
+			target.sendNotice({ type: "notice", level: "warning", text, textEn });
+		};
+		if (!ownerId || !convId) {
+			fail("问卷目标不明确（缺 owner/id），请重试", "Question target unclear (missing owner/id), please retry.");
+			return;
+		}
+		if (ownerId === targetId) return; // 自己的问卷走本地通道，不需要预告
+		if (AgentService.isPseudoClientId(ownerId)) {
+			fail(
+				"定时任务/插件会话的问卷不支持跨页作答",
+				"Scheduler/plugin session questions cannot be answered cross-page.",
+			);
+			return;
+		}
+		const source = this.clients.get(ownerId);
+		const q = source?.peekPendingQuestion(convId);
+		if (!q) {
+			fail(
+				"那张问卷已不在（对方刚回答/取消或对话已结束）",
+				"That question is gone (just answered/cancelled there, or the run ended).",
+			);
+			target.refreshExternalRunning();
+			return;
+		}
+		target.pushElsewhereQuestion(ownerId, convId, q);
+	}
+
+	/**
+	 * 跨页作答（question_answer 带 owner）：把本页提交的答案送到持有方会话。
+	 * 问卷已不在（对方刚回答/取消）则明确告知，答案不吞不丢两不沾 —— 没送出就是没送出。
+	 */
+	async answerElsewhereQuestion(
+		targetId: string,
+		ownerId: string,
+		id: string,
+		answers: QuestionAnswer[],
+		cancelled?: boolean,
+	): Promise<void> {
+		const target = this.clients.get(targetId);
+		if (!target) return;
+		const source = this.clients.get(ownerId);
+		const ok = source ? source.resolveQuestion(id, answers, cancelled) : false;
+		if (!ok) {
+			target.sendNotice({
+				type: "notice",
+				level: "warning",
+				text: "那张问卷已不在（对方刚回答/取消或对话已结束），你的回答没有送出",
+				textEn:
+					"That question is gone (just answered/cancelled there, or the run ended) — your answer was not delivered.",
+			});
+			target.refreshExternalRunning();
+		}
+	}
+
 	/** Get or create the session for a client, racing attach calls safely. */
 	async attach(clientId: string, send: (msg: ServerMessage) => void): Promise<ClientSession> {
 		let cs = this.clients.get(clientId);
@@ -6644,61 +7167,77 @@ export class AgentService {
 			if (inflight) {
 				cs = await inflight;
 			} else {
-				// Restore this client's last-used workspace when it still exists;
-				// Admission gate: while quiesced, only clients with an EXISTING
-				// session may attach (they can watch their runs drain); brand-new
-				// clients are refused — index.ts closes their socket (4403) and the
-				// browser reconnect loop retries after admission reopens.
-				if (this.quiesced) {
-					throw new QuiesceRejectedError("新连接被拒绝，请等服务器恢复后重试");
-				}
-				// otherwise fall back to the server's configured default cwd.
-				let cwd = this.cwd;
-				const saved = this.stateStore.get(clientId);
-				if (saved.lastCwd && saved.lastCwd !== this.cwd) {
-					try {
-						if (statSync(saved.lastCwd).isDirectory()) cwd = saved.lastCwd;
-					} catch {
-						// gone (unmounted drive / deleted) — fall back to the default
+				// 浏览器重启认领（clientId 存 sessionStorage，关浏览器即失；服务端残留
+				// ClientSession 的运行中对话否则永远卡在“另一处”只读，连看都看不了）：
+				// 无其他在线浏览器时，把最近断开的残留会话整体过户给这个新 id
+				// （只换 map 键，不搬 runtime：对话/终端/订阅/cwd 原样保留，
+				// 流式增量经尾部 attachSink 直接推给新 socket）。
+				// 有其他在线标签时不认领（issue #10 隔离优先）；quiesce 排空期也放行
+				// （这是重连既有工作，不是新工作）。本段无 await，并发 attach 原子。
+				const orphan = this.findAdoptableOrphan(clientId);
+				if (orphan) {
+					this.clients.delete(orphan.oldId);
+					this.clients.set(clientId, orphan.cs);
+					cs = orphan.cs;
+					// 先按新 id 重接（首帧 attachSink 的 elsewhere/self-exclusion 依赖它）。
+					this.wireClient(cs, clientId);
+					cs.noteAdopted();
+					// 服务重启前记在旧 id 名下的中断记录搬到新 id 名下，尾部
+					// resumeInterrupted 按新 id 消费（只认领一次，不重复恢复）。
+					const inter = this.stateStore.takeInterrupted(orphan.oldId);
+					if (inter?.length) this.stateStore.saveInterrupted(clientId, inter);
+				} else {
+					// Restore this client's last-used workspace when it still exists;
+					// Admission gate: while quiesced, only clients with an EXISTING
+					// session may attach (they can watch their runs drain); brand-new
+					// clients are refused — index.ts closes their socket (4403) and the
+					// browser reconnect loop retries after admission reopens.
+					if (this.quiesced) {
+						throw new QuiesceRejectedError("新连接被拒绝，请等服务器恢复后重试");
 					}
-				}
-				// Sessions use the SDK default per-project dir — no per-client dir.
-				// issue #145：新标签页默认恢复项目最近的会话 —— 若那条在别处跑着，
-				// 建之前就决定空白（第二个 writer 根本不会被打开，也无需事后拆 runtime）。
-				// 先做无 I/O 的便宜判断，无人在跑时不扫目录。
-				let createOpts: { blank?: boolean; blankTitle?: string } | undefined;
-				if (this.hasStreamingElsewhere(clientId)) {
-					try {
-						const infos = await SessionManager.list(cwd, piSessionsRoot());
-						const recent = infos[0]?.path ? resolve(infos[0].path) : undefined;
-						const owner = recent ? this.findSessionOwner(recent, clientId) : null;
-						if (owner?.isStreaming) createOpts = { blank: true, blankTitle: owner.title };
-					} catch {
-						// 列表失败不挡正常恢复
+					// otherwise fall back to the server's configured default cwd.
+					let cwd = this.cwd;
+					const saved = this.stateStore.get(clientId);
+					if (saved.lastCwd && saved.lastCwd !== this.cwd) {
+						try {
+							if (statSync(saved.lastCwd).isDirectory()) cwd = saved.lastCwd;
+						} catch {
+							// gone (unmounted drive / deleted) — fall back to the default
+						}
 					}
-				}
-				const creating = ClientSession.create(clientId, cwd, this.stateStore, createOpts).finally(() => {
-					this.pending.delete(clientId);
-				});
-				this.pending.set(clientId, creating);
-				cs = await creating;
-				this.clients.set(clientId, cs);
-				// issue #145 接线提前：首帧 elsewhere 依赖它。
-				cs.findSessionOwner = (targetPath) => this.findSessionOwner(targetPath, clientId);
-				cs.hasStreamingElsewhere = () => this.hasStreamingElsewhere(clientId);
-				cs.listProjectRunners = (cwd) => this.listProjectRunners(cwd, clientId);
-				cs.listExternalRunning = () => this.listExternalRunning(clientId);
-				cs.notifyExternalClients = (msg) => this.notifyClientsExcept(clientId, msg);
-				cs.onRunningChanged = () => this.pokeExternalRunning(clientId);
-				// Make sure the restored/default workspace appears in the project list.
-				this.stateStore.remember(clientId, cwd);
-				if (cwd !== this.cwd) {
-					send({
-						type: "notice",
-						level: "info",
-						text: `已恢复上次的工作目录：${cwd}`,
-						textEn: `Restored the last working directory: ${cwd}`,
+					// Sessions use the SDK default per-project dir — no per-client dir.
+					// issue #145：新标签页默认恢复项目最近的会话 —— 若那条在别处跑着，
+					// 建之前就决定空白（第二个 writer 根本不会被打开，也无需事后拆 runtime）。
+					// 先做无 I/O 的便宜判断，无人在跑时不扫目录。
+					let createOpts: { blank?: boolean; blankTitle?: string } | undefined;
+					if (this.hasStreamingElsewhere(clientId)) {
+						try {
+							const infos = await SessionManager.list(cwd, piSessionsRoot());
+							const recent = infos[0]?.path ? resolve(infos[0].path) : undefined;
+							const owner = recent ? this.findSessionOwner(recent, clientId) : null;
+							if (owner?.isStreaming) createOpts = { blank: true, blankTitle: owner.title };
+						} catch {
+							// 列表失败不挡正常恢复
+						}
+					}
+					const creating = ClientSession.create(clientId, cwd, this.stateStore, createOpts).finally(() => {
+						this.pending.delete(clientId);
 					});
+					this.pending.set(clientId, creating);
+					cs = await creating;
+					this.clients.set(clientId, cs);
+					// issue #145 接线提前：首帧 elsewhere 依赖它。
+					this.wireClient(cs, clientId);
+					// Make sure the restored/default workspace appears in the project list.
+					this.stateStore.remember(clientId, cwd);
+					if (cwd !== this.cwd) {
+						send({
+							type: "notice",
+							level: "info",
+							text: `已恢复上次的工作目录：${cwd}`,
+							textEn: `Restored the last working directory: ${cwd}`,
+						});
+					}
 				}
 			}
 		}
@@ -6719,12 +7258,7 @@ export class AgentService {
 		cs.pluginStopBgTask = this.pluginStopBgTask;
 		cs.isQuiesced = () => this.quiesced;
 		// issue #145 跨客户端感知接线（同会话查重 / 同项目并行 / elsewhere 列表）。
-		cs.findSessionOwner = (targetPath) => this.findSessionOwner(targetPath, clientId);
-		cs.hasStreamingElsewhere = () => this.hasStreamingElsewhere(clientId);
-		cs.listProjectRunners = (cwd) => this.listProjectRunners(cwd, clientId);
-		cs.listExternalRunning = () => this.listExternalRunning(clientId);
-		cs.notifyExternalClients = (msg) => this.notifyClientsExcept(clientId, msg);
-		cs.onRunningChanged = () => this.pokeExternalRunning(clientId);
+		this.wireClient(cs, clientId);
 		// 插件宿主工作区跟随：初次接入也同步一次（恢复的 lastCwd 可能≠服务启动目录），
 		// notifyCwd 幂等去重；此后 set_cwd 成功时由 cs.onCwdChanged 继续驱动。
 		cs.onCwdChanged = (abs) => this.onClientCwdChanged?.(abs);

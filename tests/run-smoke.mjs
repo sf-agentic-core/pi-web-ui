@@ -52,6 +52,8 @@ const ALL = [
 	"preview-test",
 	"quiesce-test",
 	"question-bridge-test",
+	// 手机场景：clientId 变了（换标签页/设备/PWA 重开）后待答问卷不能丢。
+	"cross-client-question-test",
 	"recursive-watch-test",
 	"refresh-models-test",
 	"restart-handoff-test",

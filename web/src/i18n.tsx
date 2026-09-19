@@ -178,6 +178,11 @@ export const zh = {
 	/* left panel */
 	recentProjects: "最近项目",
 	runningConversations: "运行的对话",
+	elsewhereBadge: "另一处",
+	elsewhereTip: "在其他标签页 / 设备上运行的对话（右键可过户到本页）",
+	takeoverConversation: "过户到当前页面",
+	takeoverHasQuestion: "有问卷等答复，点击直接作答",
+	waitingQuestionBadge: "有问卷等答复，点击查看",
 	subagentBadge: "子代理",
 	convErrorBadge: "子代理运行报错：{error}",
 	subagentTitle: "子代理 · {title}",
@@ -1307,6 +1312,11 @@ const en: Record<keyof typeof zh, string> = {
 	/* left panel */
 	recentProjects: "Recent projects",
 	runningConversations: "Running chats",
+	elsewhereBadge: "Elsewhere",
+	elsewhereTip: "Conversation running in another tab / device (right-click to take over)",
+	takeoverConversation: "Take over to this page",
+	takeoverHasQuestion: "Has a pending question — click to answer it here",
+	waitingQuestionBadge: "Waiting on your answer — click to view",
 	subagentBadge: "Subagent",
 	convErrorBadge: "Subagent failed: {error}",
 	subagentTitle: "Subagent · {title}",

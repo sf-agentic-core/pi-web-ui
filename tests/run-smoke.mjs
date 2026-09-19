@@ -52,6 +52,8 @@ const ALL = [
 	"preview-test",
 	"quiesce-test",
 	"question-bridge-test",
+	// 手机场景：clientId 变了（换标签页/设备/PWA 重开）后待答问卷不能丢。
+	"cross-client-question-test",
 	"recursive-watch-test",
 	"refresh-models-test",
 	"restart-handoff-test",
@@ -67,6 +69,13 @@ const ALL = [
 	"subagent-thinking-test",
 	"subagent-ui-context-test",
 	"switch-session-background-test",
+	"cross-client-session-test",
+	// 浏览器关闭重开后残留会话认领（无在线浏览器时新标签整体接管，有在线时不抢）。
+	"orphan-adopt-test",
+	// 手动过户：右键「另一处」行把对话（含等答复问卷）搬到本页，问卷可直接回答。
+	"takeover-test",
+	// 跨页作答：点 elsewhere 行的 `?` 把问卷拉到本页回答，不搬迁对话。
+	"remote-answer-test",
 	"terminal-smoke-test",
 	"token-auth-test",
 	"vision-bridge-test",

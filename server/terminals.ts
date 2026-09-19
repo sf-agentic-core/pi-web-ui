@@ -746,6 +746,12 @@ export class TerminalManager {
 		private readonly lang?: () => ServerLang,
 	) {}
 
+	/** 过户：对话整体搬到另一个 ClientSession 时，把输出/退出事件改发给新宿主。
+	 *  PTY 本体不动（进程不重启，输出缓冲保留），只换投递地址. */
+	rebindEmit(emit: (msg: ServerMessage) => void): void {
+		this.emit = emit;
+	}
+
 	/** Start a plain interactive shell in the given directory. */
 	create(
 		id: string,

@@ -10,6 +10,27 @@
 
 ## [Unreleased]
 
+### Added
+
+- **`ask_user_question` 在手机上不会再丢问题**（backport upstream #217 / `f1707f6` + #145 / `c8f97b1`）—— 根因：问卷只活在**持有它的那个 `ClientSession` 内存里**，而 `clientId` 是**每标签页的 `sessionStorage`**（`getClientId()`）：移动端浏览器一关、换容器（Safari ↔ 主屏 PWA）、换设备，或 storage 不可用（in-app WebView / 隐私模式退化为一次性 id），就变成新 id —— 新 id 的快照 `pendingQuestion` 是 `null`、也收不到 `question_pending`、`question_answer` 静默无效，模型那支 run **永久挂起**（问卷从眼前消失且没有任何入口）。现在：
+  - 无其他在线浏览器时，新 clientId 自动**认领**最近断开的有内容残留（只换 map 键、不搬 runtime，PTY 与订阅原样保留），问卷随快照一起回来 —— 这就是「关掉手机浏览器再打开」的形态；
+  - 有其他标签页在线时不抢认领（#145 隔离优先）：左栏「另一处」行的 `?` 角标可把问卷**拉到本页作答**（`peek_elsewhere_question` + `question_answer.owner`，本页只展示/关闭，id 属对方作用域），右键该行可把整段对话**过户到本页**（`take_over_conversation`，含等答复问卷、子代理后代与终端，源页对话框经 `question_retracted` 收起）；
+  - 跨客户端**双写防护**（#145）：同一份转录在别处跑着时 `prompt` / `switch_session` 拒绝并指向原窗口，新标签页默认不再落进正在跑的那条；
+  - 上游那笔同时带着插件 UI-slot 基础设施（`ui-slots.ts` / `context-menu-state.ts`，约 13k 行）—— **没有引入**：过户与跨页作答按本仓自己的 `ctx-menu` 实现，其余是服务端协议（`take_over_conversation` / `peek_elsewhere_question` / `question_retracted` / `elsewhere_question` / `ConversationSummary.hasQuestion` / `ElsewhereRunning.owner|convId|hasQuestion`）。
+  - 回归：新增 `tests/cross-client-question-test.mjs`（零 token；**改前红**：新 clientId `pendingQuestion=null`、`isStreaming` 永久为真；**改后绿**），加上游 `tests/cross-client-session-test.mjs` / `tests/orphan-adopt-test.mjs` / `tests/takeover-test.mjs` / `tests/remote-answer-test.mjs` / `tests/unit/orphan-adopt.test.ts`。
+
+### Fixed
+
+- **「看不见的第二个 agent」不会再出现了**（issue #145）—— 换设备 / 新开标签页打开一条正在跑的对话，以前 UI 显示空闲可发，一发消息就给同一份会话再开一支 run，两支 agent 在同一工作区并行动手、事后只有一支可查。现在服务端跨客户端查重：同一份记录在别处正在跑时，`switch_session` / `prompt` 直接拒绝并告诉你去原窗口继续，第二个 writer 从机制上造不出来；owner 空闲后可正常打开（会提醒你别处也开着、只留一处发送）。**新标签页也不再默认落进正在跑的那条**：初始恢复与切项目首访恢复在建之前就查一遍，命中正在跑就停在空白新对话并告诉你原因。同项目不同对话仍可并行（适合改不同文件），但两边都会收到并行提醒，AI 还会收到一条冲突评估提醒（拿不准就用 `ask_user_question` 让你选：并行 / 等它跑完 / 只读围观）。左栏「运行的对话」里直接能看到其他标签页 / 设备的运行（带“另一处”标签；有等答复问卷时挂 `?` 角标，右键可过户到本页）。pi 与 DSH 双引擎同修，回归测试 `tests/cross-client-session-test.mjs`（改前红改后绿，覆盖拒绝双写/默认落点/并行感知）。
+
+<!-- auto-i18n:start -->
+
+### i18n
+
+- 前端新增 key（5）：`elsewhereBadge`、`elsewhereTip`（改文案）、`takeoverConversation`、`takeoverHasQuestion`、`waitingQuestionBadge`
+
+<!-- auto-i18n:end -->
+
 ## [0.84.0] — 2026-09-13
 
 ### Added
@@ -29,9 +50,11 @@
   - 分组逻辑抽成纯函数 `web/src/conv-groups.ts` + 单测 `tests/unit/conv-groups.test.ts`，另有真浏览器逐帧回归 `tests/conv-group-flash-test.mjs`（MutationObserver 记录每一帧 DOM，两个方向都断言不再渲染项目名；改回只看 `cwd` 即变红）。
 
 <!-- auto-i18n:start -->
+
 ### i18n
 
 - 服务端新增 key（1）：`terminals.cwd.outside.workspace`
+
 <!-- auto-i18n:end -->
 
 ## [0.83.0] — 2026-09-13
@@ -121,11 +144,13 @@
 暂无其他未发布内容。
 
 <!-- auto-i18n:start -->
+
 ### i18n
 
 - 前端新增 key（28）：`browserPageEnabledDesc`、`browserPageOffHint`、`browserControl`、`browserControlTip`、`browserControlChecking`、`browserControlOffline`、`browserControlEmpty`、`browserControlDisabled`、`browserControlPages`、`browserControlPageOpen`、`browserControlPageClosed`、`browserControlExamples`、`browserControlExample1`、`browserControlExample2`、`browserControlOpenOptions`、`browserControlRefresh`、`browserControlCite`、`browserControlCiteTip`、`browserControlCiteNote`、`browserControlCited`、`browserControlCiteFailed`、`browserControlOpenPanel`、`browserControlSingleTip`、`attachPage`、`attachPageShort`、`tplThinkingLabel`、`tplThinkingFollowMain`、`tplThinkingHint`
 - 前端中文变更（2）：`settingsSubagentTemplatesDesc`、`noSubagentTemplates`
 - 前端英文变更（2）：`settingsSubagentTemplatesDesc`、`noSubagentTemplates`
+
 <!-- auto-i18n:end -->
 
 ## [0.82.0] — 2026-09-13

@@ -21,6 +21,8 @@ interface DshQuestionDialogProps {
 			secret?: boolean;
 		}[];
 	};
+	/** 跨页作答时持有方会话 id：答案转交过去（question_answer 带 owner）。 */
+	owner?: string;
 }
 
 /**
@@ -36,7 +38,7 @@ interface DshQuestionDialogProps {
  * 文本渲染：question/detail/description/preview 统一走 Markdown（rawHtml），
  * 模型可自由写 markdown 或 HTML —— 由模型自选、信任模型。
  */
-export function DshQuestionDialog({ question }: DshQuestionDialogProps) {
+export function DshQuestionDialog({ question, owner }: DshQuestionDialogProps) {
 	const t = useT();
 	const [selections, setSelections] = useState<Record<string, string[]>>({});
 	const [customs, setCustoms] = useState<Record<string, string>>({});
@@ -62,7 +64,13 @@ export function DshQuestionDialog({ question }: DshQuestionDialogProps) {
 				const next = Math.max(0, Math.ceil((question.deadline! - Date.now()) / 1000));
 				if (next <= 0 && s > 0) {
 					// 归零 → 自动取消（服务端超时 reject 模型提问，对话继续）。
-					appSend({ type: "question_answer", id: question.id, answers: [], cancelled: true });
+					appSend({
+						type: "question_answer",
+						id: question.id,
+						answers: [],
+						cancelled: true,
+						...(owner ? { owner } : {}),
+					});
 				}
 				return next;
 			});
@@ -91,11 +99,11 @@ export function DshQuestionDialog({ question }: DshQuestionDialogProps) {
 			const custom = (customs[qq.id] ?? "").trim();
 			return { id: qq.id, selected, ...(custom ? { custom } : {}) };
 		});
-		appSend({ type: "question_answer", id: question.id, answers });
+		appSend({ type: "question_answer", id: question.id, answers, ...(owner ? { owner } : {}) });
 	};
 
 	const cancel = () => {
-		appSend({ type: "question_answer", id: question.id, answers: [], cancelled: true });
+		appSend({ type: "question_answer", id: question.id, answers: [], cancelled: true, ...(owner ? { owner } : {}) });
 	};
 
 	const toggleOption = (qid: string, label: string) => {

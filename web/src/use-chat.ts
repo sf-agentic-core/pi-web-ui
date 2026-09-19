@@ -7,6 +7,7 @@ import type {
 	BgServer,
 	CommandDef,
 	ConversationSummary,
+	ElsewhereRunning,
 	FileContent,
 	FileListing,
 	FileSearchResult,
@@ -26,6 +27,7 @@ import type {
 	UiPluginCatalogEntry,
 	UiPluginInfo,
 	UiProviderConfig,
+	UiQuestion,
 	UiServiceInfo,
 	UiSettingsState,
 	UiState,
@@ -124,6 +126,8 @@ export interface ChatState {
 	sessions: SessionSummary[];
 	/** Open conversations (each runs its own session in parallel). */
 	conversations: ConversationSummary[];
+	/** issue #145：在其他客户端（标签页/设备）上正在跑的对话（只读感知，不可点）。 */
+	elsewhere: ElsewhereRunning[];
 	/** Id of the conversation the current snapshot belongs to. */
 	activeConversationId: string;
 	/** Recent workspaces this client opened (left panel project picker). */
@@ -173,6 +177,15 @@ export interface ChatState {
 	/** 待用户回答的模型提问（ask_user_question）——两个引擎共用。服务端是事实源：
 	 *  即时通道（question_pending）+ 快照（UiState.pendingQuestion，见 syncPendingQuestion）。 */
 	question: UiPendingQuestion | null;
+	/** 跨页作答预告（peek_elsewhere_question 的回包）：别处会话问卷的原文。
+	 *  与本地 question 独立共存（id 各会话作用域，不进 answered 集合）；
+	 *  提交带 owner 由持有方 resolve，本页只负责展示/关闭。 */
+	remoteQuestion: {
+		owner: string;
+		convId: string;
+		id: string;
+		questions: UiQuestion[];
+	} | null;
 	/** User command list from .pi/commands.json (terminal left panel). */
 	commands: CommandDef[];
 	commandsPath: string;
@@ -278,6 +291,7 @@ type Action =
 			type: "conversations";
 			conversations: ConversationSummary[];
 			activeId: string;
+			elsewhere?: ElsewhereRunning[];
 	  }
 	| { type: "projects"; projects: ProjectSummary[] }
 	| { type: "files"; files: FileListing }
@@ -349,6 +363,10 @@ type Action =
 	| {
 			type: "question";
 			question: UiPendingQuestion | null;
+	  }
+	| {
+			type: "remote_question";
+			question: { owner: string; convId: string; id: string; questions: UiQuestion[] } | null;
 	  }
 	| { type: "commands"; commands: CommandDef[]; path: string }
 	| { type: "slash_commands"; commands: SlashCommandInfo[] }
@@ -615,6 +633,7 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return {
 				...state,
 				conversations: action.conversations,
+				elsewhere: action.elsewhere ?? [],
 				activeConversationId: action.activeId,
 			};
 		case "projects":
@@ -666,6 +685,8 @@ function reducer(state: ChatState, action: Action): ChatState {
 			return { ...state, dialog: action.dialog };
 		case "question":
 			return { ...state, question: action.question };
+		case "remote_question":
+			return { ...state, remoteQuestion: action.question };
 		case "commands":
 			return {
 				...state,
@@ -809,6 +830,7 @@ export function useChat() {
 		authFlow: null,
 		sessions: [],
 		conversations: [],
+		elsewhere: [],
 		activeConversationId: "",
 		projects: [],
 		files: null,
@@ -828,6 +850,7 @@ export function useChat() {
 		statuses: [],
 		dialog: null,
 		question: null,
+		remoteQuestion: null,
 		commands: [],
 		commandsPath: "",
 		slashCommands: [],
@@ -928,15 +951,22 @@ export function useChat() {
 			// 不会发任何回执清除前端面板（否则会出现“回答后不消失、取消无效”）。
 			// 模型再次 ask_user_question 时会重新 question_pending，面板自动回来。
 			if (msg.type === "question_answer") {
-				// 记住这个 id：快照恢复时跳过它（回答消息与快照在途时会交错，服务端
-				// 删除 pending 之前生成的快照仍带着这张问卷）。
-				answeredQuestionsRef.current.add(msg.id);
-				if (answeredQuestionsRef.current.size > 64) {
-					const oldest = answeredQuestionsRef.current.values().next().value;
-					if (oldest !== undefined) answeredQuestionsRef.current.delete(oldest);
+				if (msg.owner) {
+					// 跨页作答：只收跨页对话框。id 是对方会话作用域，绝不进 answered
+					// 集合 —— 否则会误杀本会话未来同号问卷（两边计数器都从 q1 起）。
+					const cur = chatApi.current.chat.remoteQuestion;
+					if (cur && cur.id === msg.id) dispatch({ type: "remote_question", question: null });
+				} else {
+					// 记住这个 id：快照恢复时跳过它（回答消息与快照在途时会交错，服务端
+					// 删除 pending 之前生成的快照仍带着这张问卷）。
+					answeredQuestionsRef.current.add(msg.id);
+					if (answeredQuestionsRef.current.size > 64) {
+						const oldest = answeredQuestionsRef.current.values().next().value;
+						if (oldest !== undefined) answeredQuestionsRef.current.delete(oldest);
+					}
+					questionSourceRef.current = "live";
+					dispatch({ type: "question", question: null });
 				}
-				questionSourceRef.current = "live";
-				dispatch({ type: "question", question: null });
 			}
 			return true;
 		}
@@ -1102,6 +1132,7 @@ export function useChat() {
 						type: "conversations",
 						conversations: msg.conversations,
 						activeId: msg.activeId,
+						elsewhere: msg.elsewhere,
 					});
 					break;
 				case "projects":
@@ -1231,6 +1262,30 @@ export function useChat() {
 							...(msg.deadline !== undefined ? { deadline: msg.deadline } : {}),
 							questions: msg.questions,
 						},
+					});
+					break;
+				case "question_retracted": {
+					// 问卷被搬走/取消（手动过户到另一会话）：源页面正在展示该 id 即立即收起。
+					// 快照为 null 收不掉 live 面板（见 pending-question.ts 规则 2），必须显式撤回；
+					// 记入 answered，迟到的旧快照也不会把它复活。
+					const cur = chatApi.current.chat.question;
+					if (cur && cur.id === msg.id) {
+						answeredQuestionsRef.current.add(msg.id);
+						if (answeredQuestionsRef.current.size > 64) {
+							const oldest = answeredQuestionsRef.current.values().next().value;
+							if (oldest !== undefined) answeredQuestionsRef.current.delete(oldest);
+						}
+						questionSourceRef.current = "live";
+						dispatch({ type: "question", question: null });
+					}
+					break;
+				}
+				case "elsewhere_question":
+					// 跨页作答预告（peek 的回包）：别处问卷原文直接弹框，提交带 owner
+					// 由持有方 resolve。与本地问卷独立共存，id 不进 answered 集合。
+					dispatch({
+						type: "remote_question",
+						question: { owner: msg.owner, convId: msg.convId, id: msg.id, questions: msg.questions },
 					});
 					break;
 				case "page_request": {

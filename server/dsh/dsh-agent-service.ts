@@ -35,6 +35,7 @@ import { FilesService, workspacePath } from "../files-service.js";
 import { QuiesceRejectedError } from "../agent-service.js";
 
 import { NATIVE_COMMANDS, parseSlash } from "../slash-commands.js";
+import type { ProjectRunnerInfo, SessionOwnerInfo } from "../agent-service.js";
 import { bilingual, pick, resolveServerLang, type ServerLang } from "../i18n.js";
 import { TerminalManager, loadCommands, saveCommandsFile } from "../terminals.js";
 import { saveUpload } from "../uploads.js";
@@ -45,6 +46,7 @@ import type {
 	BgServer,
 	CommandDef,
 	ConversationSummary,
+	ElsewhereRunning,
 	GoalStatus,
 	ProjectSummary,
 	PromptAttachment,
@@ -296,6 +298,17 @@ export class DshClientSession {
 	onQuit: (() => boolean) | undefined;
 	isQuiesced: (() => boolean) | undefined;
 	onCwdChanged: ((cwd: string) => void) | undefined;
+	/** issue #145 跨客户端感知（DshAgentService.attach 接线，与 pi 引擎同语义；
+	 *  DSH 的会话身份是 sessionId = JSONL 目录名）。 */
+	findSessionOwnerById: ((sessionId: string) => SessionOwnerInfo | null) | undefined = undefined;
+	listProjectRunners: ((cwd: string) => ProjectRunnerInfo[]) | undefined = undefined;
+	listExternalRunning: (() => ElsewhereRunning[]) | undefined = undefined;
+	notifyExternalClients:
+		| ((msg: { type: "notice"; level: "info" | "warning" | "error"; text: string; textEn?: string }) => void)
+		| undefined = undefined;
+	onRunningChanged: (() => void) | undefined = undefined;
+	/** issue #145：上次 emit 时流式对话签名（变化才 poke 其他客户端，防循环）。 */
+	private lastRunningSig = "";
 
 	private constructor(clientId: string, cwd: string, stateStore: ClientStateStore, dataDir: string, agentDir: string) {
 		this.clientId = clientId;
@@ -1290,6 +1303,43 @@ export class DshClientSession {
 		return 0;
 	}
 
+	/** issue #145：本实例连接的 socket 数（0 = 标签页全关了，会话残留）。 */
+	sinkCount(): number {
+		return this.sinks.size;
+	}
+
+	/** issue #145：按 sessionId 找本实例持有的对话（跨客户端查重的本机一半）。 */
+	findConversationBySessionId(sessionId: string): DshConversation | undefined {
+		for (const conv of this.convs.values()) if (conv.sessionId === sessionId) return conv;
+		return undefined;
+	}
+
+	/** issue #145：本实例在某 cwd 下正在跑的对话摘要（同项目并行感知用）。 */
+	streamingInCwd(cwd: string): { convId: string; title: string; sessionId: string }[] {
+		const out: { convId: string; title: string; sessionId: string }[] = [];
+		for (const conv of this.convs.values()) {
+			if (conv.cwd !== cwd || !conv.isStreaming) continue;
+			out.push({ convId: conv.id, title: conv.title, sessionId: conv.sessionId });
+		}
+		return out;
+	}
+
+	/** issue #145：本实例所有正在跑的对话摘要（elsewhere 列表的本机一半）。 */
+	streamingSummariesAll(): { title: string; cwd: string; isStreaming: boolean }[] {
+		const out: { title: string; cwd: string; isStreaming: boolean }[] = [];
+		for (const conv of this.convs.values()) {
+			if (!conv.isStreaming) continue;
+			out.push({ title: conv.title, cwd: conv.cwd, isStreaming: true });
+		}
+		return out;
+	}
+
+	/** issue #145：其他客户端重推 conversations 用（elsewhere 刷新）。 */
+	refreshExternalRunning(): void {
+		if (this.disposed) return;
+		this.emitConversations();
+	}
+
 	/** 左栏展示口径（issue #140，与 pi 引擎同义）：listed 之外，当前对话只要有
 	 *  内容（DSH 的对话消息全在内存里，直接数 messages）也在列表里；空白新对话
 	 *  不入列。只影响展示，不动 listed 的语义。 */
@@ -1312,7 +1362,25 @@ export class DshClientSession {
 				isSubagent: false,
 			});
 		}
-		this.emit({ type: "conversations", conversations: list, activeId: this.activeId });
+		// issue #145：流式集合签名变化 → 通知其他客户端重推（左栏「另一处正在运行」近实时）
+		const sig = JSON.stringify(
+			[...this.convs.values()]
+				.filter((c) => c.isStreaming)
+				.map((c) => c.id)
+				.sort(),
+		);
+		if (sig !== this.lastRunningSig) {
+			this.lastRunningSig = sig;
+			this.onRunningChanged?.();
+		}
+		const elsewhere = this.listExternalRunning?.() ?? [];
+		this.emit({
+			type: "conversations",
+			conversations: list,
+			activeId: this.activeId,
+			// 为空时缺省（老快照字节一致）
+			...(elsewhere.length > 0 ? { elsewhere } : {}),
+		});
 	}
 
 	/** 语义同 pi 引擎的 newChat：true = 当前活动对话是可接收首条的空白新对话
@@ -1409,6 +1477,53 @@ export class DshClientSession {
 			}
 		}
 		let conv = this.conv;
+		// issue #145：同文件守卫 —— 别处正在跑同一 sessionId 时拒绝发送（不造第二个 writer）。
+		const fileOwner = this.findSessionOwnerById?.(conv.sessionId);
+		if (fileOwner && fileOwner.isStreaming) {
+			this.emit({
+				type: "notice",
+				level: "warning",
+				text: `发送已拦截：该对话正在另一处运行中（「${fileOwner.title}」）。请等它结束后再发，或回到原窗口继续 —— 否则两个 agent 会同时写同一份记录，其中一支事后不可见。`,
+				textEn: `Prompt blocked: this conversation is running in another window ("${fileOwner.title}"). Wait for it to finish or continue there — two writers on one transcript would leave one run permanently invisible.`,
+			});
+			this.flushSnapshot();
+			return;
+		}
+		// issue #145：同项目并行感知（与 pi 引擎同语义；DSH 无 display:false 的
+		// custom 消息通道，提醒以前置系统文本随本轮发给运行时，用户气泡保持原文）。
+		let sysPrefix = "";
+		if (!conv.isStreaming) {
+			const localTitles = [...this.convs.values()]
+				.filter((c) => c.id !== conv.id && c.cwd === conv.cwd && c.isStreaming)
+				.map((c) => `本窗口「${c.title}」`);
+			const externalRunners = (this.listProjectRunners?.(conv.cwd) ?? []).filter(
+				(r) => r.sessionFile === undefined || basename(dirname(resolve(r.sessionFile))) !== conv.sessionId,
+			);
+			const runnerTitles = [...localTitles, ...externalRunners.map((r) => `另一处「${r.title}」`)];
+			if (runnerTitles.length > 0) {
+				const shown = runnerTitles.slice(0, 3).join("、");
+				const more = runnerTitles.length > 3 ? `等 ${runnerTitles.length} 处` : "";
+				this.emit({
+					type: "notice",
+					level: "info",
+					text: `同项目并行提醒：${shown}${more}正在同一项目运行。你可以继续（适合改不同文件），改动同一文件前请先确认；拿不准就等它跑完。`,
+					textEn: `Parallel-work notice: ${shown}${more ? " and more" : ""} running in the same project. You may continue (fine for different files); confirm before touching the same files, or wait for it to finish when unsure.`,
+				});
+				sysPrefix =
+					`(System reminder: ${runnerTitles.length} other run(s) [${runnerTitles.join("; ").slice(0, 600)}] are currently running in the same project directory. ` +
+					`You may work in parallel on different files, but before reading/writing files or running commands, assess the conflict probability with the other run(s). ` +
+					`If a conflict is likely or you are unsure, use ask_user_question to let the user choose: continue in parallel / wait / watch read-only.)\n` +
+					`（系统提醒：同一项目另有 ${runnerTitles.length} 处运行（${shown}${more}）。改不同文件可并行；读写文件或跑命令前先评估冲突概率，拿不准就用 ask_user_question 让用户选择：并行 / 等它跑完 / 只读围观。）\n\n`;
+				if (externalRunners.length > 0) {
+					this.notifyExternalClients?.({
+						type: "notice",
+						level: "info",
+						text: `同项目并行提醒：另一处在「${conv.cwd}」开始了对话（「${conv.title}」），可能与你正在跑的任务并行改动同一项目。`,
+						textEn: `Parallel-work notice: another window started a conversation ("${conv.title}") in "${conv.cwd}", possibly editing the same project in parallel with your running task.`,
+					});
+				}
+			}
+		}
 		// 磁盘回放会话（switch_session）没有 live runtime session —— DSH 的
 		// JSON-RPC 面不支持恢复（id collision），自动 fork 新会话继续：把历史
 		// 作为上下文注入首条 prompt，前端提示。
@@ -1426,7 +1541,7 @@ export class DshClientSession {
 			conv.title = trimmed.length > 30 ? `${trimmed.slice(0, 30)}…` : trimmed;
 			this.emitConversations();
 		}
-		await this.promptConv(conv, text, attachments, queue);
+		await this.promptConv(conv, text, attachments, queue, sysPrefix);
 	}
 
 	/**
@@ -1492,12 +1607,14 @@ export class DshClientSession {
 		text: string,
 		attachments?: PromptAttachment[],
 		_queue = false,
+		// issue #145 同项目并行提醒：只进运行时上下文，不进用户气泡。
+		sysPrefix = "",
 	): Promise<void> {
 		try {
 			if (this.quiesceBlocked()) return;
 			conv.promptedSinceActive = true;
 			conv.lastEventAt = Date.now();
-			const blocks = await this.buildContentBlocks(text, attachments);
+			const blocks = await this.buildContentBlocks(sysPrefix ? `${sysPrefix}${text}` : text, attachments);
 			// 乐观落地用户消息（id 用暂定值；user/message 事件到达时按内容去重）。
 			const optimistic: UiMessage = {
 				id: `u-pending-${Date.now()}-${conv.deltaSeq++}`,
@@ -2074,6 +2191,29 @@ export class DshClientSession {
 				if (conv.sessionId === sessionId) {
 					await this.switchConversation(conv.id);
 					return;
+				}
+			}
+			// issue #145：同 pi 引擎 —— 别处正在跑同一 sessionId 时不建第二个持有者。
+			const owner = this.findSessionOwnerById?.(sessionId);
+			if (owner && owner.isStreaming) {
+				this.emit({
+					type: "notice",
+					level: "warning",
+					text: `该对话正在另一处运行中（「${owner.title}」），为避免两个 agent 同时写同一份记录，已停止打开。请等它结束后再试，或回到原窗口继续。`,
+					textEn: `This conversation is running in another window ("${owner.title}"). Opening it here would create a second writer for the same transcript, so it was blocked. Wait for it to finish, or continue in the original window.`,
+				});
+				this.flushSnapshot(true);
+				return;
+			}
+			if (owner) {
+				// 对端已断开（标签页关了）只剩残留会话 —— 不打扰，直接开。
+				if (owner.connected) {
+					this.emit({
+						type: "notice",
+						level: "info",
+						text: `提醒：该对话在另一处也开着（「${owner.title}」，当前空闲）。请只留一处发送消息，否则两边轮流发送会让历史分叉、其中一支事后不可见。`,
+						textEn: `Note: this conversation is also open in another window ("${owner.title}", currently idle). Send new messages from only one place — alternating between two writers forks the history and hides one branch.`,
+					});
 				}
 			}
 			const prev = this.conv;
@@ -3811,6 +3951,70 @@ export class DshAgentService {
 		};
 	}
 
+	/** issue #145：跨客户端同会话查重（sessionId 口径，与 pi 引擎同语义）。 */
+	findSessionOwner(sessionId: string, excludeClientId: string): SessionOwnerInfo | null {
+		for (const [clientId, cs] of this.clients) {
+			if (clientId === excludeClientId) continue;
+			const conv = cs.findConversationBySessionId(sessionId);
+			if (conv)
+				return {
+					clientId,
+					title: conv.title,
+					cwd: conv.cwd,
+					isStreaming: conv.isStreaming,
+					connected: cs.sinkCount() > 0,
+				};
+		}
+		return null;
+	}
+
+	/** issue #145：别处在某 cwd 下正在跑的对话（同项目并行感知用）。 */
+	listProjectRunners(cwd: string, excludeClientId: string): ProjectRunnerInfo[] {
+		const out: ProjectRunnerInfo[] = [];
+		for (const [clientId, cs] of this.clients) {
+			if (clientId === excludeClientId) continue;
+			for (const r of cs.streamingInCwd(cwd)) out.push({ clientId, title: r.title });
+		}
+		return out;
+	}
+
+	/** issue #145：别处所有正在跑的对话（左栏 elsewhere 只读感知用）。 */
+	listExternalRunning(excludeClientId: string): ElsewhereRunning[] {
+		const out: ElsewhereRunning[] = [];
+		for (const [clientId, cs] of this.clients) {
+			if (clientId === excludeClientId) continue;
+			for (const r of cs.streamingSummariesAll()) out.push(r);
+		}
+		return out;
+	}
+
+	/** issue #145：某客户端流式集合变化 → 其他客户端重推 conversations。 */
+	pokeExternalRunning(excludeClientId: string): void {
+		for (const [clientId, cs] of this.clients) {
+			if (clientId === excludeClientId) continue;
+			try {
+				cs.refreshExternalRunning();
+			} catch {
+				// 单客户端坏了不影响其他
+			}
+		}
+	}
+
+	/** issue #145：向除请求方外的所有客户端发一条 notice（并行通告用）。 */
+	notifyClientsExcept(
+		excludeClientId: string,
+		msg: { type: "notice"; level: "info" | "warning" | "error"; text: string; textEn?: string },
+	): void {
+		for (const [clientId, cs] of this.clients) {
+			if (clientId === excludeClientId) continue;
+			try {
+				cs.emitNotice(msg.level, msg.text, msg.textEn);
+			} catch {
+				// 单客户端坏了不影响其他
+			}
+		}
+	}
+
 	async attach(clientId: string, send: (msg: ServerMessage) => void): Promise<DshClientSession> {
 		let cs = this.clients.get(clientId);
 		if (!cs) {
@@ -3849,6 +4053,12 @@ export class DshAgentService {
 		cs.pluginBgTasksProvider = this.pluginBgTasksProvider;
 		cs.pluginStopBgTask = this.pluginStopBgTask;
 		cs.isQuiesced = () => this.quiesced;
+		// issue #145 跨客户端感知接线（同会话查重 / 同项目并行 / elsewhere 列表）。
+		cs.findSessionOwnerById = (sessionId) => this.findSessionOwner(sessionId, clientId);
+		cs.listProjectRunners = (cwd) => this.listProjectRunners(cwd, clientId);
+		cs.listExternalRunning = () => this.listExternalRunning(clientId);
+		cs.notifyExternalClients = (msg) => this.notifyClientsExcept(clientId, msg);
+		cs.onRunningChanged = () => this.pokeExternalRunning(clientId);
 		cs.onCwdChanged = (abs) => this.onClientCwdChanged?.(abs);
 		this.onClientCwdChanged?.(cs.cwd);
 		return cs;

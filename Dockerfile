@@ -12,7 +12,7 @@
 # El valor por defecto permite `docker build .` en local. En CI lo sobreescribe
 # el build-arg del workflow (que es el pin real).
 # ------------------------------------------------------------------------------
-ARG BASE_IMAGE=rg.fr-par.scw.cloud/sf-agentic-core/agent-base:7499be302fab9a9b5be4913ac41394b7938f874f
+ARG BASE_IMAGE=rg.fr-par.scw.cloud/sf-agentic-core/agent-base:5f0c7e440a4cabe9c8fb96f09f9a3ce0a78701f1
 
 FROM node:22-bookworm-slim AS build
 WORKDIR /app

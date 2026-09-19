@@ -39,7 +39,12 @@ env:
   REGISTRY: rg.fr-par.scw.cloud
   NAMESPACE: sf-agentic-core
   # Pin de la base compartida. Actualizar al adoptar una base nueva.
-  AGENT_BASE_TAG: "7499be302fab9a9b5be4913ac41394b7938f874f"
+  # 5f0c7e44 = merge de tachikoma#48: instalación determinista de los servidores
+  # MCP (un `npm install` por paquete, sin `|| true`) + el puente de variables
+  # de entorno + google-suite-verify. La base anterior (7499be30) NO traía
+  # google-workspace-mcp: la instalación de siete paquetes en una sola línea
+  # abortaba entera por un pin inexistente y `|| true` lo ocultaba.
+  AGENT_BASE_TAG: "5f0c7e440a4cabe9c8fb96f09f9a3ce0a78701f1"
   IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:

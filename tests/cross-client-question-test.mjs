@@ -22,7 +22,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 import WebSocket from "ws";
 import { freePort } from "./lib/port-utils.mjs";
 
-const PORT = Number(process.argv[2] || 8991);
+const PORT = Number(process.argv[2] || 8976);
 const MOCK_PORT = PORT + 1;
 freePort(PORT);
 freePort(MOCK_PORT);

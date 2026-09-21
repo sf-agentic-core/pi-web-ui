@@ -14,7 +14,7 @@ Fork de [xing-shuyin/pi-web-ui](https://github.com/xing-shuyin/pi-web-ui) para s
 | Decisión | Elección |
 |---|---|
 | Engine | `pi` (por defecto; el engine `dsh` de DeepSeek Harness queda deshabilitado) |
-| pi SDK | la versión que embeba el fork (`^0.84.x`), servicio **separado** del contenedor Discord (0.80.7) |
+| pi SDK | la versión que embeba el fork (`^0.87.0`), servicio **separado** del contenedor Discord (0.80.7, congelado por `AuthStorage`) |
 | Sesiones | JSONL nativos de pi (fork/tree/resume) como fuente de verdad |
 | Identidad | multi-usuario (M2): cada usuario con su propio espacio de config y API keys |
 

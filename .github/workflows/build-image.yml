@@ -44,7 +44,18 @@ env:
   # de entorno + google-suite-verify. La base anterior (7499be30) NO traía
   # google-workspace-mcp: la instalación de siete paquetes en una sola línea
   # abortaba entera por un pin inexistente y `|| true` lo ocultaba.
-  AGENT_BASE_TAG: "5f0c7e440a4cabe9c8fb96f09f9a3ce0a78701f1"
+  #
+  # db45d82b = merge de tachikoma#61: pi 0.86.1 -> 0.87.0, pi-mcp-adapter
+  # 2.34.0 -> 2.36.0, google-drive-mcp 2.2.0 -> 2.11.0, uv 0.12.13 -> 0.12.17.
+  # Publicada por `Build images` en main (run 35670037656, success; el tag es el
+  # SHA del merge). La acompañan DOS PRs, y sin ellos queda a medias:
+  #   - este repo: el pi que embebe la UI salta a ^0.87.0, o el shell y el
+  #     runtime empotrado se pelean (ver el comentario en Dockerfile.agent-base).
+  #   - core-gitops: los `newTag` del overlay prod apuntan a este mismo SHA, o
+  #     ArgoCD sigue sirviendo la imagen anterior.
+  # Ojo: pi-subagents NO sube a 0.70.1 en esa base (rompe el bot: necesita
+  # símbolos de pi-ai que solo existen desde 0.86.1, y el bot corre 0.80.7).
+  AGENT_BASE_TAG: "db45d82b1d6296d1e396821d3b861fb75047aad9"
   IMAGE_TAG: ${{ github.event.pull_request.head.sha || github.sha }}
 
 jobs:

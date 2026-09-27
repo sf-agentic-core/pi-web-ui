@@ -860,6 +860,630 @@ const DAZZLE = {
 	"--send-blue-hover": "#6366f1",
 };
 
+// ═══════════════════════════════════════════════════════════════════════════
+//  Fresh theme pack — 5 palettes designed to sit apart from each other and
+//  from the originals:
+//
+//    glaciar  冰川     dark   polar midnight + aurora teal (cool, calm)
+//    brasa    炉火     dark   dark wood + ember amber (warm, cosy)
+//    fosforo  磷光     dark   modern CRT phosphor green (focused)
+//    salvia   鼠尾草   light  botanical sage green (airy)
+//    cianotipo 蓝图    light  ink navy on a drafting grid (technical)
+//
+//  glaciar/brasa/fosforo/cianotipo carry an "atmosphere" tail: a body-level
+//  gradient (or drafting grid) + transparent chrome, so the ground stops being
+//  one flat tone. salvia stays flat on purpose (crisp, airy).
+//
+//  ACCENT RULE: --accent is used BOTH as text on the theme background AND as a
+//  filled button background with hardcoded #fff text (.template-btn.send,
+//  .file-attach.inline:hover, .cmd-run:hover). Dark-theme accents therefore sit
+//  in the L≈0.23-0.28 band (>=4.5:1 as text on --bg, >=3:1 under white text);
+//  light-theme accents in L≈0.10-0.15 (both >=4.5:1). The bright signature
+//  hues live in --link/--term-cursor/--brand-grad-*, which are never used
+//  under white text.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Emit the full `.hljs` override block from a compact token palette. The static
+ * bundle imports github-dark, so a palette-only theme can never "inherit" a
+ * matching syntax theme — every theme re-declares the block. Selector groups
+ * are identical everywhere, so they live here once; only the colors differ.
+ */
+const hljsBlock = ({ fg, bg, keyword, title, attr, string, builtin, comment, addition, deletion }) => `
+/* ---- syntax highlighting (overrides static github-dark import) ---- */
+.hljs {
+	color: ${fg};
+	background: ${bg};
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+	color: ${keyword};
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+	color: ${title};
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+	color: ${attr};
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+	color: ${string};
+}
+.hljs-built_in,
+.hljs-symbol {
+	color: ${builtin};
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+	color: ${comment};
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+	color: ${addition.color};
+}
+.hljs-subst {
+	color: ${fg};
+}
+.hljs-section {
+	color: ${attr};
+	font-weight: 700;
+}
+.hljs-bullet {
+	color: ${attr};
+}
+.hljs-emphasis {
+	color: ${fg};
+	font-style: italic;
+}
+.hljs-strong {
+	color: ${fg};
+	font-weight: 700;
+}
+.hljs-addition {
+	color: ${addition.color};
+	background: ${addition.bg};
+}
+.hljs-deletion {
+	color: ${deletion.color};
+	background: ${deletion.bg};
+}
+`;
+
+// ── 「冰川」 glaciar — polar midnight + aurora teal ─────────────────────────
+const GLACIAR = {
+	"color-scheme": "dark",
+	"--bg": "#0b1215",
+	"--bg-elev": "#111b1f",
+	"--bg-elev2": "#172529",
+	"--border": "#25383e",
+	"--border-soft": "#1b2b31",
+	"--text": "#dfeaec",
+	"--text-dim": "#9cb3b7",
+	"--text-faint": "#6d858b",
+	"--accent": "#0d9488",
+	"--accent-soft": "rgba(13, 148, 136, 0.16)",
+	"--green": "#34d399",
+	"--green-soft": "rgba(52, 211, 153, 0.12)",
+	"--red": "#f87171",
+	"--red-soft": "rgba(248, 113, 113, 0.12)",
+	"--amber": "#fbbf24",
+	"--term-bg": "#0b1215",
+	"--term-fg": "#dfeaec",
+	"--term-cursor": "#2dd4bf",
+	"--term-cursor-accent": "#0b1215",
+	"--term-selection": "rgba(45, 212, 191, 0.32)",
+	"--term-black": "#172529",
+	"--term-red": "#f87171",
+	"--term-green": "#34d399",
+	"--term-yellow": "#fbbf24",
+	"--term-blue": "#5eb8f0",
+	"--term-magenta": "#b79cff",
+	"--term-cyan": "#2dd4bf",
+	"--term-white": "#dfeaec",
+	"--term-bright-black": "#6d858b",
+	"--term-bright-red": "#fca5a5",
+	"--term-bright-green": "#86efac",
+	"--term-bright-yellow": "#fde68a",
+	"--term-bright-blue": "#93c5fd",
+	"--term-bright-magenta": "#d8c7ff",
+	"--term-bright-cyan": "#7ff0e0",
+	"--term-bright-white": "#ffffff",
+	"--tooltip-bg": "#1b272c",
+	"--code-bg": "#081013",
+	"--code-text": "#c9dee0",
+	"--err-text": "#f0a5a5",
+	"--red-text": "#fca5a5",
+	"--amber-text": "#fcd34d",
+	"--info-blue": "#5eb8f0",
+	"--link": "#5eead4",
+	"--link-hover": "#8ff4e4",
+	"--link-soft": "#bdf6ec",
+	"--md-strong": "#f0f7f8",
+	"--skill-blue": "#5eb8f0",
+	"--plugin-purple": "#b79cff",
+	"--auth-green": "#6ee7a0",
+	"--scroll-thumb": "#24393f",
+	"--scroll-thumb-hover": "#33515a",
+	"--notice-err-bg": "#3a1f22",
+	"--notice-warn-bg": "#362a1b",
+	"--notice-info-bg": "#10333a",
+	"--notice-err-border": "#ef4444",
+	"--notice-warn-border": "#f59e0b",
+	"--notice-info-border": "#2dd4bf",
+	"--send-blue": "#0d9488",
+	"--send-blue-hover": "#0f766e",
+	"--brand-grad-a": "#2dd4bf",
+	"--brand-grad-b": "#38bdf8",
+	"--control-fg": "#9cb3b7",
+	"--control-bg": "#172529",
+	"--control-border": "#25383e",
+};
+
+const GLACIAR_TAIL = `
+/* ---- aurora atmosphere ----
+ * Aurora glow on body + transparent chrome: the ground itself becomes the
+ * picture, the topbar/panels/statusbar only keep their border to hold the
+ * structure. Same technique as md-preview, but polar cold (midnight + aurora)
+ * instead of violet. */
+body {
+	background:
+		radial-gradient(circle at 6% -8%, rgba(45, 212, 191, 0.13), transparent 44%),
+		radial-gradient(circle at 98% 104%, rgba(56, 189, 248, 0.1), transparent 46%),
+		#0b1215;
+}
+.topbar,
+.panel,
+.statusbar {
+	background: transparent;
+}
+`;
+
+const hljsGlaciar = hljsBlock({
+	fg: "#c9dee0",
+	bg: "#081013",
+	keyword: "#ff8ea3",
+	title: "#b8a6ff",
+	attr: "#6fc7ff",
+	string: "#9fdcff",
+	builtin: "#ffb27a",
+	comment: "#7d9aa1",
+	addition: { color: "#7ee2b8", bg: "#0e2f26" },
+	deletion: { color: "#ff9aa8", bg: "#3a1620" },
+});
+
+// ── 「炉火」 brasa — dark wood + ember amber ───────────────────────────────
+const BRASA = {
+	"color-scheme": "dark",
+	"--bg": "#120f0c",
+	"--bg-elev": "#1a1512",
+	"--bg-elev2": "#241d18",
+	"--border": "#3a2e26",
+	"--border-soft": "#2a211b",
+	"--text": "#ece0d4",
+	"--text-dim": "#b09a88",
+	"--text-faint": "#83705f",
+	"--accent": "#d97706",
+	"--accent-soft": "rgba(217, 119, 6, 0.16)",
+	"--green": "#34d399",
+	"--green-soft": "rgba(52, 211, 153, 0.12)",
+	"--red": "#f87171",
+	"--red-soft": "rgba(248, 113, 113, 0.12)",
+	"--amber": "#fbbf24",
+	"--term-bg": "#120f0c",
+	"--term-fg": "#ece0d4",
+	"--term-cursor": "#f59e0b",
+	"--term-cursor-accent": "#120f0c",
+	"--term-selection": "rgba(245, 158, 11, 0.3)",
+	"--term-black": "#241d18",
+	"--term-red": "#f87171",
+	"--term-green": "#34d399",
+	"--term-yellow": "#fbbf24",
+	"--term-blue": "#7db8e8",
+	"--term-magenta": "#d9a0d8",
+	"--term-cyan": "#7fd4c8",
+	"--term-white": "#ece0d4",
+	"--term-bright-black": "#83705f",
+	"--term-bright-red": "#fca5a5",
+	"--term-bright-green": "#86efac",
+	"--term-bright-yellow": "#fde68a",
+	"--term-bright-blue": "#a8d0f5",
+	"--term-bright-magenta": "#ecc4ea",
+	"--term-bright-cyan": "#a8e8dd",
+	"--term-bright-white": "#ffffff",
+	"--tooltip-bg": "#291f19",
+	"--code-bg": "#0d0a07",
+	"--code-text": "#e2d3c2",
+	"--err-text": "#f0a5a5",
+	"--red-text": "#fca5a5",
+	"--amber-text": "#fcd34d",
+	"--info-blue": "#7db8e8",
+	"--link": "#fbbf24",
+	"--link-hover": "#fcd34d",
+	"--link-soft": "#fde68a",
+	"--md-strong": "#f7efe6",
+	"--skill-blue": "#7db8e8",
+	"--plugin-purple": "#d9a0d8",
+	"--auth-green": "#6ee7a0",
+	"--scroll-thumb": "#3d3027",
+	"--scroll-thumb-hover": "#55432f",
+	"--notice-err-bg": "#3a1c1c",
+	"--notice-warn-bg": "#3a2a12",
+	"--notice-info-bg": "#1a2634",
+	"--notice-err-border": "#ef4444",
+	"--notice-warn-border": "#f59e0b",
+	"--notice-info-border": "#7db8e8",
+	"--send-blue": "#b45309",
+	"--send-blue-hover": "#92400e",
+	"--brand-grad-a": "#fbbf24",
+	"--brand-grad-b": "#f97316",
+	"--control-fg": "#b09a88",
+	"--control-bg": "#241d18",
+	"--control-border": "#3a2e26",
+};
+
+const BRASA_TAIL = `
+/* ---- ember atmosphere ----
+ * Warm glow from the bottom edge (hearth) + a faint residual warmth on top +
+ * transparent chrome: a dark room lit by a single warm lamp. */
+body {
+	background:
+		radial-gradient(circle at 50% 116%, rgba(245, 158, 11, 0.15), transparent 54%),
+		radial-gradient(circle at 4% -10%, rgba(180, 83, 9, 0.11), transparent 40%),
+		#120f0c;
+}
+.topbar,
+.panel,
+.statusbar {
+	background: transparent;
+}
+`;
+
+const hljsBrasa = hljsBlock({
+	fg: "#e2d3c2",
+	bg: "#0d0a07",
+	keyword: "#ff7b72",
+	title: "#d2a8ff",
+	attr: "#79c0ff",
+	string: "#a5d6ff",
+	builtin: "#ffa657",
+	comment: "#9c8b7a",
+	addition: { color: "#7ee787", bg: "#12301f" },
+	deletion: { color: "#ffa198", bg: "#3d1a20" },
+});
+
+// ── 「磷光」 fosforo — modern CRT phosphor green ───────────────────────────
+const FOSFORO = {
+	"color-scheme": "dark",
+	"--bg": "#070d0a",
+	"--bg-elev": "#0c1511",
+	"--bg-elev2": "#121e18",
+	"--border": "#1f3428",
+	"--border-soft": "#16261d",
+	"--text": "#d6ecdc",
+	"--text-dim": "#93b39c",
+	"--text-faint": "#618068",
+	"--accent": "#16a34a",
+	"--accent-soft": "rgba(22, 163, 74, 0.16)",
+	"--green": "#4ade80",
+	"--green-soft": "rgba(74, 222, 128, 0.12)",
+	"--red": "#ff7b72",
+	"--red-soft": "rgba(255, 123, 114, 0.12)",
+	"--amber": "#ffb454",
+	"--term-bg": "#070d0a",
+	"--term-fg": "#d6ecdc",
+	"--term-cursor": "#3ddc84",
+	"--term-cursor-accent": "#070d0a",
+	"--term-selection": "rgba(61, 220, 132, 0.28)",
+	"--term-black": "#121e18",
+	"--term-red": "#ff7b72",
+	"--term-green": "#3ddc84",
+	"--term-yellow": "#ffb454",
+	"--term-blue": "#79c0ff",
+	"--term-magenta": "#d2a8ff",
+	"--term-cyan": "#56d4dd",
+	"--term-white": "#d6ecdc",
+	"--term-bright-black": "#618068",
+	"--term-bright-red": "#ffa198",
+	"--term-bright-green": "#8cf0b0",
+	"--term-bright-yellow": "#ffd9a0",
+	"--term-bright-blue": "#a8d8ff",
+	"--term-bright-magenta": "#e6ccff",
+	"--term-bright-cyan": "#8ce8ea",
+	"--term-bright-white": "#ffffff",
+	"--tooltip-bg": "#14211a",
+	"--code-bg": "#050a07",
+	"--code-text": "#c6e0cd",
+	"--err-text": "#f0a5a5",
+	"--red-text": "#ffa198",
+	"--amber-text": "#ffd9a0",
+	"--info-blue": "#79c0ff",
+	"--link": "#56d4dd",
+	"--link-hover": "#8be6ec",
+	"--link-soft": "#b6f0f4",
+	"--md-strong": "#ecf9f0",
+	"--skill-blue": "#79c0ff",
+	"--plugin-purple": "#d2a8ff",
+	"--auth-green": "#7ee787",
+	"--scroll-thumb": "#21362b",
+	"--scroll-thumb-hover": "#2f4d3c",
+	"--notice-err-bg": "#33191a",
+	"--notice-warn-bg": "#33270f",
+	"--notice-info-bg": "#0f2c2c",
+	"--notice-err-border": "#ef4444",
+	"--notice-warn-border": "#f59e0b",
+	"--notice-info-border": "#56d4dd",
+	"--send-blue": "#15803d",
+	"--send-blue-hover": "#166534",
+	"--brand-grad-a": "#3ddc84",
+	"--brand-grad-b": "#56d4dd",
+	"--control-fg": "#93b39c",
+	"--control-bg": "#121e18",
+	"--control-border": "#1f3428",
+	/* CRT scanlines + vignette need the body to stay legible: raise the panel
+	   translucency from the 62% default to 78%. */
+	"--wallpaper-panel-alpha": "78%",
+};
+
+const FOSFORO_TAIL = `
+/* ---- CRT atmosphere ----
+ * Very faint scanlines + corner vignette to mimic a phosphor screen; panels go
+ * 78% opaque (vs 62% default) so body text stays readable. */
+body {
+	background:
+		repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.13) 0 1px, transparent 1px 3px),
+		radial-gradient(ellipse at 50% 50%, transparent 34%, rgba(0, 0, 0, 0.5) 100%),
+		#070d0a;
+}
+`;
+
+const hljsFosforo = hljsBlock({
+	fg: "#c6e0cd",
+	bg: "#050a07",
+	keyword: "#7ee787",
+	title: "#d2a8ff",
+	attr: "#79c0ff",
+	string: "#a5d6ff",
+	builtin: "#ffb454",
+	comment: "#6d8b78",
+	addition: { color: "#7ee787", bg: "#0e2a18" },
+	deletion: { color: "#ff9aa8", bg: "#351519" },
+});
+
+// ── 「鼠尾草」 salvia — botanical sage light ───────────────────────────────
+const SALVIA = {
+	"color-scheme": "light",
+	"--bg": "#edf1e8",
+	"--bg-elev": "#fafbf6",
+	"--bg-elev2": "#dfe7d6",
+	"--border": "#c8d4b8",
+	"--border-soft": "#dbe4cd",
+	"--text": "#26301f",
+	"--text-dim": "#556047",
+	"--text-faint": "#7f8b6a",
+	"--accent": "#1f7a4d",
+	"--accent-soft": "rgba(31, 122, 77, 0.12)",
+	"--green": "#15803d",
+	"--green-soft": "rgba(21, 128, 61, 0.12)",
+	"--red": "#b91c1c",
+	"--red-soft": "rgba(185, 28, 28, 0.1)",
+	"--amber": "#b45309",
+	"--term-bg": "#fafbf6",
+	"--term-fg": "#26301f",
+	"--term-cursor": "#1f7a4d",
+	"--term-cursor-accent": "#ffffff",
+	"--term-selection": "rgba(31, 122, 77, 0.24)",
+	"--term-black": "#dde5d1",
+	"--term-red": "#b91c1c",
+	"--term-green": "#15803d",
+	"--term-yellow": "#a16207",
+	"--term-blue": "#1d4ed8",
+	"--term-magenta": "#7c3aed",
+	"--term-cyan": "#0e7490",
+	"--term-white": "#26301f",
+	"--term-bright-black": "#6f7d5c",
+	"--term-bright-red": "#b91c1c",
+	"--term-bright-green": "#15803d",
+	"--term-bright-yellow": "#a16207",
+	"--term-bright-blue": "#1d4ed8",
+	"--term-bright-magenta": "#7c3aed",
+	"--term-bright-cyan": "#0e7490",
+	"--term-bright-white": "#111a0c",
+	"--brand-grad-a": "#4ade80",
+	"--brand-grad-b": "#1f7a4d",
+	"--send-blue": "#1f7a4d",
+	"--send-blue-hover": "#166534",
+	"--link": "#1a6b45",
+	"--link-hover": "#14532d",
+	"--link-soft": "#1a6b45",
+	"--md-strong": "#161d12",
+	"--skill-blue": "#1f7a4d",
+	"--info-blue": "#1d4ed8",
+	"--auth-green": "#15803d",
+	"--err-text": "#b91c1c",
+	"--red-text": "#b91c1c",
+	"--amber-text": "#92400e",
+	"--code-bg": "#dfe7d6",
+	"--code-text": "#26301f",
+	"--tooltip-bg": "#fafbf6",
+	"--scroll-thumb": "#c2cfb2",
+	"--scroll-thumb-hover": "#a8b896",
+	"--notice-err-bg": "#f3dbd8",
+	"--notice-warn-bg": "#f0e6c8",
+	"--notice-info-bg": "#dde6e0",
+	"--notice-err-border": "#b91c1c",
+	"--notice-warn-border": "#b45309",
+	"--notice-info-border": "#1d4ed8",
+	"--control-fg": "#556047",
+	"--control-bg": "#dfe7d6",
+	"--control-border": "#c8d4b8",
+	"--bg-image": "none",
+	"--bg-image-dim": "0.78",
+	"--bg-image-blur": "0px",
+	"--bg-elev3": "rgba(60, 90, 40, 0.05)",
+	"--sunken-bg": "rgba(60, 90, 40, 0.05)",
+	"--glow-015": "rgba(60, 90, 40, 0.02)",
+	"--glow-025": "rgba(60, 90, 40, 0.02)",
+	"--glow-03": "rgba(60, 90, 40, 0.02)",
+	"--glow-04": "rgba(60, 90, 40, 0.03)",
+	"--glow-05": "rgba(60, 90, 40, 0.03)",
+	"--glow-12": "rgba(60, 90, 40, 0.08)",
+	"--glow-18": "rgba(60, 90, 40, 0.12)",
+	"--glow-22": "rgba(60, 90, 40, 0.15)",
+	"--glow-38": "rgba(60, 90, 40, 0.25)",
+};
+
+const hljsSalvia = hljsBlock({
+	fg: "#26301f",
+	bg: "#dfe7d6",
+	keyword: "#cf222e",
+	title: "#8250df",
+	attr: "#0550ae",
+	string: "#0a3069",
+	builtin: "#953800",
+	comment: "#6f7f5c",
+	addition: { color: "#116329", bg: "#dbe9cd" },
+	deletion: { color: "#82071e", bg: "#f2d3d6" },
+});
+
+// ── 「蓝图」 cianotipo — ink navy on a drafting grid ──────────────────────
+const CIANOTIPO = {
+	"color-scheme": "light",
+	"--bg": "#eef2f9",
+	"--bg-elev": "#fbfcfe",
+	"--bg-elev2": "#e1e8f4",
+	"--border": "#c2cee4",
+	"--border-soft": "#d5deef",
+	"--text": "#16233a",
+	"--text-dim": "#46587a",
+	"--text-faint": "#7d8ca8",
+	"--accent": "#1d4ed8",
+	"--accent-soft": "rgba(29, 78, 216, 0.12)",
+	"--green": "#047857",
+	"--green-soft": "rgba(4, 120, 87, 0.12)",
+	"--red": "#dc2626",
+	"--red-soft": "rgba(220, 38, 38, 0.1)",
+	"--amber": "#b45309",
+	"--term-bg": "#fbfcfe",
+	"--term-fg": "#16233a",
+	"--term-cursor": "#1d4ed8",
+	"--term-cursor-accent": "#ffffff",
+	"--term-selection": "rgba(29, 78, 216, 0.22)",
+	"--term-black": "#dde4f0",
+	"--term-red": "#dc2626",
+	"--term-green": "#047857",
+	"--term-yellow": "#a16207",
+	"--term-blue": "#1d4ed8",
+	"--term-magenta": "#7c3aed",
+	"--term-cyan": "#0e7490",
+	"--term-white": "#16233a",
+	"--term-bright-black": "#7d8ca8",
+	"--term-bright-red": "#dc2626",
+	"--term-bright-green": "#047857",
+	"--term-bright-yellow": "#a16207",
+	"--term-bright-blue": "#1d4ed8",
+	"--term-bright-magenta": "#7c3aed",
+	"--term-bright-cyan": "#0e7490",
+	"--term-bright-white": "#0b1220",
+	"--brand-grad-a": "#60a5fa",
+	"--brand-grad-b": "#1d4ed8",
+	"--send-blue": "#1d4ed8",
+	"--send-blue-hover": "#1e40af",
+	"--link": "#1d4ed8",
+	"--link-hover": "#1e40af",
+	"--link-soft": "#1d4ed8",
+	"--md-strong": "#0b1220",
+	"--skill-blue": "#1d4ed8",
+	"--info-blue": "#1d4ed8",
+	"--auth-green": "#047857",
+	"--err-text": "#dc2626",
+	"--red-text": "#dc2626",
+	"--amber-text": "#92400e",
+	"--code-bg": "#e1e8f4",
+	"--code-text": "#16233a",
+	"--tooltip-bg": "#fbfcfe",
+	"--scroll-thumb": "#b8c6e0",
+	"--scroll-thumb-hover": "#9aabd0",
+	"--notice-err-bg": "#f5dadc",
+	"--notice-warn-bg": "#f0e6cb",
+	"--notice-info-bg": "#d9e3f7",
+	"--notice-err-border": "#dc2626",
+	"--notice-warn-border": "#b45309",
+	"--notice-info-border": "#1d4ed8",
+	"--control-fg": "#46587a",
+	"--control-bg": "#e1e8f4",
+	"--control-border": "#c2cee4",
+	"--bg-image": "none",
+	"--bg-image-dim": "0.78",
+	"--bg-image-blur": "0px",
+	"--bg-elev3": "rgba(20, 40, 90, 0.05)",
+	"--sunken-bg": "rgba(20, 40, 90, 0.05)",
+	"--glow-015": "rgba(20, 40, 90, 0.02)",
+	"--glow-025": "rgba(20, 40, 90, 0.02)",
+	"--glow-03": "rgba(20, 40, 90, 0.02)",
+	"--glow-04": "rgba(20, 40, 90, 0.03)",
+	"--glow-05": "rgba(20, 40, 90, 0.03)",
+	"--glow-12": "rgba(20, 40, 90, 0.08)",
+	"--glow-18": "rgba(20, 40, 90, 0.12)",
+	"--glow-22": "rgba(20, 40, 90, 0.15)",
+	"--glow-38": "rgba(20, 40, 90, 0.25)",
+	/* The drafting grid sits behind the body text: keep panels a bit more
+	   opaque than the 62% default (72%) for reading comfort. */
+	"--wallpaper-panel-alpha": "72%",
+};
+
+const CIANOTIPO_TAIL = `
+/* ---- drafting grid ----
+ * 24px cold-blue graph paper + transparent chrome: the whole page reads as a
+ * drafting table. The grid alpha is only 0.04, so the body text (--text on
+ * --bg ≈ 14:1) is unaffected. */
+body {
+	background-image:
+		linear-gradient(rgba(29, 78, 216, 0.04) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(29, 78, 216, 0.04) 1px, transparent 1px);
+	background-size: 24px 24px;
+	background-position: -1px -1px;
+}
+.topbar,
+.panel,
+.statusbar {
+	background: transparent;
+}
+`;
+
+const hljsCianotipo = hljsBlock({
+	fg: "#16233a",
+	bg: "#e1e8f4",
+	keyword: "#cf222e",
+	title: "#6d28d9",
+	attr: "#1d4ed8",
+	string: "#0a3069",
+	builtin: "#953800",
+	comment: "#6b7a94",
+	addition: { color: "#116329", bg: "#d7e9db" },
+	deletion: { color: "#82071e", bg: "#f2d3d6" },
+});
+
 // --- 3) emit ----------------------------------------------------------------
 writeTheme("白色", "white.css", emitTheme("白色", WHITE, hljsLight, "White"));
 writeTheme("暖纸", "paper.css", emitTheme("暖纸", PAPER, hljsPaper, "Warm Paper"));
@@ -868,5 +1492,14 @@ writeTheme("樱粉", "sakura.css", emitTheme("樱粉", SAKURA, hljsSakura, "Saku
 writeTheme("紫晕", "md-preview.css", emitTheme("紫晕", { "color-scheme": "dark" }, MD_PREVIEW_TAIL, "Purple Haze"));
 writeTheme("赛博朋克", "cyberpunk.css", emitTheme("赛博朋克", CYBERPUNK, "", "Cyberpunk"));
 writeTheme("炫彩", "dazzle.css", emitTheme("炫彩", DAZZLE, "", "Dazzle"));
+// Fresh theme pack (palette + .hljs + optional atmosphere tail).
+writeTheme("冰川", "glaciar.css", emitTheme("冰川", GLACIAR, hljsGlaciar + GLACIAR_TAIL, "Glacier"));
+writeTheme("炉火", "brasa.css", emitTheme("炉火", BRASA, hljsBrasa + BRASA_TAIL, "Ember"));
+writeTheme("磷光", "fosforo.css", emitTheme("磷光", FOSFORO, hljsFosforo + FOSFORO_TAIL, "Phosphor"));
+writeTheme("鼠尾草", "salvia.css", emitTheme("鼠尾草", SALVIA, hljsSalvia, "Sage"));
+writeTheme("蓝图", "cianotipo.css", emitTheme("蓝图", CIANOTIPO, hljsCianotipo + CIANOTIPO_TAIL, "Blueprint"));
 
-console.log("themes regenerated: white / paper / mist / sakura / md-preview / cyberpunk / dazzle");
+console.log(
+	"themes regenerated: white / paper / mist / sakura / md-preview / cyberpunk / dazzle / " +
+		"glaciar / brasa / fosforo / salvia / cianotipo",
+);

@@ -1,0 +1,195 @@
+/* theme-name: 炉火 */
+/* theme-name-en: Ember */
+:root {
+	color-scheme: dark;
+	--bg: #120f0c;
+	--bg-elev: #1a1512;
+	--bg-elev2: #241d18;
+	--border: #3a2e26;
+	--border-soft: #2a211b;
+	--text: #ece0d4;
+	--text-dim: #b09a88;
+	--text-faint: #83705f;
+	--accent: #d97706;
+	--accent-soft: rgba(217, 119, 6, 0.16);
+	--green: #34d399;
+	--green-soft: rgba(52, 211, 153, 0.12);
+	--red: #f87171;
+	--red-soft: rgba(248, 113, 113, 0.12);
+	--amber: #fbbf24;
+	--term-bg: #120f0c;
+	--term-fg: #ece0d4;
+	--term-cursor: #f59e0b;
+	--term-cursor-accent: #120f0c;
+	--term-selection: rgba(245, 158, 11, 0.3);
+	--term-black: #241d18;
+	--term-red: #f87171;
+	--term-green: #34d399;
+	--term-yellow: #fbbf24;
+	--term-blue: #7db8e8;
+	--term-magenta: #d9a0d8;
+	--term-cyan: #7fd4c8;
+	--term-white: #ece0d4;
+	--term-bright-black: #83705f;
+	--term-bright-red: #fca5a5;
+	--term-bright-green: #86efac;
+	--term-bright-yellow: #fde68a;
+	--term-bright-blue: #a8d0f5;
+	--term-bright-magenta: #ecc4ea;
+	--term-bright-cyan: #a8e8dd;
+	--term-bright-white: #ffffff;
+	--mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+	--mermaid-font-size: 12px;
+	--tooltip-bg: #291f19;
+	--code-bg: #0d0a07;
+	--code-text: #e2d3c2;
+	--code-border: var(--border-soft);
+	--code-pad: 8px 10px;
+	--card-body-pad: 4px 14px 12px;
+	--err-text: #f0a5a5;
+	--red-text: #fca5a5;
+	--amber-text: #fcd34d;
+	--info-blue: #7db8e8;
+	--link: #fbbf24;
+	--link-hover: #fcd34d;
+	--link-soft: #fde68a;
+	--md-strong: #f7efe6;
+	--skill-blue: #7db8e8;
+	--plugin-purple: #d9a0d8;
+	--auth-green: #6ee7a0;
+	--scroll-thumb: #3d3027;
+	--scroll-thumb-hover: #55432f;
+	--notice-err-bg: #3a1c1c;
+	--notice-warn-bg: #3a2a12;
+	--notice-info-bg: #1a2634;
+	--notice-err-border: #ef4444;
+	--notice-warn-border: #f59e0b;
+	--notice-info-border: #7db8e8;
+	--send-blue: #b45309;
+	--send-blue-hover: #92400e;
+	--brand-grad-a: #fbbf24;
+	--brand-grad-b: #f97316;
+	--on-amber: #1a1a1a;
+	--search-active-fg: #1a1d26;
+	--switch-knob: #ffffff;
+	--bg-elev3: rgba(255, 255, 255, 0.06);
+	--sunken-bg: rgba(0, 0, 0, 0.15);
+	--glow-015: rgba(255, 255, 255, 0.015);
+	--glow-025: rgba(255, 255, 255, 0.025);
+	--glow-03: rgba(255, 255, 255, 0.03);
+	--glow-04: rgba(255, 255, 255, 0.04);
+	--glow-05: rgba(255, 255, 255, 0.05);
+	--glow-12: rgba(255, 255, 255, 0.12);
+	--glow-18: rgba(255, 255, 255, 0.18);
+	--glow-22: rgba(255, 255, 255, 0.22);
+	--glow-38: rgba(255, 255, 255, 0.38);
+	--control-fg: #b09a88;
+	--control-bg: #241d18;
+	--control-border: #3a2e26;
+	--bg-image: none;
+	--bg-image-dim: 0.78;
+	--bg-image-blur: 0px;
+	--wallpaper-panel-alpha: 62%;
+	--topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--card-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--chip-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--msgs-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--inputbox-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--menu-bg: var(--bg-elev2);
+}
+
+/* ---- syntax highlighting (overrides static github-dark import) ---- */
+.hljs {
+	color: #e2d3c2;
+	background: #0d0a07;
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+	color: #ff7b72;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+	color: #d2a8ff;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+	color: #79c0ff;
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+	color: #a5d6ff;
+}
+.hljs-built_in,
+.hljs-symbol {
+	color: #ffa657;
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+	color: #9c8b7a;
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+	color: #7ee787;
+}
+.hljs-subst {
+	color: #e2d3c2;
+}
+.hljs-section {
+	color: #79c0ff;
+	font-weight: 700;
+}
+.hljs-bullet {
+	color: #79c0ff;
+}
+.hljs-emphasis {
+	color: #e2d3c2;
+	font-style: italic;
+}
+.hljs-strong {
+	color: #e2d3c2;
+	font-weight: 700;
+}
+.hljs-addition {
+	color: #7ee787;
+	background: #12301f;
+}
+.hljs-deletion {
+	color: #ffa198;
+	background: #3d1a20;
+}
+
+/* ---- ember atmosphere ----
+ * Warm glow from the bottom edge (hearth) + a faint residual warmth on top +
+ * transparent chrome: a dark room lit by a single warm lamp. */
+body {
+	background:
+		radial-gradient(circle at 50% 116%, rgba(245, 158, 11, 0.15), transparent 54%),
+		radial-gradient(circle at 4% -10%, rgba(180, 83, 9, 0.11), transparent 40%),
+		#120f0c;
+}
+.topbar,
+.panel,
+.statusbar {
+	background: transparent;
+}

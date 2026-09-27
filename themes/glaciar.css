@@ -1,0 +1,197 @@
+/* theme-name: 冰川 */
+/* theme-name-en: Glacier */
+:root {
+	color-scheme: dark;
+	--bg: #0b1215;
+	--bg-elev: #111b1f;
+	--bg-elev2: #172529;
+	--border: #25383e;
+	--border-soft: #1b2b31;
+	--text: #dfeaec;
+	--text-dim: #9cb3b7;
+	--text-faint: #6d858b;
+	--accent: #0d9488;
+	--accent-soft: rgba(13, 148, 136, 0.16);
+	--green: #34d399;
+	--green-soft: rgba(52, 211, 153, 0.12);
+	--red: #f87171;
+	--red-soft: rgba(248, 113, 113, 0.12);
+	--amber: #fbbf24;
+	--term-bg: #0b1215;
+	--term-fg: #dfeaec;
+	--term-cursor: #2dd4bf;
+	--term-cursor-accent: #0b1215;
+	--term-selection: rgba(45, 212, 191, 0.32);
+	--term-black: #172529;
+	--term-red: #f87171;
+	--term-green: #34d399;
+	--term-yellow: #fbbf24;
+	--term-blue: #5eb8f0;
+	--term-magenta: #b79cff;
+	--term-cyan: #2dd4bf;
+	--term-white: #dfeaec;
+	--term-bright-black: #6d858b;
+	--term-bright-red: #fca5a5;
+	--term-bright-green: #86efac;
+	--term-bright-yellow: #fde68a;
+	--term-bright-blue: #93c5fd;
+	--term-bright-magenta: #d8c7ff;
+	--term-bright-cyan: #7ff0e0;
+	--term-bright-white: #ffffff;
+	--mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+	--mermaid-font-size: 12px;
+	--tooltip-bg: #1b272c;
+	--code-bg: #081013;
+	--code-text: #c9dee0;
+	--code-border: var(--border-soft);
+	--code-pad: 8px 10px;
+	--card-body-pad: 4px 14px 12px;
+	--err-text: #f0a5a5;
+	--red-text: #fca5a5;
+	--amber-text: #fcd34d;
+	--info-blue: #5eb8f0;
+	--link: #5eead4;
+	--link-hover: #8ff4e4;
+	--link-soft: #bdf6ec;
+	--md-strong: #f0f7f8;
+	--skill-blue: #5eb8f0;
+	--plugin-purple: #b79cff;
+	--auth-green: #6ee7a0;
+	--scroll-thumb: #24393f;
+	--scroll-thumb-hover: #33515a;
+	--notice-err-bg: #3a1f22;
+	--notice-warn-bg: #362a1b;
+	--notice-info-bg: #10333a;
+	--notice-err-border: #ef4444;
+	--notice-warn-border: #f59e0b;
+	--notice-info-border: #2dd4bf;
+	--send-blue: #0d9488;
+	--send-blue-hover: #0f766e;
+	--brand-grad-a: #2dd4bf;
+	--brand-grad-b: #38bdf8;
+	--on-amber: #1a1a1a;
+	--search-active-fg: #1a1d26;
+	--switch-knob: #ffffff;
+	--bg-elev3: rgba(255, 255, 255, 0.06);
+	--sunken-bg: rgba(0, 0, 0, 0.15);
+	--glow-015: rgba(255, 255, 255, 0.015);
+	--glow-025: rgba(255, 255, 255, 0.025);
+	--glow-03: rgba(255, 255, 255, 0.03);
+	--glow-04: rgba(255, 255, 255, 0.04);
+	--glow-05: rgba(255, 255, 255, 0.05);
+	--glow-12: rgba(255, 255, 255, 0.12);
+	--glow-18: rgba(255, 255, 255, 0.18);
+	--glow-22: rgba(255, 255, 255, 0.22);
+	--glow-38: rgba(255, 255, 255, 0.38);
+	--control-fg: #9cb3b7;
+	--control-bg: #172529;
+	--control-border: #25383e;
+	--bg-image: none;
+	--bg-image-dim: 0.78;
+	--bg-image-blur: 0px;
+	--wallpaper-panel-alpha: 62%;
+	--topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--card-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--chip-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--msgs-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--inputbox-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--menu-bg: var(--bg-elev2);
+}
+
+/* ---- syntax highlighting (overrides static github-dark import) ---- */
+.hljs {
+	color: #c9dee0;
+	background: #081013;
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+	color: #ff8ea3;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+	color: #b8a6ff;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+	color: #6fc7ff;
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+	color: #9fdcff;
+}
+.hljs-built_in,
+.hljs-symbol {
+	color: #ffb27a;
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+	color: #7d9aa1;
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+	color: #7ee2b8;
+}
+.hljs-subst {
+	color: #c9dee0;
+}
+.hljs-section {
+	color: #6fc7ff;
+	font-weight: 700;
+}
+.hljs-bullet {
+	color: #6fc7ff;
+}
+.hljs-emphasis {
+	color: #c9dee0;
+	font-style: italic;
+}
+.hljs-strong {
+	color: #c9dee0;
+	font-weight: 700;
+}
+.hljs-addition {
+	color: #7ee2b8;
+	background: #0e2f26;
+}
+.hljs-deletion {
+	color: #ff9aa8;
+	background: #3a1620;
+}
+
+/* ---- aurora atmosphere ----
+ * Aurora glow on body + transparent chrome: the ground itself becomes the
+ * picture, the topbar/panels/statusbar only keep their border to hold the
+ * structure. Same technique as md-preview, but polar cold (midnight + aurora)
+ * instead of violet. */
+body {
+	background:
+		radial-gradient(circle at 6% -8%, rgba(45, 212, 191, 0.13), transparent 44%),
+		radial-gradient(circle at 98% 104%, rgba(56, 189, 248, 0.1), transparent 46%),
+		#0b1215;
+}
+.topbar,
+.panel,
+.statusbar {
+	background: transparent;
+}

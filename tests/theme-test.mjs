@@ -81,7 +81,11 @@ async function stopServer() {
 
 async function openThemeMenu(page) {
 	// Open the theme dropdown (desktop toolbar, FiSun chip labeled "主题"/"Theme").
-	await page.locator(".topbar-desktop .dropdown button.chip").filter({ hasText: "主题" }).click();
+	// Labels are localized (zh default in the repo, en in a bare browser), so match both.
+	await page
+		.locator(".topbar-desktop .dropdown button.chip")
+		.filter({ hasText: /主题|Theme/ })
+		.click();
 }
 
 let browser;
@@ -105,6 +109,11 @@ try {
 			ids.includes("user-test"),
 		`got ${ids.join(", ")}`,
 	);
+	check(
+		"fresh theme pack is listed (glaciar/brasa/fosforo/salvia/cianotipo)",
+		["glaciar", "brasa", "fosforo", "salvia", "cianotipo"].every((id) => ids.includes(id)),
+		`got ${ids.join(", ")}`,
+	);
 	const whiteInfo = themes.themes.find((t) => t.id === "white");
 	const mdPrevInfo = themes.themes.find((t) => t.id === "md-preview");
 	check(
@@ -118,7 +127,10 @@ try {
 
 	// 2. Choosing white injects a <link> and applies the palette.
 	await openThemeMenu(page);
-	await page.locator(".dd-item", { hasText: "白色" }).first().click();
+	await page
+		.locator(".dd-item", { hasText: /白色|White/ })
+		.first()
+		.click();
 	await page.waitForTimeout(1500);
 	const hasLink = await page.evaluate(() => document.getElementById("theme-stylesheet")?.getAttribute("href"));
 	check("theme <link> injected for white", hasLink === "/themes/white.css", `href=${hasLink}`);
@@ -139,16 +151,46 @@ try {
 		`href=${afterReload.href} bg=${afterReload.bg}`,
 	);
 
-	// 4. User theme is selectable and its CSS is served.
+	// 4. A theme may ship its own "atmosphere" (body gradient/grid + transparent
+	//    chrome); verify the tail lands and the palette applies.
+	await openThemeMenu(page);
+	await page
+		.locator(".dd-item", { hasText: /冰川|Glacier/ })
+		.first()
+		.click();
+	await page.waitForTimeout(1200);
+	const glaciar = await page.evaluate(() => ({
+		href: document.getElementById("theme-stylesheet")?.getAttribute("href"),
+		bg: getComputedStyle(document.documentElement).getPropertyValue("--bg").trim(),
+		bodyImage: getComputedStyle(document.body).backgroundImage,
+	}));
+	check(
+		"glaciar palette + aurora atmosphere applied",
+		glaciar.href === "/themes/glaciar.css" && glaciar.bg === "#0b1215" && glaciar.bodyImage.includes("radial-gradient"),
+		`href=${glaciar.href} bg=${glaciar.bg} bodyImage=${glaciar.bodyImage.slice(0, 48)}`,
+	);
+	await openThemeMenu(page);
+	await page
+		.locator(".dd-item", { hasText: /蓝图|Blueprint/ })
+		.first()
+		.click();
+	await page.waitForTimeout(1200);
+	const grid = await page.evaluate(() => getComputedStyle(document.body).backgroundImage);
+	check("cianotipo drafting grid applied", grid.includes("linear-gradient"), `bodyImage=${grid.slice(0, 48)}`);
+
+	// 5. User theme is selectable and its CSS is served.
 	await openThemeMenu(page);
 	await page.locator(".dd-item", { hasText: "user-test" }).first().click();
 	await page.waitForTimeout(1500);
 	const userBg = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());
 	check("user theme applied", userBg === "#123456", `--bg=${userBg}`);
 
-	// 5. Switching back to default removes the injected link.
+	// 6. Switching back to default removes the injected link.
 	await openThemeMenu(page);
-	await page.locator(".dd-item", { hasText: "深色" }).first().click();
+	await page
+		.locator(".dd-item", { hasText: /深色|Dark/ })
+		.first()
+		.click();
 	await page.waitForTimeout(800);
 	const linkGone = await page.evaluate(() => document.getElementById("theme-stylesheet") === null);
 	const bg2 = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue("--bg").trim());

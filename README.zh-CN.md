@@ -509,7 +509,17 @@ pi-web-ui uninstall <id>      # 卸载插件
 
 每个主题是**一份纯 `:root` 调色板覆盖** —— 只写 CSS 变量的声明文件（变量全集见 `web/src/styles.css` 的 `:root`：`--bg/--accent/--term-*` 基础色，加 `--tooltip-bg/--code-bg/--notice-*` 等派生色）。布局只存在于打包的 `web/src/styles.css` 里，选主题只是覆盖变量，因此任何主题都能在所有版本上工作，改布局也不需要碰主题文件。内置主题由 `node make-light-theme.mjs` 生成。
 
-内置主题随 npm 包分发（`themes/`）：`white`（浅色）、`cyberpunk` / `dazzle`（深色）、`translucent` / `transparent`（壁纸友好半透明/全透明，可配对话壁纸）。主题选择器在顶栏（🌞 图标），当前选择按浏览器存在 `localStorage`。
+内置主题随 npm 包分发（`themes/`），全部由 `node make-light-theme.mjs` 生成，显示名来自文件头 `/* theme-name: … */`（可选 `theme-name-en` 给英文 UI）：
+
+| 底色 | 主题（id — 英文名） |
+|---|---|
+| 浅色 | `white` 白色 · `paper` 暖纸 · `mist` 雾蓝灰 · `sakura` 樱粉 · `salvia` 鼠尾草 · `cianotipo` 蓝图 |
+| 深色 | 默认（紫）· `md-preview` 紫晕 · `cyberpunk` 赛博朋克 · `dazzle` 炫彩 · `glaciar` 冰川 · `brasa` 炉火 · `fosforo` 磷光 |
+| 壁纸 | `translucent` 半透明 · `transparent` 全透明（手写；配对话壁纸用） |
+
+主题仍是纯调色板，但可以带**非布局 tail**：`.hljs` 语法高亮覆盖（静态打包的是 github-dark，非默认底色必须整块覆盖），以及可选的 **atmosphere**——`body` 级渐变/网格 + 铬件透明，让底色本身成为整幅画面（`md-preview`、`glaciar`、`brasa`、`cianotipo`、`fosforo`）。`--wallpaper-panel-alpha` 控制面板/卡片透图率。
+
+主题选择器在顶栏（🌞 图标），当前选择按浏览器存在 `localStorage`。
 
 ### 使用主题
 
@@ -533,6 +543,8 @@ pi-web-ui uninstall <id>      # 卸载插件
 
 - **终端跟随主题** —— 在你的 `:root` 里设置 `--term-*` 变量（终端 ANSI 配色 + `--term-bg`），xterm 画布和它的内边距容器都会自动适配（默认值见 `styles.css`）。
 - 代码高亮色（打包自带 `highlight.js` 的 `github-dark.css`）在浅色主题下必须覆盖，否则代码会看不清 —— 参照 `themes/white.css` 末尾的 `.hljs` 覆盖写法（深色主题可跳过）。
+- `--accent` **既**用在你底色上的文字，**又**当填充按钮底色（`.template-btn.send` / `.file-attach.inline:hover` / `.cmd-run:hover` 的文字写死 `#fff`）。请取一个两头都能活的中间调；亮签名色放 `--link`/`--term-cursor`/`--brand-grad-*`，那三个不会压白字。
+- 可选 **atmosphere**：主题可以给 `body` 一层渐变/网格 + `.topbar, .panel, .statusbar { background: transparent }`，让底色本身成为画面 —— 见 `themes/glaciar.css`（极光）、`themes/brasa.css`（炉火）、`themes/cianotipo.css`（制图网格）、`themes/fosforo.css`（CRT 扫描线）。`--wallpaper-panel-alpha` 控制面板/卡片透图率，与用户的对话壁纸叠加（用户的壁纸优先）。
 - 主题 id 必须匹配 `^[A-Za-z0-9_-]+$`（不能有点和斜杠 —— 服务端有路径穿越防护）。
 
 ### 向仓库贡献主题（GitHub）
@@ -545,7 +557,7 @@ pi-web-ui uninstall <id>      # 卸载插件
 4. 如果你改了 `styles.css` 的变量清单，用 `node make-light-theme.mjs` 重新生成全部内置主题。
 5. 提交（`git add themes/<id>.css`）并开 PR。`themes/` 已在 npm 包 `files` 白名单里，合并发布后 `npm i -g pi-web-ui` 即可把你的主题带给所有人。
 
-合并主题的规则：必须是单一 CSS 文件、设置 `--term-*` 变量保证终端可读、浅色主题覆盖 `.hljs` 语法高亮色以保证代码可读。
+合并主题的规则：必须是单一 CSS 文件、设置 `--term-*` 变量保证终端可读、`--accent` 在底色文字与写死的白色按钮标签下都清晰、浅色主题覆盖 `.hljs` 语法高亮色以保证代码可读。
 
 ## 环境变量调优
 

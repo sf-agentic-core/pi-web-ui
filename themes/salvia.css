@@ -1,0 +1,180 @@
+/* theme-name: 鼠尾草 */
+/* theme-name-en: Sage */
+:root {
+	color-scheme: light;
+	--bg: #edf1e8;
+	--bg-elev: #fafbf6;
+	--bg-elev2: #dfe7d6;
+	--border: #c8d4b8;
+	--border-soft: #dbe4cd;
+	--text: #26301f;
+	--text-dim: #556047;
+	--text-faint: #7f8b6a;
+	--accent: #1f7a4d;
+	--accent-soft: rgba(31, 122, 77, 0.12);
+	--green: #15803d;
+	--green-soft: rgba(21, 128, 61, 0.12);
+	--red: #b91c1c;
+	--red-soft: rgba(185, 28, 28, 0.1);
+	--amber: #b45309;
+	--term-bg: #fafbf6;
+	--term-fg: #26301f;
+	--term-cursor: #1f7a4d;
+	--term-cursor-accent: #ffffff;
+	--term-selection: rgba(31, 122, 77, 0.24);
+	--term-black: #dde5d1;
+	--term-red: #b91c1c;
+	--term-green: #15803d;
+	--term-yellow: #a16207;
+	--term-blue: #1d4ed8;
+	--term-magenta: #7c3aed;
+	--term-cyan: #0e7490;
+	--term-white: #26301f;
+	--term-bright-black: #6f7d5c;
+	--term-bright-red: #b91c1c;
+	--term-bright-green: #15803d;
+	--term-bright-yellow: #a16207;
+	--term-bright-blue: #1d4ed8;
+	--term-bright-magenta: #7c3aed;
+	--term-bright-cyan: #0e7490;
+	--term-bright-white: #111a0c;
+	--mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+	--mermaid-font-size: 12px;
+	--tooltip-bg: #fafbf6;
+	--code-bg: #dfe7d6;
+	--code-text: #26301f;
+	--code-border: var(--border-soft);
+	--code-pad: 8px 10px;
+	--card-body-pad: 4px 14px 12px;
+	--err-text: #b91c1c;
+	--red-text: #b91c1c;
+	--amber-text: #92400e;
+	--info-blue: #1d4ed8;
+	--link: #1a6b45;
+	--link-hover: #14532d;
+	--link-soft: #1a6b45;
+	--md-strong: #161d12;
+	--skill-blue: #1f7a4d;
+	--plugin-purple: #b58cff;
+	--auth-green: #15803d;
+	--scroll-thumb: #c2cfb2;
+	--scroll-thumb-hover: #a8b896;
+	--notice-err-bg: #f3dbd8;
+	--notice-warn-bg: #f0e6c8;
+	--notice-info-bg: #dde6e0;
+	--notice-err-border: #b91c1c;
+	--notice-warn-border: #b45309;
+	--notice-info-border: #1d4ed8;
+	--send-blue: #1f7a4d;
+	--send-blue-hover: #166534;
+	--brand-grad-a: #4ade80;
+	--brand-grad-b: #1f7a4d;
+	--on-amber: #1a1a1a;
+	--search-active-fg: #1a1d26;
+	--switch-knob: #ffffff;
+	--bg-elev3: rgba(60, 90, 40, 0.05);
+	--sunken-bg: rgba(60, 90, 40, 0.05);
+	--glow-015: rgba(60, 90, 40, 0.02);
+	--glow-025: rgba(60, 90, 40, 0.02);
+	--glow-03: rgba(60, 90, 40, 0.02);
+	--glow-04: rgba(60, 90, 40, 0.03);
+	--glow-05: rgba(60, 90, 40, 0.03);
+	--glow-12: rgba(60, 90, 40, 0.08);
+	--glow-18: rgba(60, 90, 40, 0.12);
+	--glow-22: rgba(60, 90, 40, 0.15);
+	--glow-38: rgba(60, 90, 40, 0.25);
+	--control-fg: #556047;
+	--control-bg: #dfe7d6;
+	--control-border: #c8d4b8;
+	--bg-image: none;
+	--bg-image-dim: 0.78;
+	--bg-image-blur: 0px;
+	--wallpaper-panel-alpha: 62%;
+	--topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--card-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--chip-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--msgs-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--inputbox-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--menu-bg: var(--bg-elev2);
+}
+
+/* ---- syntax highlighting (overrides static github-dark import) ---- */
+.hljs {
+	color: #26301f;
+	background: #dfe7d6;
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+	color: #cf222e;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+	color: #8250df;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+	color: #0550ae;
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+	color: #0a3069;
+}
+.hljs-built_in,
+.hljs-symbol {
+	color: #953800;
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+	color: #6f7f5c;
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+	color: #116329;
+}
+.hljs-subst {
+	color: #26301f;
+}
+.hljs-section {
+	color: #0550ae;
+	font-weight: 700;
+}
+.hljs-bullet {
+	color: #0550ae;
+}
+.hljs-emphasis {
+	color: #26301f;
+	font-style: italic;
+}
+.hljs-strong {
+	color: #26301f;
+	font-weight: 700;
+}
+.hljs-addition {
+	color: #116329;
+	background: #dbe9cd;
+}
+.hljs-deletion {
+	color: #82071e;
+	background: #f2d3d6;
+}

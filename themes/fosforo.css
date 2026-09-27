@@ -1,0 +1,190 @@
+/* theme-name: 磷光 */
+/* theme-name-en: Phosphor */
+:root {
+	color-scheme: dark;
+	--bg: #070d0a;
+	--bg-elev: #0c1511;
+	--bg-elev2: #121e18;
+	--border: #1f3428;
+	--border-soft: #16261d;
+	--text: #d6ecdc;
+	--text-dim: #93b39c;
+	--text-faint: #618068;
+	--accent: #16a34a;
+	--accent-soft: rgba(22, 163, 74, 0.16);
+	--green: #4ade80;
+	--green-soft: rgba(74, 222, 128, 0.12);
+	--red: #ff7b72;
+	--red-soft: rgba(255, 123, 114, 0.12);
+	--amber: #ffb454;
+	--term-bg: #070d0a;
+	--term-fg: #d6ecdc;
+	--term-cursor: #3ddc84;
+	--term-cursor-accent: #070d0a;
+	--term-selection: rgba(61, 220, 132, 0.28);
+	--term-black: #121e18;
+	--term-red: #ff7b72;
+	--term-green: #3ddc84;
+	--term-yellow: #ffb454;
+	--term-blue: #79c0ff;
+	--term-magenta: #d2a8ff;
+	--term-cyan: #56d4dd;
+	--term-white: #d6ecdc;
+	--term-bright-black: #618068;
+	--term-bright-red: #ffa198;
+	--term-bright-green: #8cf0b0;
+	--term-bright-yellow: #ffd9a0;
+	--term-bright-blue: #a8d8ff;
+	--term-bright-magenta: #e6ccff;
+	--term-bright-cyan: #8ce8ea;
+	--term-bright-white: #ffffff;
+	--mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+	--mermaid-font-size: 12px;
+	--tooltip-bg: #14211a;
+	--code-bg: #050a07;
+	--code-text: #c6e0cd;
+	--code-border: var(--border-soft);
+	--code-pad: 8px 10px;
+	--card-body-pad: 4px 14px 12px;
+	--err-text: #f0a5a5;
+	--red-text: #ffa198;
+	--amber-text: #ffd9a0;
+	--info-blue: #79c0ff;
+	--link: #56d4dd;
+	--link-hover: #8be6ec;
+	--link-soft: #b6f0f4;
+	--md-strong: #ecf9f0;
+	--skill-blue: #79c0ff;
+	--plugin-purple: #d2a8ff;
+	--auth-green: #7ee787;
+	--scroll-thumb: #21362b;
+	--scroll-thumb-hover: #2f4d3c;
+	--notice-err-bg: #33191a;
+	--notice-warn-bg: #33270f;
+	--notice-info-bg: #0f2c2c;
+	--notice-err-border: #ef4444;
+	--notice-warn-border: #f59e0b;
+	--notice-info-border: #56d4dd;
+	--send-blue: #15803d;
+	--send-blue-hover: #166534;
+	--brand-grad-a: #3ddc84;
+	--brand-grad-b: #56d4dd;
+	--on-amber: #1a1a1a;
+	--search-active-fg: #1a1d26;
+	--switch-knob: #ffffff;
+	--bg-elev3: rgba(255, 255, 255, 0.06);
+	--sunken-bg: rgba(0, 0, 0, 0.15);
+	--glow-015: rgba(255, 255, 255, 0.015);
+	--glow-025: rgba(255, 255, 255, 0.025);
+	--glow-03: rgba(255, 255, 255, 0.03);
+	--glow-04: rgba(255, 255, 255, 0.04);
+	--glow-05: rgba(255, 255, 255, 0.05);
+	--glow-12: rgba(255, 255, 255, 0.12);
+	--glow-18: rgba(255, 255, 255, 0.18);
+	--glow-22: rgba(255, 255, 255, 0.22);
+	--glow-38: rgba(255, 255, 255, 0.38);
+	--control-fg: #93b39c;
+	--control-bg: #121e18;
+	--control-border: #1f3428;
+	--bg-image: none;
+	--bg-image-dim: 0.78;
+	--bg-image-blur: 0px;
+	--wallpaper-panel-alpha: 78%;
+	--topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--card-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--chip-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--msgs-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--inputbox-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--menu-bg: var(--bg-elev2);
+}
+
+/* ---- syntax highlighting (overrides static github-dark import) ---- */
+.hljs {
+	color: #c6e0cd;
+	background: #050a07;
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+	color: #7ee787;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+	color: #d2a8ff;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+	color: #79c0ff;
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+	color: #a5d6ff;
+}
+.hljs-built_in,
+.hljs-symbol {
+	color: #ffb454;
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+	color: #6d8b78;
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+	color: #7ee787;
+}
+.hljs-subst {
+	color: #c6e0cd;
+}
+.hljs-section {
+	color: #79c0ff;
+	font-weight: 700;
+}
+.hljs-bullet {
+	color: #79c0ff;
+}
+.hljs-emphasis {
+	color: #c6e0cd;
+	font-style: italic;
+}
+.hljs-strong {
+	color: #c6e0cd;
+	font-weight: 700;
+}
+.hljs-addition {
+	color: #7ee787;
+	background: #0e2a18;
+}
+.hljs-deletion {
+	color: #ff9aa8;
+	background: #351519;
+}
+
+/* ---- CRT atmosphere ----
+ * Very faint scanlines + corner vignette to mimic a phosphor screen; panels go
+ * 78% opaque (vs 62% default) so body text stays readable. */
+body {
+	background:
+		repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.13) 0 1px, transparent 1px 3px),
+		radial-gradient(ellipse at 50% 50%, transparent 34%, rgba(0, 0, 0, 0.5) 100%),
+		#070d0a;
+}

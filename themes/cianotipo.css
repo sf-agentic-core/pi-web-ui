@@ -1,0 +1,197 @@
+/* theme-name: 蓝图 */
+/* theme-name-en: Blueprint */
+:root {
+	color-scheme: light;
+	--bg: #eef2f9;
+	--bg-elev: #fbfcfe;
+	--bg-elev2: #e1e8f4;
+	--border: #c2cee4;
+	--border-soft: #d5deef;
+	--text: #16233a;
+	--text-dim: #46587a;
+	--text-faint: #7d8ca8;
+	--accent: #1d4ed8;
+	--accent-soft: rgba(29, 78, 216, 0.12);
+	--green: #047857;
+	--green-soft: rgba(4, 120, 87, 0.12);
+	--red: #dc2626;
+	--red-soft: rgba(220, 38, 38, 0.1);
+	--amber: #b45309;
+	--term-bg: #fbfcfe;
+	--term-fg: #16233a;
+	--term-cursor: #1d4ed8;
+	--term-cursor-accent: #ffffff;
+	--term-selection: rgba(29, 78, 216, 0.22);
+	--term-black: #dde4f0;
+	--term-red: #dc2626;
+	--term-green: #047857;
+	--term-yellow: #a16207;
+	--term-blue: #1d4ed8;
+	--term-magenta: #7c3aed;
+	--term-cyan: #0e7490;
+	--term-white: #16233a;
+	--term-bright-black: #7d8ca8;
+	--term-bright-red: #dc2626;
+	--term-bright-green: #047857;
+	--term-bright-yellow: #a16207;
+	--term-bright-blue: #1d4ed8;
+	--term-bright-magenta: #7c3aed;
+	--term-bright-cyan: #0e7490;
+	--term-bright-white: #0b1220;
+	--mono: "SF Mono", "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+	--mermaid-font-size: 12px;
+	--tooltip-bg: #fbfcfe;
+	--code-bg: #e1e8f4;
+	--code-text: #16233a;
+	--code-border: var(--border-soft);
+	--code-pad: 8px 10px;
+	--card-body-pad: 4px 14px 12px;
+	--err-text: #dc2626;
+	--red-text: #dc2626;
+	--amber-text: #92400e;
+	--info-blue: #1d4ed8;
+	--link: #1d4ed8;
+	--link-hover: #1e40af;
+	--link-soft: #1d4ed8;
+	--md-strong: #0b1220;
+	--skill-blue: #1d4ed8;
+	--plugin-purple: #b58cff;
+	--auth-green: #047857;
+	--scroll-thumb: #b8c6e0;
+	--scroll-thumb-hover: #9aabd0;
+	--notice-err-bg: #f5dadc;
+	--notice-warn-bg: #f0e6cb;
+	--notice-info-bg: #d9e3f7;
+	--notice-err-border: #dc2626;
+	--notice-warn-border: #b45309;
+	--notice-info-border: #1d4ed8;
+	--send-blue: #1d4ed8;
+	--send-blue-hover: #1e40af;
+	--brand-grad-a: #60a5fa;
+	--brand-grad-b: #1d4ed8;
+	--on-amber: #1a1a1a;
+	--search-active-fg: #1a1d26;
+	--switch-knob: #ffffff;
+	--bg-elev3: rgba(20, 40, 90, 0.05);
+	--sunken-bg: rgba(20, 40, 90, 0.05);
+	--glow-015: rgba(20, 40, 90, 0.02);
+	--glow-025: rgba(20, 40, 90, 0.02);
+	--glow-03: rgba(20, 40, 90, 0.02);
+	--glow-04: rgba(20, 40, 90, 0.03);
+	--glow-05: rgba(20, 40, 90, 0.03);
+	--glow-12: rgba(20, 40, 90, 0.08);
+	--glow-18: rgba(20, 40, 90, 0.12);
+	--glow-22: rgba(20, 40, 90, 0.15);
+	--glow-38: rgba(20, 40, 90, 0.25);
+	--control-fg: #46587a;
+	--control-bg: #e1e8f4;
+	--control-border: #c2cee4;
+	--bg-image: none;
+	--bg-image-dim: 0.78;
+	--bg-image-blur: 0px;
+	--wallpaper-panel-alpha: 72%;
+	--topbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--statusbar-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--panel-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--card-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--chip-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--msgs-bg: color-mix(in srgb, var(--bg-elev) var(--wallpaper-panel-alpha, 62%), transparent);
+	--inputbox-bg: color-mix(in srgb, var(--bg-elev2) var(--wallpaper-panel-alpha, 62%), transparent);
+	--menu-bg: var(--bg-elev2);
+}
+
+/* ---- syntax highlighting (overrides static github-dark import) ---- */
+.hljs {
+	color: #16233a;
+	background: #e1e8f4;
+}
+.hljs-doctag,
+.hljs-keyword,
+.hljs-meta .hljs-keyword,
+.hljs-template-tag,
+.hljs-template-variable,
+.hljs-type,
+.hljs-variable.language_ {
+	color: #cf222e;
+}
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.class_.inherited__,
+.hljs-title.function_ {
+	color: #6d28d9;
+}
+.hljs-attr,
+.hljs-attribute,
+.hljs-literal,
+.hljs-meta,
+.hljs-number,
+.hljs-operator,
+.hljs-variable,
+.hljs-selector-attr,
+.hljs-selector-class,
+.hljs-selector-id {
+	color: #1d4ed8;
+}
+.hljs-regexp,
+.hljs-string,
+.hljs-meta .hljs-string {
+	color: #0a3069;
+}
+.hljs-built_in,
+.hljs-symbol {
+	color: #953800;
+}
+.hljs-comment,
+.hljs-code,
+.hljs-formula {
+	color: #6b7a94;
+}
+.hljs-name,
+.hljs-quote,
+.hljs-selector-tag,
+.hljs-selector-pseudo {
+	color: #116329;
+}
+.hljs-subst {
+	color: #16233a;
+}
+.hljs-section {
+	color: #1d4ed8;
+	font-weight: 700;
+}
+.hljs-bullet {
+	color: #1d4ed8;
+}
+.hljs-emphasis {
+	color: #16233a;
+	font-style: italic;
+}
+.hljs-strong {
+	color: #16233a;
+	font-weight: 700;
+}
+.hljs-addition {
+	color: #116329;
+	background: #d7e9db;
+}
+.hljs-deletion {
+	color: #82071e;
+	background: #f2d3d6;
+}
+
+/* ---- drafting grid ----
+ * 24px cold-blue graph paper + transparent chrome: the whole page reads as a
+ * drafting table. The grid alpha is only 0.04, so the body text (--text on
+ * --bg ≈ 14:1) is unaffected. */
+body {
+	background-image:
+		linear-gradient(rgba(29, 78, 216, 0.04) 1px, transparent 1px),
+		linear-gradient(90deg, rgba(29, 78, 216, 0.04) 1px, transparent 1px);
+	background-size: 24px 24px;
+	background-position: -1px -1px;
+}
+.topbar,
+.panel,
+.statusbar {
+	background: transparent;
+}

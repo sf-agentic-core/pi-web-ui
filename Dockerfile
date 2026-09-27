@@ -49,6 +49,10 @@ COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/web/dist ./web/dist
+# Built-in themes live in <pkgRoot>/themes (server/themes.ts resolves them from
+# the package root); without them GET /api/themes returns an empty list and the
+# theme picker has nothing to offer. .dockerignore does not exclude themes/.
+COPY --from=build /app/themes ./themes
 ENV PI_WEB_PORT=8787
 EXPOSE 8787
 # Session data (per-client chat history) lives here — mount a volume.

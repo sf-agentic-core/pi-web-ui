@@ -7,6 +7,18 @@ import { buildTermTheme, THEME_CHANGE_EVENT } from "../theme";
 import { useI18n } from "../i18n";
 import { appSend } from "../app-globals";
 
+const TOUCH_KEYS = [
+	{ label: "ESC", data: "\x1b", title: "Escape" },
+	{ label: "TAB", data: "\t", title: "Tab" },
+	{ label: "CTRL-C", data: "\x03", title: "Interrupt (SIGINT)" },
+	{ label: "CTRL-D", data: "\x04", title: "EOF (Ctrl+D)" },
+	{ label: "↑", data: "\x1b[A", title: "Up" },
+	{ label: "↓", data: "\x1b[B", title: "Down" },
+	{ label: "←", data: "\x1b[D", title: "Left" },
+	{ label: "→", data: "\x1b[C", title: "Right" },
+	{ label: "ENTER", data: "\r", title: "Enter" },
+];
+
 /** Strip exit sentinels/baked banners; the banner itself renders on terminal_exit. */
 export function stripExitBanner(data: string): { clean: string; exitCode: number | null } {
 	let exitCode: number | null = null;
@@ -241,5 +253,40 @@ export function TermXterm({
 		// eslint-disable-next-line react-hooks/exhaustive-deps
 	}, [running, terminalId, exitCode]);
 
-	return <div ref={containerRef} className={`term-xterm ${active ? "" : "hidden"}`} />;
+	const sendTouchKey = (data: string) => {
+		appSend({
+			type: "terminal_input",
+			terminalId,
+			conversationId,
+			data,
+		});
+		const inst = termRef.current;
+		if (inst) {
+			inst.term.focus();
+		}
+	};
+
+	return (
+		<div className={`term-xterm term-xterm-wrapper ${active ? "" : "hidden"}`}>
+			<div ref={containerRef} className="term-xterm-canvas" />
+			{active && (
+				<div className="term-mobile-touchbar" role="toolbar" aria-label="Terminal keyboard helpers">
+					{TOUCH_KEYS.map((k) => (
+						<button
+							key={k.label}
+							type="button"
+							className="term-touch-key"
+							title={k.title}
+							onPointerDown={(e) => {
+								e.preventDefault();
+								sendTouchKey(k.data);
+							}}
+						>
+							{k.label}
+						</button>
+					))}
+				</div>
+			)}
+		</div>
+	);
 }

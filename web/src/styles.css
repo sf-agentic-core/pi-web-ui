@@ -1876,8 +1876,8 @@ body.rp-resizing .rp-sash.dragging::after {
 	gap: 6px;
 	padding: 6px 4px;
 	margin-top: 4px;
-	background: var(--bg-surface, #1e1e1e);
-	border: 1px solid var(--border-subtle, #333);
+	background: var(--bg-elev);
+	border: 1px solid var(--border-soft);
 	border-radius: 8px;
 	overflow-x: auto;
 	-webkit-overflow-scrolling: touch;
@@ -1901,12 +1901,12 @@ body.rp-resizing .rp-sash.dragging::after {
 	min-width: 44px;
 	height: 36px;
 	padding: 0 10px;
-	font-family: var(--font-mono, ui-monospace, Menlo, Consolas, monospace);
+	font-family: var(--mono);
 	font-size: 13px;
 	font-weight: 600;
-	color: var(--text-normal, #eee);
-	background: var(--bg-elevated, #2a2a2a);
-	border: 1px solid var(--border-subtle, #444);
+	color: var(--text);
+	background: var(--bg-elev2);
+	border: 1px solid var(--border);
 	border-radius: 6px;
 	cursor: pointer;
 	touch-action: manipulation;
@@ -1917,7 +1917,7 @@ body.rp-resizing .rp-sash.dragging::after {
 		transform 0.05s;
 }
 .term-touch-key:active {
-	background: var(--primary, #007acc);
+	background: var(--accent);
 	color: #fff;
 	transform: scale(0.94);
 }

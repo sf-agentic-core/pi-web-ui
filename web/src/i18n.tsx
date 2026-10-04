@@ -38,7 +38,7 @@ export const zh = {
 	langEs: "西班牙语",
 	langRu: "俄语",
 	langPt: "葡萄牙语",
-	githubRepo: "GitHub 仓库（xing-shuyin/pi-web-ui）",
+	githubRepo: "GitHub 仓库（sf-agentic-core/pi-web-ui）",
 	copy: "复制",
 
 	/* topbar */
@@ -1167,7 +1167,7 @@ const en: Record<keyof typeof zh, string> = {
 	langEs: "Español",
 	langRu: "Русский",
 	langPt: "Português",
-	githubRepo: "GitHub repository (xing-shuyin/pi-web-ui)",
+	githubRepo: "GitHub repository (sf-agentic-core/pi-web-ui)",
 	copy: "Copy",
 
 	/* topbar */

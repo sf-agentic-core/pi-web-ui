@@ -38,13 +38,13 @@
 	],
 	"repository": {
 		"type": "git",
-		"url": "git+https://github.com/xing-shuyin/pi-web-ui.git"
+		"url": "git+https://github.com/sf-agentic-core/pi-web-ui.git"
 	},
 	"pi": {
 		"extensions": [
 			"./extensions"
 		],
-		"image": "https://raw.githubusercontent.com/xing-shuyin/pi-web-ui/main/assets/chat-prompts.jpeg"
+		"image": "https://raw.githubusercontent.com/sf-agentic-core/pi-web-ui/main/assets/chat-prompts.jpeg"
 	},
 	"engines": {
 		"node": ">=22.19.0"

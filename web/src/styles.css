@@ -1840,6 +1840,24 @@ body.rp-resizing .rp-sash.dragging::after {
 .term-xterm.hidden {
 	display: none;
 }
+.term-xterm-wrapper {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	min-height: 0;
+}
+.term-xterm-canvas {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	padding: 0;
+}
+.term-xterm-canvas .xterm {
+	height: 100%;
+}
+.term-xterm-canvas .xterm .xterm-viewport {
+	background-color: var(--term-bg);
+}
 .term-xterm .xterm {
 	height: 100%;
 }
@@ -1850,6 +1868,58 @@ body.rp-resizing .rp-sash.dragging::after {
    beats the injected xterm.css rule). */
 .term-xterm .xterm .xterm-viewport {
 	background-color: var(--term-bg);
+}
+
+.term-mobile-touchbar {
+	display: none;
+	align-items: center;
+	gap: 6px;
+	padding: 6px 4px;
+	margin-top: 4px;
+	background: var(--bg-elev);
+	border: 1px solid var(--border-soft);
+	border-radius: 8px;
+	overflow-x: auto;
+	-webkit-overflow-scrolling: touch;
+	scrollbar-width: none;
+	touch-action: manipulation;
+	user-select: none;
+	flex-shrink: 0;
+}
+.term-mobile-touchbar::-webkit-scrollbar {
+	display: none;
+}
+@media (max-width: 768px), (pointer: coarse) {
+	.term-mobile-touchbar {
+		display: flex;
+	}
+}
+.term-touch-key {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 44px;
+	height: 36px;
+	padding: 0 10px;
+	font-family: var(--mono);
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--text);
+	background: var(--bg-elev2);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	cursor: pointer;
+	touch-action: manipulation;
+	white-space: nowrap;
+	flex-shrink: 0;
+	transition:
+		background 0.1s,
+		transform 0.05s;
+}
+.term-touch-key:active {
+	background: var(--accent);
+	color: #fff;
+	transform: scale(0.94);
 }
 
 .term-empty {

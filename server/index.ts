@@ -106,7 +106,7 @@ const ALLOW_ORIGINS = (process.env.PI_WEB_ALLOW_ORIGINS ?? "")
 const AUTH_TOKEN = process.env.PI_WEB_TOKEN?.trim() ?? "";
 /** 语言包下载根（语言包仓库的 raw 文件地址；版本 tag 优先、main 兜底，见 locales.ts）。 */
 const LOCALE_BASE_URL =
-	process.env.PI_WEB_LOCALE_BASE_URL?.trim() || "https://raw.githubusercontent.com/xing-shuyin/pi-web-ui";
+	process.env.PI_WEB_LOCALE_BASE_URL?.trim() || "https://raw.githubusercontent.com/sf-agentic-core/pi-web-ui";
 /**
  * 本包版本 —— 下载语言包时优先取同版本 tag，保证 key 对齐。
  *

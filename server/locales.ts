@@ -171,7 +171,7 @@ export function removePack(dataDir: string, code: string): boolean {
 export interface InstallOpts {
 	/** Lets unit tests stub the network. Defaults to global fetch. */
 	fetchFn?: typeof fetch;
-	/** Download root, e.g. https://raw.githubusercontent.com/xing-shuyin/pi-web-ui */
+	/** Download root, e.g. https://raw.githubusercontent.com/sf-agentic-core/pi-web-ui */
 	baseUrl?: string;
 	/** App version — tried as a git tag first (v<version>), then `main`. */
 	version?: string;
@@ -191,7 +191,7 @@ export async function installPack(
 ): Promise<LocalePackMeta & { version: string }> {
 	const meta = packMeta(code);
 	if (!meta) throw new Error(`unknown locale: ${code}`);
-	const base = (opts.baseUrl ?? "https://raw.githubusercontent.com/xing-shuyin/pi-web-ui").replace(/\/+$/, "");
+	const base = (opts.baseUrl ?? "https://raw.githubusercontent.com/sf-agentic-core/pi-web-ui").replace(/\/+$/, "");
 	const urls = opts.version
 		? [`${base}/v${opts.version}/locales/${code}.json`, `${base}/main/locales/${code}.json`]
 		: [`${base}/main/locales/${code}.json`];

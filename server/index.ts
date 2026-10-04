@@ -1648,11 +1648,36 @@ scheduleToolsetBootstrap();
 // CLI uses, so `pi-web-ui server status|quiesce|unquiesce` just works.
 const stopControl = startControlServer({ service, dataDir: DATA_DIR, port: PORT });
 
+// Hard budget for the WHOLE shutdown path.
+//
+// WHY THIS EXISTS: `await service.disposeAll()` waits on live agent sessions,
+// MCP bridges and plugin handles, and any of them can hold the process open
+// forever. While it hangs, `process.exit(0)` is never reached, so the
+// container keeps running until kubelet's SIGKILL. Because the deployment uses
+// `strategy: Recreate`, the REPLACEMENT POD CANNOT START until we are gone —
+// so an unbounded dispose is not a graceful drain, it is a 15-minute outage
+// (`terminationGracePeriodSeconds: 900`, observed twice in production:
+// scale-down and scale-up were exactly 900s apart).
+//
+// Nobody should have to reason about whether a library's dispose() resolves:
+// the budget is explicit here and the process always dies inside it.
+const SHUTDOWN_BUDGET_MS = Number(process.env.PI_WEB_SHUTDOWN_BUDGET_MS ?? 8000);
+
 let shuttingDown = false;
 async function shutdown(): Promise<void> {
 	if (shuttingDown) return;
 	shuttingDown = true;
 	console.log("\nshutting down…");
+
+	// Backstop: fires even if a dispose() below never settles. `unref()` keeps
+	// this timer from becoming the only thing holding the event loop open.
+	setTimeout(() => {
+		console.error(
+			`pi-web-ui: shutdown exceeded ${SHUTDOWN_BUDGET_MS}ms — forcing exit (a dispose() is hung)`,
+		);
+		process.exit(0);
+	}, SHUTDOWN_BUDGET_MS).unref();
+
 	clearInterval(heartbeatTimer);
 	stopControl();
 	pluginMgr.dispose();

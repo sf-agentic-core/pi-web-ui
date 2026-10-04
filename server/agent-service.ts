@@ -147,6 +147,9 @@ const STREAMING_SNAPSHOT_INTERVAL_MS = 2000;
 /** Deltas newer than this keep the streaming (low-frequency) snapshot cadence. */
 const DELTA_ACTIVE_WINDOW_MS = 1500;
 const WIDGET_REFRESH_MS = 2000;
+/** Ceiling for tearing down every live client session on shutdown. A hung
+ *  dispose() must never keep the process alive until SIGKILL. */
+const DISPOSE_BUDGET_MS = 5000;
 /** Model-stall watchdog: warn (don't abort — deep thinking can be legitimately
  *  quiet for minutes) when a streaming run produced NO SDK events for this long.
  *  Covers the failure class the per-tool watchdog cannot see: half-open API
@@ -7328,6 +7331,20 @@ export class AgentService {
 		}
 		const all = [...this.clients.values()];
 		this.clients.clear();
-		await Promise.all(all.map((cs) => cs.dispose()));
+		// Bounded ON PURPOSE, so the "best effort" promise above is actually true.
+		// A single session whose dispose() never settles would otherwise hold the
+		// whole process open until SIGKILL, and with `strategy: Recreate` the
+		// replacement pod waits on us for the full terminationGracePeriodSeconds.
+		// Interrupted-work bookkeeping is already stored above, so giving up here
+		// loses nothing that was not already recorded.
+		const disposal = Promise.all(all.map((cs) => cs.dispose())).catch(() => {
+			/* best effort: a failed dispose must never mask shutdown */
+		});
+		await Promise.race([
+			disposal,
+			new Promise<void>((resolve) => {
+				setTimeout(resolve, DISPOSE_BUDGET_MS).unref();
+			}),
+		]);
 	}
 }
